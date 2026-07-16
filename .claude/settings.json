@@ -1,0 +1,33 @@
+{
+  "enabledPlugins": {
+    "superpowers@claude-plugins-official": true
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/protect_generated.py\"",
+            "timeout": 10,
+            "statusMessage": "Üretilmiş dizin koruması denetleniyor..."
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/run_pkg_tests.py\"",
+            "timeout": 120,
+            "statusMessage": "Paket testleri koşuyor..."
+          }
+        ]
+      }
+    ]
+  }
+}
