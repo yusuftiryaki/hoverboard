@@ -12,13 +12,14 @@ Frame layout (little-endian, __attribute__((packed)) => no alignment padding):
 
     PiCommand   (10 B)  uint16 start | int16 speed | int16 steer
                         | uint8 clear_estop | uint8 _pad | uint16 checksum
-    EspFeedback (14 B)  uint16 start | int16 speedL_meas | int16 speedR_meas
+    EspFeedback (16 B)  uint16 start | int16 speedL_meas | int16 speedR_meas
                         | int16 batVoltage | int16 boardTemp
-                        | uint8 estop | uint8 watchdog_ok | uint16 checksum
+                        | uint8 estop | uint8 watchdog_ok
+                        | uint8 bump | uint8 _pad2 | uint16 checksum
 
-Checksum is XOR of every preceding 16-bit word, truncated to 16 bits. The two
-uint8 fields are folded into one word as (low | high << 8), exactly as the
-firmware does it.
+Checksum is XOR of every preceding 16-bit word, truncated to 16 bits. The uint8
+fields are folded into words in pairs as (low | high << 8), exactly as the
+firmware does it — which is why flags arrive two at a time, each with a pad.
 """
 
 from __future__ import annotations
@@ -34,8 +35,8 @@ _START_HI = (START >> 8) & 0xFF   # 0xAB
 PI_COMMAND_FMT = "<HhhBBH"
 PI_COMMAND_SIZE = struct.calcsize(PI_COMMAND_FMT)      # 10
 
-ESP_FEEDBACK_FMT = "<HhhhhBBH"
-ESP_FEEDBACK_SIZE = struct.calcsize(ESP_FEEDBACK_FMT)  # 14
+ESP_FEEDBACK_FMT = "<HhhhhBBBBH"
+ESP_FEEDBACK_SIZE = struct.calcsize(ESP_FEEDBACK_FMT)  # 16
 
 # Mirrors SPEED_LIMIT / STEER_LIMIT in the firmware. The ESP32 clamps anyway;
 # clamping here too keeps struct.pack from raising on out-of-range ints.
@@ -62,6 +63,10 @@ class EspFeedback:
     board_temp: int    # raw; scale to °C in the node (EFeru: 0.1 °C/count)
     estop: bool        # e-stop asserted and latched on the ESP32
     watchdog_ok: bool  # ESP32 considers our heartbeat fresh
+    # Bumper hit: the ESP32 is vetoing forward motion right now. Not latched —
+    # it clears itself when the switch releases, so reverse and turning still
+    # work and the robot can back out on its own.
+    bump: bool = False
 
 
 def pack_pi_command(speed: int, steer: int, clear_estop: bool = False) -> bytes:
@@ -80,9 +85,8 @@ def unpack_esp_feedback(raw: bytes) -> Optional[EspFeedback]:
     """Decode one EspFeedback frame. Returns None on a checksum mismatch."""
     if len(raw) != ESP_FEEDBACK_SIZE:
         return None
-    start, speed_l, speed_r, bat, temp, estop, watchdog, checksum = struct.unpack(
-        ESP_FEEDBACK_FMT, raw
-    )
+    (start, speed_l, speed_r, bat, temp, estop, watchdog, bump, pad2,
+     checksum) = struct.unpack(ESP_FEEDBACK_FMT, raw)
     if start != START:
         return None
     expected = _u16(
@@ -92,6 +96,7 @@ def unpack_esp_feedback(raw: bytes) -> Optional[EspFeedback]:
         ^ _u16(bat)
         ^ _u16(temp)
         ^ _u16(estop | (watchdog << 8))
+        ^ _u16(bump | (pad2 << 8))
     )
     if expected != checksum:
         return None
@@ -102,12 +107,14 @@ def unpack_esp_feedback(raw: bytes) -> Optional[EspFeedback]:
         board_temp=temp,
         estop=bool(estop),
         watchdog_ok=bool(watchdog),
+        bump=bool(bump),
     )
 
 
 def pack_esp_feedback(fb: EspFeedback) -> bytes:
     """Encode an EspFeedback frame — used by the simulator and the tests."""
     payload2 = _u16(int(fb.estop) | (int(fb.watchdog_ok) << 8))
+    payload3 = _u16(int(fb.bump))  # _pad2 = 0
     checksum = _u16(
         START
         ^ _u16(fb.speed_l)
@@ -115,6 +122,7 @@ def pack_esp_feedback(fb: EspFeedback) -> bytes:
         ^ _u16(fb.bat_voltage)
         ^ _u16(fb.board_temp)
         ^ payload2
+        ^ payload3
     )
     return struct.pack(
         ESP_FEEDBACK_FMT,
@@ -125,6 +133,8 @@ def pack_esp_feedback(fb: EspFeedback) -> bytes:
         fb.board_temp,
         int(fb.estop),
         int(fb.watchdog_ok),
+        int(fb.bump),
+        0,  # _pad2
         checksum,
     )
 

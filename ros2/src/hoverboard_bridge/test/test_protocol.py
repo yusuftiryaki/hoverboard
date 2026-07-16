@@ -23,8 +23,8 @@ from hoverboard_bridge.protocol import (
 def test_frame_sizes_match_the_packed_c_structs():
     # uint16 + 2*int16 + 2*uint8 + uint16
     assert PI_COMMAND_SIZE == 10
-    # uint16 + 4*int16 + 2*uint8 + uint16
-    assert ESP_FEEDBACK_SIZE == 14
+    # uint16 + 4*int16 + 4*uint8 + uint16
+    assert ESP_FEEDBACK_SIZE == 16
 
 
 def test_pi_command_starts_with_the_little_endian_marker():
@@ -65,8 +65,29 @@ def test_feedback_round_trip():
         board_temp=294,
         estop=True,
         watchdog_ok=False,
+        bump=True,
     )
     assert unpack_esp_feedback(pack_esp_feedback(original)) == original
+
+
+@pytest.mark.parametrize("estop,watchdog,bump", [
+    (False, False, False), (True, False, False), (False, True, False),
+    (False, False, True), (True, True, True), (False, True, True),
+])
+def test_every_flag_combination_survives_the_round_trip(estop, watchdog, bump):
+    # The flags share checksum words in pairs, so a mis-folded pad byte would
+    # corrupt one flag only for certain combinations of the others.
+    original = EspFeedback(1, 2, 3700, 300, estop, watchdog, bump)
+    assert unpack_esp_feedback(pack_esp_feedback(original)) == original
+
+
+def test_bump_flag_is_covered_by_the_checksum():
+    # Flip only the bump byte on the wire: the frame must be rejected, not
+    # silently accepted with the wrong safety state.
+    raw = bytearray(pack_esp_feedback(EspFeedback(0, 0, 3700, 300, False, True, False)))
+    assert unpack_esp_feedback(bytes(raw)).bump is False
+    raw[12] = 1  # the bump byte
+    assert unpack_esp_feedback(bytes(raw)) is None
 
 
 def test_feedback_with_a_corrupt_byte_is_rejected():

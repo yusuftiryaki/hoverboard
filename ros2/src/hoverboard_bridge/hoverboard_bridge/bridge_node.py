@@ -31,6 +31,7 @@ from nav_msgs.msg import Odometry
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from sensor_msgs.msg import BatteryState, JointState
+from std_msgs.msg import Bool
 from std_srvs.srv import Trigger
 from tf2_ros import TransformBroadcaster
 
@@ -137,6 +138,7 @@ class HoverboardBridge(Node):
         self._yaw = 0.0
         self._pos_l = 0.0           # integrated wheel angle, rad
         self._pos_r = 0.0
+        self._bump_was_set = False
 
         # ---- ROS interfaces --------------------------------------------------
         cmd_type = TwistStamped if p("use_stamped_cmd_vel").value else Twist
@@ -146,6 +148,9 @@ class HoverboardBridge(Node):
         self._odom_pub = self.create_publisher(Odometry, "odom", 10)
         self._joint_pub = self.create_publisher(JointState, "joint_states", 10)
         self._battery_pub = self.create_publisher(BatteryState, "battery", 10)
+        # Latched-style QoS would be nicer, but the ESP32 restates the bumper at
+        # 50 Hz anyway, so a late subscriber is at most 20 ms behind.
+        self._bumper_pub = self.create_publisher(Bool, "bumper", 10)
         self._diag_pub = self.create_publisher(DiagnosticArray, "/diagnostics", 10)
         self._tf_broadcaster = TransformBroadcaster(self) if self._publish_tf else None
 
@@ -286,6 +291,19 @@ class HoverboardBridge(Node):
         battery.location = "hoverboard"
         self._battery_pub.publish(battery)
 
+        self._bumper_pub.publish(Bool(data=fb.bump))
+        if fb.bump != self._bump_was_set:
+            # Log the edges only — at 50 Hz, logging the level would bury the
+            # rest of the log the moment the robot leans on something.
+            if fb.bump:
+                self.get_logger().warn(
+                    "BUMPER HIT — the ESP32 is vetoing forward motion; "
+                    "reverse and turning still work"
+                )
+            else:
+                self.get_logger().info("bumper released")
+            self._bump_was_set = fb.bump
+
         if self._tf_broadcaster is not None:
             tf = TransformStamped()
             tf.header.stamp = stamp
@@ -309,6 +327,11 @@ class HoverboardBridge(Node):
         elif not fb.watchdog_ok:
             status.level = DiagnosticStatus.WARN
             status.message = "ESP32 says our heartbeat is stale — motors stopped"
+        elif fb.bump:
+            # WARN, not ERROR: the robot is not broken, it is touching something
+            # and can still reverse out of it under its own power.
+            status.level = DiagnosticStatus.WARN
+            status.message = "bumper hit — forward vetoed, reverse still allowed"
         else:
             status.level = DiagnosticStatus.OK
             status.message = "driving"
@@ -319,6 +342,7 @@ class HoverboardBridge(Node):
                 KeyValue(key="board_temp_c", value=f"{fb.board_temp * self._temp_scale:.1f}"),
                 KeyValue(key="estop", value=str(fb.estop)),
                 KeyValue(key="watchdog_ok", value=str(fb.watchdog_ok)),
+                KeyValue(key="bump", value=str(fb.bump)),
                 KeyValue(key="frames_ok", value=str(self._parser.frames_ok)),
                 KeyValue(key="checksum_errors", value=str(self._parser.checksum_errors)),
             ]

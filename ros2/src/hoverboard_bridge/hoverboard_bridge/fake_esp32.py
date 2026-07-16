@@ -8,9 +8,15 @@ wheel RPM through a crude first-order lag.
     ros2 run hoverboard_bridge fake_esp32
     ros2 run hoverboard_bridge hoverboard_bridge --ros-args -p port:=/tmp/fake_esp32
 
-It models the watchdog and the feedback rate, NOT the motors, the board, or any
-of the electrical failure modes. Passing here means the framing and the
-kinematics are right; it says nothing about the real board.
+It models the watchdog, the bumper veto and the feedback rate — NOT the motors,
+the board, or any of the electrical failure modes. Passing here means the framing
+and the kinematics are right; it says nothing about the real board.
+
+The bumper can be toggled while running, so the veto can be tested both ways:
+
+    ros2 run hoverboard_bridge fake_esp32 --bump       # start bumped
+    touch /tmp/fake_esp32.bump                          # assert it live
+    rm /tmp/fake_esp32.bump                             # release it
 """
 
 from __future__ import annotations
@@ -40,6 +46,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--link", default="/tmp/fake_esp32", help="symlink to create")
     parser.add_argument("--estop", action="store_true", help="start with e-stop latched")
+    parser.add_argument("--bump", action="store_true", help="start with the bumper hit")
+    parser.add_argument(
+        "--bump-file", default="/tmp/fake_esp32.bump",
+        help="touch/rm this file to assert/release the bumper while running",
+    )
     args = parser.parse_args()
 
     master, slave = pty.openpty()
@@ -105,9 +116,17 @@ def main() -> None:
                 last_tx = now
                 watchdog_ok = (now - last_cmd) <= WATCHDOG_S
                 driving = watchdog_ok and not estop
+                bump = args.bump or os.path.exists(args.bump_file)
+
+                # Bumper veto, mirrored from the firmware's applyBumpVeto():
+                # forward is zeroed, reverse and steering pass untouched.
+                out_speed = cmd_speed
+                if bump and out_speed > 0:
+                    out_speed = 0
+
                 # Mixer, mirrored from the hoverboard firmware.
-                target_l = (cmd_speed + cmd_steer) if driving else 0
-                target_r = (cmd_speed - cmd_steer) if driving else 0
+                target_l = (out_speed + cmd_steer) if driving else 0
+                target_r = (out_speed - cmd_steer) if driving else 0
                 # First-order lag so the "wheels" do not step instantly.
                 meas_l += (target_l - meas_l) * 0.2
                 meas_r += (target_r - meas_r) * 0.2
@@ -119,6 +138,7 @@ def main() -> None:
                         board_temp=305,        # 30.5 C at 0.1 C/count
                         estop=estop,
                         watchdog_ok=watchdog_ok,
+                        bump=bump,
                     )
                 )
                 assert len(frame) == ESP_FEEDBACK_SIZE

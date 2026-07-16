@@ -90,8 +90,26 @@ ros2/src/robot_bringup/     launch + ekf.yaml + urdf
 scripts/deploy.sh           push → Pi'da pull + colcon build
 ```
 ESP32 köprüsü (`src/main.cpp`) hazır: watchdog (Pi 200ms susarsa dur), fail-safe
-E-stop latch, hoverboard 0xABCD protokolü, Pi'a feedback (ölçülen hız/voltaj/temp).
-Ultrasonik + çarpma sensörü refleksleri **henüz eklenmedi** (planlı).
+E-stop latch, **çarpma refleksi**, hoverboard 0xABCD protokolü, Pi'a feedback
+(ölçülen hız/voltaj/temp/güvenlik durumu).
+
+### Çarpma refleksi (GPIO26) — yönlü veto
+**Latch YOK.** Çarpma varken **ileri veto** edilir; **geri ve dönüş serbest**
+kalır, kontak bırakılınca (100 ms kararlı) kendi kendine açılır. Gerekçe: latch'li
+bir çarpma sensörü robotu dokunduğu şeye yaslanmış halde kilitler ve kurtulmak
+için Pi'la el sıkışma gerektirir; veto ise Nav2'nin hiçbir şey yapmadan geri
+çekilmesine izin verir ve çarpmayı asla kötüleştiremez.
+- Kablolama **NC** (E-stop'la aynı fail-safe): kopuk kablo = ileri reddedilir.
+- Debounce **asimetrik**: tehlikeye anında geçer (debounce yok), güvenliye
+  100 ms kararlı-temiz sonrası döner. Kontak zıplaması vetoyu çarpmanın
+  ortasında söndüremesin diye.
+- ROS: `/bumper` (std_msgs/Bool) + `/diagnostics` (WARN, ERROR değil — robot
+  bozuk değil, bir şeye dokunuyor ve kendi gücüyle çıkabilir).
+- ⚠️ `BUMP_BLOCKS_POSITIVE_SPEED` sabiti tezgahta doğrulanmalı — ters çıkarsa
+  veto robotu çarptığı şeye bindirir. Detay: `docs/wiring-map.md` 3c.
+
+**Ultrasonik refleksi YAZILMADI** — sensörler envanterde yok, alım kararı da
+verilmedi (`wiring-map.md` 6. bölüm).
 
 ### ROS 2 workspace (kuruldu, donanımsız doğrulandı)
 **Mimari kararı:** kinematiği+odometriyi **kendi Python düğümümüz** yapıyor,
@@ -102,7 +120,7 @@ ros2_control `SystemInterface`'i onun üstüne sarılır, düğüm teleop aracı
 
 | Dosya | İş |
 |---|---|
-| `hoverboard_bridge/protocol.py` | `PiCommand`/`EspFeedback` pack/unpack + checksum + resync eden çerçeve ayrıştırıcı. `main.cpp` ile **byte-byte aynı olduğu doğrulandı** (struct'lar firmware'den söküldü, gcc referans byte'larıyla karşılaştırıldı). |
+| `hoverboard_bridge/protocol.py` | `PiCommand` (10 B) / `EspFeedback` (16 B) pack/unpack + checksum + resync eden çerçeve ayrıştırıcı. `main.cpp` ile **byte-byte aynı olduğu doğrulandı** (struct'lar firmware'den söküldü, gcc referans byte'larıyla karşılaştırıldı). ⚠️ uint8 bayraklar checksum'da **ikişerli** 16-bit kelimeye katlanıyor → yeni bayrak eklerken yanına pad gerekir. |
 | `hoverboard_bridge/bridge_node.py` | `/cmd_vel` → ters kinematik → seri; `EspFeedback` → `/odom`, `/joint_states`, `/battery`, `/diagnostics`. `~/clear_estop` servisi (std_srvs/Trigger). |
 | `hoverboard_bridge/fake_esp32.py` | pty üzerinde **sahte ESP32** — donanımsız tam döngü testi. `ros2 run hoverboard_bridge fake_esp32` |
 | `mpu6050_driver/mpu6050.py` | register seviyesi MPU6050 (ROS'suz, I2C bus enjekte edilir) |
@@ -118,7 +136,11 @@ protokol byte uyumu · `/cmd_vel` 0.4 m/s → ölçülen 0.389 · E-stop latch'l
 tekerlek dönmüyor · `clear_estop` sonrası dönüyor · `/cmd_vel` kesilince
 `cmd_timeout` sıfırlıyor · SIGINT/SIGTERM'de temiz çıkış (systemd için) ·
 IMU 100 Hz, gyro bias kalibrasyonu sahte chip'in bias'ını tam buluyor ·
-URDF parse + tüm launch'lar yükleniyor · **EKF füzyonu karşıt testle kanıtlandı:**
+URDF parse + tüm launch'lar yükleniyor ·
+**çarpma vetosu yönlü olduğu kanıtlandı** (çarpma varken ileri 0.000, geri -0.389;
+bırakınca el sıkışmasız ileri döner) · **E-stop regresyonu:** E-stop hâlâ *her iki*
+yönü kesiyor (veto tek kapı hâline gelmemiş) ·
+**EKF füzyonu karşıt testle kanıtlandı:**
 IMU açıkken EKF yaw = gyro (0.0004), kapalıyken = tekerlek (0.4838); vx her iki
 durumda tekerlekten geliyor.
 
@@ -173,10 +195,12 @@ Donanım beklerken yazılımda yapılabilecekler (bağımsız):
 1. ✅ ~~IMU sürücüsü~~ — **yazıldı** (`mpu6050_driver`), sahte I2C ile doğrulandı.
    `use_imu:=true` ile açılır. Kalan: gerçek chip gelince `i2cdetect -y 1` ile
    0x68'i gör, `imu_joint` rpy'ını gerçek montaj yönüne göre ölç/yaz.
-2. Ultrasonik + çarpma refleksleri → ESP32 firmware + protokol genişletmesi
-   (`EspFeedback`'e alan eklenirse `protocol.py` ile birlikte güncellenmeli —
-   ikisi byte-byte bağlı, testler bunu yakalar).
+2. ✅ ~~Çarpma refleksi~~ — **yazıldı**, yönlü veto, sahte ESP32'yle doğrulandı.
+   Ultrasonik kısmı **bilinçli olarak yapılmadı**: sensör envanterde yok, kaç
+   adet/hangi açı kararı verilmedi — montaj geometrisi bilinmeden "ön engel"
+   mantığı tahmin olurdu.
 3. Nav2 config (adım 6) — `robot_bringup/config/nav2.yaml` henüz yok.
+   `/bumper` artık var; Nav2'ye costmap katmanı olarak bağlanabilir.
 4. Manyetometre sürücüsü (QMC5883L) — chip alınınca. `mpu6050_driver` deseni
    (register katmanı + sahte bus + ROS düğümü) aynen tekrarlanabilir.
    Geldiğinde `ekf.yaml`'da **`ekf_global`'ın** imu0 yaw bayrağı açılacak
