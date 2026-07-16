@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>hoverboard_bridge</name>
+  <version>0.1.0</version>
+  <description>
+    Serial bridge between ROS 2 and the ESP32 safety layer that drives the
+    hoverboard mainboard. Converts /cmd_vel to the board's (speed, steer) mixer
+    units and turns measured hall RPM into /odom.
+  </description>
+  <maintainer email="enesis@entes.com.tr">Enes</maintainer>
+  <license>MIT</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>diagnostic_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>python3-serial</exec_depend>
+
+  <!-- The protocol tests are the point: they pin this package's wire format to
+       firmware/esp32_bridge/src/main.cpp. The ament style linters are not wired
+       up — no opinion has been formed on style, so claiming them here would be
+       a promise the workspace does not keep. -->
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

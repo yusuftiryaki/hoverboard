@@ -1,0 +1,138 @@
+# robot_localization — dual EKF + navsat_transform.
+#
+# Why two filters (this is the standard GPS pattern, not over-engineering):
+#
+#   ekf_local   world_frame: odom   publishes odom->base_link
+#               Fuses wheel odometry + IMU only. Smooth and continuous — it never
+#               jumps, because nothing in it is an absolute measurement. This is
+#               what the controller drives on.
+#
+#   ekf_global  world_frame: map    publishes map->odom
+#               Same inputs PLUS the GPS (via navsat_transform). It DOES jump
+#               when the NEO-6M wanders ~5 m (docs/handoff.md decision 5). Those
+#               jumps land in map->odom, so base_link's motion stays smooth.
+#
+# Both filters consume the wheel odometry's TWIST only (vx, vyaw), never its
+# pose: the pose is a dead-reckoned integral that drifts without bound, and
+# feeding it in as an absolute measurement would drag the estimate along with it.
+#
+# two_d_mode: true — a four-point static platform on the ground. Pinning
+# z/roll/pitch to zero throws away states the sensors cannot observe anyway and
+# stops the 6-axis IMU's drift from leaking into the horizontal estimate.
+
+ekf_local:
+  ros__parameters:
+    frequency: 30.0
+    sensor_timeout: 0.2
+    two_d_mode: true
+    publish_tf: true
+    print_diagnostics: true
+    debug: false
+
+    map_frame: map
+    odom_frame: odom
+    base_link_frame: base_link
+    world_frame: odom
+
+    # Order of the 15 flags:
+    #   x, y, z, roll, pitch, yaw, vx, vy, vz, vroll, vpitch, vyaw, ax, ay, az
+    odom0: odom
+    odom0_config: [false, false, false,
+                   false, false, false,
+                   true,  false, false,
+                   false, false, true,
+                   false, false, false]
+    odom0_queue_size: 10
+    odom0_differential: false
+    odom0_relative: false
+
+    # 6-axis IMU: yaw RATE is trustworthy, absolute yaw is not (no magnetometer
+    # yet — handoff decision 4). Take vyaw and ax; leave yaw to the global filter
+    # once the QMC5883L is on the mast.
+    imu0: imu/data
+    imu0_config: [false, false, false,
+                  false, false, false,
+                  false, false, false,
+                  false, false, true,
+                  true,  false, false]
+    imu0_queue_size: 20
+    imu0_differential: false
+    imu0_relative: false
+    imu0_remove_gravitational_acceleration: true
+
+ekf_global:
+  ros__parameters:
+    frequency: 30.0
+    sensor_timeout: 0.2
+    two_d_mode: true
+    publish_tf: true
+    print_diagnostics: true
+    debug: false
+
+    map_frame: map
+    odom_frame: odom
+    base_link_frame: base_link
+    world_frame: map
+
+    odom0: odom
+    odom0_config: [false, false, false,
+                   false, false, false,
+                   true,  false, false,
+                   false, false, true,
+                   false, false, false]
+    odom0_queue_size: 10
+    odom0_differential: false
+    odom0_relative: false
+
+    # GPS, already converted into the map frame by navsat_transform_node.
+    # Absolute x/y only — course-over-ground yaw is meaningless below ~1 m/s.
+    odom1: odometry/gps
+    odom1_config: [true,  true,  false,
+                   false, false, false,
+                   false, false, false,
+                   false, false, false,
+                   false, false, false]
+    odom1_queue_size: 10
+    odom1_differential: false
+    odom1_relative: false
+
+    imu0: imu/data
+    imu0_config: [false, false, false,
+                  false, false, false,
+                  false, false, false,
+                  false, false, true,
+                  true,  false, false]
+    imu0_queue_size: 20
+    imu0_differential: false
+    imu0_relative: false
+    imu0_remove_gravitational_acceleration: true
+    # TODO once the magnetometer is mounted and calibrated: flip the yaw flag
+    # (index 5) to true here — NOT in ekf_local, so a bad heading fix cannot
+    # yank base_link around.
+
+navsat_transform:
+  ros__parameters:
+    frequency: 30.0
+    # Ignore the first fixes: the NEO-6M's early ones are the worst it will emit.
+    delay: 3.0
+
+    # TODO: set for your site. Istanbul is roughly +6.4 deg east ~= 0.112 rad.
+    # Look it up at https://www.ngdc.noaa.gov/geomag/calculators/magcalc.shtml
+    # A wrong declination shows up as the robot driving at a constant angle to
+    # its intended heading — this only matters once the magnetometer is in.
+    magnetic_declination_radians: 0.112
+
+    # TODO: 0.0 assumes the IMU reports yaw per REP-103 (0 = east, ENU). Many
+    # drivers report 0 = north; then this must be pi/2. Verify by pointing the
+    # robot east and reading /imu/data.
+    yaw_offset: 0.0
+
+    zero_altitude: true
+    broadcast_utm_transform: false
+    publish_filtered_gps: true
+    # false = trust the IMU's heading, not the wheel odometry's. The wheel yaw
+    # has no absolute reference at all, so it must not seed the GPS transform.
+    use_odometry_yaw: false
+    # false = the first valid fix becomes the map origin. Set a fixed datum
+    # instead once we want the same map frame across runs at a known site.
+    wait_for_datum: false

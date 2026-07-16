@@ -1,0 +1,13 @@
+# colcon
+ros2/build/
+ros2/install/
+ros2/log/
+
+# PlatformIO
+firmware/*/.pio/
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/

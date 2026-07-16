@@ -1,0 +1,66 @@
+{
+  "name": "howerboard-dev",
+  "build": { "dockerfile": "Dockerfile" },
+  "remoteUser": "ubuntu",
+
+  // host networking so ROS 2 DDS can discover nodes running on the Pi over the LAN
+  "runArgs": [
+    "--network=host"
+    // --- WSL2 USB flashing ---------------------------------------------------
+    // Flashing from the container needs the device inside the container. On WSL2:
+    //   1) (Windows PowerShell, admin)  usbipd list
+    //   2)                              usbipd bind    --busid <b-id>
+    //   3)                              usbipd attach  --wsl --busid <b-id>
+    //   4) uncomment the matching device line below and rebuild the container:
+    // ,"--device=/dev/ttyUSB0"   // ESP32 (CP2102/CH340)
+    // ,"--device=/dev/ttyACM0"   // ST-Link V2
+    // Easier alternative: build the .bin here, flash from the Pi. See docs/devcontainer.md
+  ],
+
+  // Node.js so we can install the Claude Code CLI inside the container.
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": { "version": "lts" }
+  },
+
+  // Reuse the host WSL Claude login instead of re-authenticating in the container.
+  // Host user (yusuf, uid 1000) matches the container 'ubuntu' user (uid 1000),
+  // so the 0600 credentials file is readable with no permission juggling.
+  //   .claude/          -> OAuth token (.credentials.json), settings, session state
+  //   .claude.json      -> account + config
+  // Both are bind-mounted read-write, so a login/logout in either side is shared.
+  "mounts": [
+    "source=${localEnv:HOME}/.claude,target=/home/ubuntu/.claude,type=bind",
+    "source=${localEnv:HOME}/.claude.json,target=/home/ubuntu/.claude.json,type=bind"
+  ],
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "anthropic.claude-code",          // Claude Code panel (uses the mounted login + installed CLI)
+        "ms-iot.vscode-ros",              // ROS 2: build tasks, launch, msg browsing
+        "ms-python.python",               // Python nodes
+        "ms-python.vscode-pylance",
+        "ms-vscode.cpptools",             // C++ nodes + firmware IntelliSense
+        "ms-vscode.cmake-tools",          // ament_cmake / colcon
+        "twxs.cmake",
+        "platformio.platformio-ide",      // ESP32 firmware build/flash/monitor
+        "ms-vscode.vscode-serial-monitor",// watch ESP32 <-> Pi serial live
+        "redhat.vscode-yaml",             // ROS params, nav2/ekf config, launch.yaml
+        "redhat.vscode-xml",              // URDF / xacro
+        "smilerobotics.urdf",             // URDF 3D preview
+        "ms-azuretools.vscode-docker",
+        "yzhang.markdown-all-in-one",     // the docs/ folder
+        "eamodio.gitlens"
+      ],
+      "settings": {
+        "ros.distro": "jazzy",
+        "files.associations": { "*.ino": "cpp" },
+        "terminal.integrated.defaultProfile.linux": "bash",
+        // PlatformIO manages firmware IntelliSense; avoid cpptools fighting it there
+        "C_Cpp.intelliSenseEngine": "default"
+      }
+    }
+  },
+
+  "postCreateCommand": "grep -qxF 'source /opt/ros/jazzy/setup.bash' ~/.bashrc || echo 'source /opt/ros/jazzy/setup.bash' >> ~/.bashrc; npm install -g @anthropic-ai/claude-code"
+}

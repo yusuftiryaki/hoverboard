@@ -1,0 +1,56 @@
+# Parameters for the ESP32 serial bridge.
+#
+# Everything marked CALIBRATE is a guess until it is measured on the bench. The
+# TXTY 6052 board variant is undocumented (docs/handoff.md), so no datasheet is
+# going to settle these — the wheels-in-the-air procedure in
+# docs/bringup-checklist.md is the only source of truth.
+
+hoverboard_bridge:
+  ros__parameters:
+    # udev symlink from docs/deployment.md step 4. /dev/ttyUSB0 swaps with the
+    # GPS between boots, so never hardcode it.
+    port: /dev/esp32
+    baud: 115200
+
+    # Must match TX_PERIOD_MS=20 in the firmware and stay far under its
+    # WATCHDOG_MS=200, or the ESP32 zeroes the motors while we are still driving.
+    cmd_rate_hz: 50.0
+    rx_poll_hz: 200.0
+    cmd_timeout: 0.5
+
+    # 6.5" hoverboard hub wheel: 165 mm diameter.
+    wheel_radius: 0.0825
+    # CALIBRATE: measure centre-to-centre once the chassis exists (roadmap step 3).
+    # A wrong value shows up as the robot under/over-turning for a given
+    # /cmd_vel.angular.z, which the EKF cannot fix for you.
+    wheel_separation: 0.5
+
+    # CALIBRATE: raw board units per wheel RPM. Wheels in the air, publish a
+    # steady /cmd_vel, read the measured RPM back off /joint_states, adjust until
+    # commanded and measured agree.
+    cmd_per_rpm: 1.0
+    # CALIBRATE: flip to -1.0 if the robot turns the wrong way on the bench.
+    steer_sign: 1.0
+    # CALIBRATE: the two hub motors face opposite ways, so one hall stream reads
+    # negative for forward. Spin each wheel forward by hand and watch
+    # /joint_states velocities — both should go positive.
+    invert_left: false
+    invert_right: true
+
+    # Mirrors SPEED_LIMIT in the firmware. Raise both together, and only once
+    # the robot has proven it stops when told to.
+    speed_limit: 300
+
+    # EFeru's feedback scaling. CALIBRATE battery_scale against a multimeter on
+    # first power-up; a wrong scale means the low-battery warning lies.
+    battery_scale: 0.01
+    temp_scale: 0.1
+    battery_cells: 10
+
+    odom_frame: odom
+    base_frame: base_link
+    # false: ekf_local owns odom->base_link. Two publishers of the same
+    # transform is a genuinely confusing failure — RViz shows the robot
+    # stuttering between two poses.
+    publish_tf: false
+    use_stamped_cmd_vel: false
