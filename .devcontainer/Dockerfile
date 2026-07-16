@@ -39,5 +39,19 @@ RUN pip3 install --break-system-packages platformio
 # --- Serial device access for flashing (when a device is passed through) -----
 RUN usermod -aG dialout ubuntu || true
 
+# --- Passwordless sudo for the dev user --------------------------------------
+# The base image's 'ubuntu' user is already in the sudo group, but its password
+# is locked — so sudo prompts for a password nobody knows and every apt install
+# dies. This is what the devcontainers 'common-utils' feature would set up; we
+# write it explicitly instead so it is visible here rather than implied.
+#
+# Scope: a throwaway dev container. Nothing in it runs on the robot — the Pi is
+# provisioned from docs/deployment.md, not from this image.
+# visudo -c fails the build on a malformed rule, rather than at first use when
+# sudo would refuse to run at all.
+RUN echo 'ubuntu ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/ubuntu \
+    && chmod 0440 /etc/sudoers.d/ubuntu \
+    && visudo -c -f /etc/sudoers.d/ubuntu
+
 USER ubuntu
 RUN rosdep update || true

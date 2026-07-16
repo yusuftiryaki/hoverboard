@@ -192,8 +192,13 @@ Donanım beklerken yazılımda yapılabilecekler (bağımsız):
   (`sensors.launch.py` bu düğümü `use_gps:=true` ile çağırıyor)
 - `camera_ros` paketi Dockerfile'da kurulu değil (`sensors.launch.py` `use_camera:=true`
   ile onu çağırıyor) — kamera adımına (7) gelince eklenecek.
-- ⚠️ Dockerfile'a `python3-smbus2` eklendi (IMU sürücüsü için) ama **imaj yeniden
-  derlenip doğrulanmadı** (konteynerde sudo yok). Paketin noble/universe'te
-  olduğu Launchpad'den teyit edildi (0.4.3-1) ve konteynerde universe açık →
-  gelmesi gerekir. Pi tarafında `rosdep install` zaten çeker.
-  Devcontainer'ı rebuild edince kontrol et.
+- ⚠️ **Devcontainer rebuild bekliyor.** Dockerfile'a iki şey eklendi ama imaj
+  yeniden derlenip doğrulanmadı (mevcut konteyner eski imajdan koşuyor):
+  1. `python3-smbus2` (IMU sürücüsü için). Paketin noble/**universe**'te olduğu
+     Launchpad'den teyit edildi (0.4.3-1), konteynerde universe açık → gelmeli.
+     Pi tarafında `rosdep install` zaten çeker.
+  2. **Parolasız sudo** (`/etc/sudoers.d/ubuntu`). Sebep: taban imajın `ubuntu`
+     kullanıcısı `sudo` grubunda ama parolası kilitli → sudo kimsenin bilmediği
+     bir parola soruyordu. `visudo -c` build guard'ı var. Detay: `docs/devcontainer.md`.
+
+  Rebuild sonrası kontrol: `sudo -n true && python3 -c "import smbus2"`

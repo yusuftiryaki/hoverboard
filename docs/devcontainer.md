@@ -20,6 +20,24 @@ ARM64 Pi'da**; gerçek donanım (seri, kamera, GPIO) burada yok. Bu ortam kod
 3. Container içi eklentiler (ROS, PlatformIO, serial monitor, YAML/XML/URDF…)
    `devcontainer.json` üzerinden otomatik kurulur.
 
+## sudo
+
+`ubuntu` kullanıcısı **parolasız sudo** ile geliyor (Dockerfile'daki
+`/etc/sudoers.d/ubuntu` kuralı).
+
+Neden açıkça yazmak gerekti: taban imajın `ubuntu` kullanıcısı zaten `sudo`
+grubunda, ama **parolası kilitli** → sudo kimsenin bilmediği bir parola soruyor,
+her `apt install` ölüyor. Devcontainer'ların `common-utils` feature'ı normalde
+bunu kurar; onu kullanmadığımız için kuralı Dockerfile'a kendimiz yazdık —
+böylece ne olduğu ima edilmek yerine görünür oluyor.
+
+> Kapsam: bu **atılır bir geliştirme container'ı**. İçindeki hiçbir şey robotta
+> koşmuyor; Pi `docs/deployment.md` ile ayrıca kuruluyor, bu imajdan değil.
+
+⚠️ **Container'a elle `apt install` ettiğin şey bir sonraki rebuild'de kaybolur.**
+Kalıcı olması gerekiyorsa Dockerfile'a ekle. sudo hızlı deneme için; kaynak
+gerçeği Dockerfile.
+
 ## VS Code eklentileri (neden hangisi)
 
 | Eklenti | Ne için |
