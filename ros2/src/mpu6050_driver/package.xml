@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>mpu6050_driver</name>
+  <version>0.1.0</version>
+  <description>
+    MPU6050 (6-axis IMU) driver publishing sensor_msgs/Imu for
+    robot_localization. Written here because Jazzy ships no driver for this chip.
+    Publishes angular velocity and linear acceleration only — the chip has no
+    magnetometer, so it has no orientation to report.
+  </description>
+  <maintainer email="enesis@entes.com.tr">Enes</maintainer>
+  <license>MIT</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>diagnostic_msgs</exec_depend>
+  <!-- Ubuntu 24.04 universe, python3-smbus2 0.4.3-1. deployment.md step 2
+       already enables universe, so `rosdep install` picks this up on the Pi. -->
+  <exec_depend>python3-smbus2</exec_depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

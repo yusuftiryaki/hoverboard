@@ -1,0 +1,39 @@
+# MPU6050 IMU driver parameters.
+#
+# This feeds ekf_local's yaw rate — the single most valuable input the robot has
+# for keeping a heading between GPS fixes. See mpu6050_driver/imu_node.py for
+# why it publishes no orientation.
+
+mpu6050:
+  ros__parameters:
+    i2c_bus: 1          # Pi GPIO2/3 (docs/wiring-map.md 3d)
+    address: 0x68       # AD0 low. 0x69 if the board pulls it high.
+    frame_id: imu_link  # must exist in the URDF; its rpy there describes the
+                        # chip's real mounting orientation
+    rate_hz: 100.0      # 1 kHz / 10; the EKF runs at 30 Hz, so this is headroom
+
+    # ±4 g: outdoor robot, rigid hub motors, bumps. A clipped bump reads wrong
+    # rather than merely noisy. Drop to 2 if the field data turns out quiet.
+    accel_range_g: 4
+    # The robot turns slowly — take the most sensitive gyro range.
+    gyro_range_dps: 250
+    # 44 Hz accel / 42 Hz gyro. Cuts hub-motor vibration for ~5 ms of delay.
+    dlpf: 3
+
+    # ⚠️ THE ROBOT MUST BE STILL while this runs (~5 s at 100 Hz). Gyro bias
+    # drifts with temperature, so it is re-measured every start rather than
+    # stored. The node logs an error if it detects motion during calibration.
+    calibrate_on_start: true
+    calibration_samples: 500
+    # Only used when calibrate_on_start is false. rad/s.
+    gyro_bias: [0.0, 0.0, 0.0]
+
+    # CALIBRATE (field): the node measures its own noise while still, and these
+    # are the floors under that. Standstill noise badly understates driving
+    # noise, and an EKF that over-trusts the IMU is worse than one that
+    # under-trusts it. Raise if the estimate looks jumpy on rough ground.
+    gyro_variance_floor: 0.0001
+    accel_variance_floor: 0.01
+
+    publish_temperature: true
+    use_fake_bus: false

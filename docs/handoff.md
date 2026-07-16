@@ -84,6 +84,7 @@ docs/deployment.md          Pi deployment planı (8 adım)
 docs/handoff.md             bu dosya
 firmware/esp32_bridge/      platformio.ini + src/main.cpp  (pio run ile derlenir)
 ros2/src/hoverboard_bridge/ ESP32 seri köprü düğümü (Python) + protokol + sahte ESP32
+ros2/src/mpu6050_driver/    IMU sürücüsü (Jazzy'de yok, kendimiz yazdık) + sahte I2C
 ros2/src/robot_bringup/     launch + ekf.yaml + urdf
 .devcontainer/              Dockerfile + devcontainer.json
 scripts/deploy.sh           push → Pi'da pull + colcon build
@@ -104,23 +105,45 @@ ros2_control `SystemInterface`'i onun üstüne sarılır, düğüm teleop aracı
 | `hoverboard_bridge/protocol.py` | `PiCommand`/`EspFeedback` pack/unpack + checksum + resync eden çerçeve ayrıştırıcı. `main.cpp` ile **byte-byte aynı olduğu doğrulandı** (struct'lar firmware'den söküldü, gcc referans byte'larıyla karşılaştırıldı). |
 | `hoverboard_bridge/bridge_node.py` | `/cmd_vel` → ters kinematik → seri; `EspFeedback` → `/odom`, `/joint_states`, `/battery`, `/diagnostics`. `~/clear_estop` servisi (std_srvs/Trigger). |
 | `hoverboard_bridge/fake_esp32.py` | pty üzerinde **sahte ESP32** — donanımsız tam döngü testi. `ros2 run hoverboard_bridge fake_esp32` |
+| `mpu6050_driver/mpu6050.py` | register seviyesi MPU6050 (ROS'suz, I2C bus enjekte edilir) |
+| `mpu6050_driver/imu_node.py` | `/imu/data` + `/imu/temperature` + `/diagnostics`; açılışta gyro bias kalibrasyonu |
+| `mpu6050_driver/fake_bus.py` | **sahte I2C chip** — register seviyesinde, config register'larını geri çözüp ölçekliyor |
 | `robot_bringup/config/ekf.yaml` | çift-EKF + navsat_transform, gerekçeleri yorumda |
 | `robot_bringup/config/hoverboard_bridge.yaml` | düğüm parametreleri, **CALIBRATE** işaretleriyle |
 | `robot_bringup/urdf/robot.urdf.xacro` | 2 tahrik + 2 caster + sensör frame'leri (direkte mag/GPS) |
 | `robot_bringup/launch/` | `robot` (üst), `teleop`, `localization`, `sensors`, `description` |
 
-**Doğrulanan (sahte ESP32'ye karşı, gerçek donanım YOK):**
+**Doğrulanan (sahte ESP32 + sahte I2C'ye karşı, gerçek donanım YOK):**
 protokol byte uyumu · `/cmd_vel` 0.4 m/s → ölçülen 0.389 · E-stop latch'liyken
 tekerlek dönmüyor · `clear_estop` sonrası dönüyor · `/cmd_vel` kesilince
 `cmd_timeout` sıfırlıyor · SIGINT/SIGTERM'de temiz çıkış (systemd için) ·
-`ekf_local` `/odom`'u yiyip `odom→base_link` yayınlıyor · URDF parse + tüm launch'lar yükleniyor.
+IMU 100 Hz, gyro bias kalibrasyonu sahte chip'in bias'ını tam buluyor ·
+URDF parse + tüm launch'lar yükleniyor · **EKF füzyonu karşıt testle kanıtlandı:**
+IMU açıkken EKF yaw = gyro (0.0004), kapalıyken = tekerlek (0.4838); vx her iki
+durumda tekerlekten geliyor.
+
+> ⚠️ **EKF yaw'da gyro'yu tekerleğe göre ~500× ağırlıklandırıyor** (gyro varyansı
+> 1e-4 vs tekerlek vyaw 0.05). Bu **kasıtlı ve doğru**: patinajda tekerlekten
+> türetilen yaw çöptür. Ama `gyro_variance_floor` sahada titreşimle birlikte
+> fazla iyimser kalabilir — EKF çıktısı zıplarsa önce onu yükselt.
 
 **Launch varsayılanları kasten "en az donanım":** sadece bridge + URDF.
-Sensörler ve lokalizasyon opt-in (`use_localization:=true use_gps:=true use_camera:=true`).
+Sensörler ve lokalizasyon opt-in.
+Donanımsız tam yığın:
+`ros2 run hoverboard_bridge fake_esp32` + `ros2 launch robot_bringup robot.launch.py
+esp32_port:=/tmp/fake_esp32 use_localization:=true use_imu:=true fake_imu:=true`
 
-⚠️ **Tüm bunlar simülasyon.** Gerçek kartta hiçbiri denenmedi; `cmd_per_rpm`,
-`steer_sign`, `invert_left/right`, `wheel_separation`, `battery_scale`
-**kalibre edilmemiş tahminler** (TXTY kartı belgesiz — tahmin yürütülemez).
+⚠️ **Tüm bunlar simülasyon.** Gerçek kartta/chip'te hiçbiri denenmedi;
+`cmd_per_rpm`, `steer_sign`, `invert_left/right`, `wheel_separation`,
+`battery_scale` **kalibre edilmemiş tahminler** (TXTY kartı belgesiz — tahmin
+yürütülemez). Sahte I2C chip gerçek MPU6050'nin **sıcaklık kayması, clipping,
+eksenler arası duyarlılık, I2C glitch'leri ve motor titreşimini** modellemiyor —
+yani matematik doğru, sensörün iyi olduğu kanıtlanmadı.
+
+**IMU eksen yönü kararı:** sürücü ham veriyi chip'in kendi ekseninde `imu_link`
+olarak yayınlıyor; montaj yönü **URDF'teki `imu_joint` rpy'ında** tarif edilecek
+(robot_localization tf ile base_link'e döndürüyor). Eksenleri sürücüde de
+"düzeltme" — dönüşüm iki kez uygulanır.
 
 ## Deployment kararları
 - Pi **sıfır** → **Ubuntu Server 24.04 64-bit** yüklenecek.
@@ -147,16 +170,17 @@ Yazılım tarafı artık donanımı bekliyor. Sıradaki iş **ST-Link gelince yo
 haritası adım 1** (kartı flash'la) — o olmadan adım 2/4 açılmıyor.
 
 Donanım beklerken yazılımda yapılabilecekler (bağımsız):
-1. **⚠️ IMU sürücüsü — en büyük boşluk.** Jazzy apt'de MPU6050 sürücüsü YOK.
-   `sensors.launch.py` içinde TODO olarak duruyor. Kendi rclpy düğümümüzü yazmak
-   (smbus2, ~150 satır) en temizi. `/imu/data`'yı `imu_link` frame'inde, REP-103
-   ile (x ileri, y sol, z yukarı) yayınlamalı ve **mutlak yaw yayınlamamalı**
-   (6-eksen; karar 4). Bu olmadan `ekf_local` sadece tekerlek odometrisiyle koşar
-   → yaw hızla kayar. **Lokalizasyonun bir sonraki gerçek adımı bu.**
+1. ✅ ~~IMU sürücüsü~~ — **yazıldı** (`mpu6050_driver`), sahte I2C ile doğrulandı.
+   `use_imu:=true` ile açılır. Kalan: gerçek chip gelince `i2cdetect -y 1` ile
+   0x68'i gör, `imu_joint` rpy'ını gerçek montaj yönüne göre ölç/yaz.
 2. Ultrasonik + çarpma refleksleri → ESP32 firmware + protokol genişletmesi
    (`EspFeedback`'e alan eklenirse `protocol.py` ile birlikte güncellenmeli —
    ikisi byte-byte bağlı, testler bunu yakalar).
 3. Nav2 config (adım 6) — `robot_bringup/config/nav2.yaml` henüz yok.
+4. Manyetometre sürücüsü (QMC5883L) — chip alınınca. `mpu6050_driver` deseni
+   (register katmanı + sahte bus + ROS düğümü) aynen tekrarlanabilir.
+   Geldiğinde `ekf.yaml`'da **`ekf_global`'ın** imu0 yaw bayrağı açılacak
+   (`ekf_local`'ın DEĞİL — kötü heading base_link'i savurmasın).
 
 ## Bilinen blokerler / bekleyen alımlar
 - **ST-Link V2 klon (~150 TL)** — adım 1 için şart, henüz alınmadı
@@ -166,8 +190,10 @@ Donanım beklerken yazılımda yapılabilecekler (bağımsız):
 - Dockerfile'daki `ros-jazzy-nmea-navsat-driver` paketi Jazzy apt'de olmayabilir
   → imaj build'i orada patlarsa listeden çıkar, GPS sürücüsünü başka yolla çöz
   (`sensors.launch.py` bu düğümü `use_gps:=true` ile çağırıyor)
-- ⚠️ **Repo henüz `git init` edilmedi**, ama `scripts/deploy.sh` `git push`'a ve
-  `deployment.md` adım 3 `git clone`'a dayanıyor. Pi'a deploy etmeden önce
-  git init + remote şart. `.gitignore` yazıldı (ros2/build,install,log + .pio).
 - `camera_ros` paketi Dockerfile'da kurulu değil (`sensors.launch.py` `use_camera:=true`
   ile onu çağırıyor) — kamera adımına (7) gelince eklenecek.
+- ⚠️ Dockerfile'a `python3-smbus2` eklendi (IMU sürücüsü için) ama **imaj yeniden
+  derlenip doğrulanmadı** (konteynerde sudo yok). Paketin noble/universe'te
+  olduğu Launchpad'den teyit edildi (0.4.3-1) ve konteynerde universe açık →
+  gelmesi gerekir. Pi tarafında `rosdep install` zaten çeker.
+  Devcontainer'ı rebuild edince kontrol et.

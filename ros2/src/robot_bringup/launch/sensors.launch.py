@@ -2,10 +2,6 @@
 
 Everything is behind a launch argument and defaults OFF, so the stack still
 comes up while the hardware is still in a box. Turn each one on as it lands.
-
-⚠️ IMU: there is no MPU6050 driver in the Jazzy apt repo. That node is NOT
-wired up here yet — see the note below. Until it exists, ekf_local runs on wheel
-odometry alone, which drifts in yaw fast. This is the next real gap.
 """
 
 import os
@@ -19,13 +15,40 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
+    pkg = get_package_share_directory("robot_bringup")
+    imu_params = os.path.join(pkg, "config", "mpu6050.yaml")
+
     use_gps = LaunchConfiguration("use_gps")
+    use_imu = LaunchConfiguration("use_imu")
     use_camera = LaunchConfiguration("use_camera")
     gps_port = LaunchConfiguration("gps_port")
+    fake_imu = LaunchConfiguration("fake_imu")
 
     return LaunchDescription([
         DeclareLaunchArgument("use_gps", default_value="false"),
+        DeclareLaunchArgument("use_imu", default_value="false"),
         DeclareLaunchArgument("use_camera", default_value="false"),
+        DeclareLaunchArgument(
+            "fake_imu", default_value="false",
+            description="Simulate the MPU6050 — dev machine only, there is no I2C there.",
+        ),
+
+        # MPU6050 on the Pi's I2C bus. Ours: Jazzy ships no driver for this chip.
+        # ⚠️ It calibrates the gyro bias at startup, so THE ROBOT MUST BE STILL
+        # for the first few seconds after this launches. It logs an error if it
+        # thinks you moved.
+        Node(
+            package="mpu6050_driver",
+            executable="mpu6050",
+            name="mpu6050",
+            output="screen",
+            condition=IfCondition(use_imu),
+            parameters=[imu_params, {"use_fake_bus": fake_imu}],
+            # I2C on a vibrating robot throws transient errors; the node already
+            # rides those out. Respawn covers the harder failures.
+            respawn=True,
+            respawn_delay=2.0,
+        ),
         # udev symlink, not /dev/ttyUSB1 — it swaps with the ESP32 across boots
         # (docs/deployment.md step 4).
         DeclareLaunchArgument("gps_port", default_value="/dev/gps"),
@@ -66,14 +89,8 @@ def generate_launch_description():
             remappings=[("~/image_raw", "camera/image_raw")],
         ),
 
-        # TODO — IMU (MPU6050 on the Pi's I2C, address 0x68).
-        # No apt package ships a driver for it on Jazzy, so this needs a decision:
-        #   a) write a small rclpy node in this repo (smbus2, ~150 lines: read the
-        #      raw registers, publish sensor_msgs/Imu with a real covariance)
-        #   b) vendor a third-party driver into the workspace
-        # Whichever we pick must publish /imu/data in the imu_link frame, per
-        # REP-103 (x forward, y left, z up), or the EKF will confidently fuse a
-        # rotated world. It must NOT publish an absolute yaw: the 6-axis part has
-        # no heading reference (docs/handoff.md decision 4) — the magnetometer
-        # (not yet purchased) is what fills that in.
+        # TODO — magnetometer (QMC5883L, 0x0D, same I2C bus, on the mast).
+        # Not purchased yet (docs/handoff.md decision 4). It is what gives the
+        # robot an absolute heading; until then the EKF has yaw RATE only and the
+        # heading is unobservable — it drifts, slowly, forever.
     ])

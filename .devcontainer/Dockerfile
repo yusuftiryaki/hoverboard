@@ -19,6 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       python3-colcon-common-extensions python3-rosdep \
       stlink-tools openocd \
       usbutils udev \
+      python3-serial python3-smbus2 \
     && rm -rf /var/lib/apt/lists/*
 
 # --- ROS 2 packages central to the robot (trim if the image gets too big) ----

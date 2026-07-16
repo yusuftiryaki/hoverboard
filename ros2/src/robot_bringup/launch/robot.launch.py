@@ -13,12 +13,17 @@ As hardware lands, turn things on:
     # bench, ESP32 only (roadmap step 4)
     ros2 launch robot_bringup robot.launch.py
 
-    # + IMU-based localization, still indoors
-    ros2 launch robot_bringup robot.launch.py use_localization:=true
+    # + IMU-based localization, still indoors (robot still at startup!)
+    ros2 launch robot_bringup robot.launch.py use_localization:=true use_imu:=true
 
     # full outdoor stack (roadmap step 5-6)
     ros2 launch robot_bringup robot.launch.py \\
-        use_localization:=true use_gps:=true use_camera:=true
+        use_localization:=true use_imu:=true use_gps:=true use_camera:=true
+
+    # dev machine, no hardware at all — both the ESP32 and the IMU simulated
+    ros2 run hoverboard_bridge fake_esp32
+    ros2 launch robot_bringup robot.launch.py esp32_port:=/tmp/fake_esp32 \\
+        use_localization:=true use_imu:=true fake_imu:=true
 """
 
 import os
@@ -39,8 +44,10 @@ def generate_launch_description():
 
     use_localization = LaunchConfiguration("use_localization")
     use_gps = LaunchConfiguration("use_gps")
+    use_imu = LaunchConfiguration("use_imu")
     use_camera = LaunchConfiguration("use_camera")
     esp32_port = LaunchConfiguration("esp32_port")
+    fake_imu = LaunchConfiguration("fake_imu")
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -51,7 +58,15 @@ def generate_launch_description():
             "use_gps", default_value="false",
             description="Run the GPS driver, ekf_global and navsat_transform.",
         ),
+        DeclareLaunchArgument(
+            "use_imu", default_value="false",
+            description="Run the MPU6050. The robot must be still while it calibrates.",
+        ),
         DeclareLaunchArgument("use_camera", default_value="false"),
+        DeclareLaunchArgument(
+            "fake_imu", default_value="false",
+            description="Simulate the IMU — dev machine only.",
+        ),
         DeclareLaunchArgument(
             "esp32_port", default_value="/dev/esp32",
             description="Point at /tmp/fake_esp32 to drive the simulator instead.",
@@ -76,7 +91,12 @@ def generate_launch_description():
 
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(os.path.join(launch_dir, "sensors.launch.py")),
-            launch_arguments={"use_gps": use_gps, "use_camera": use_camera}.items(),
+            launch_arguments={
+                "use_gps": use_gps,
+                "use_imu": use_imu,
+                "use_camera": use_camera,
+                "fake_imu": fake_imu,
+            }.items(),
         ),
 
         IncludeLaunchDescription(
