@@ -11,3 +11,6 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
+
+# VS Code C++ IntelliSense database — generated, and it reaches 1 GB
+.vscode/browse.vc.db*

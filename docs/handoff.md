@@ -83,8 +83,9 @@ docs/devcontainer.md        Dev ortamı + flashing iş akışı (WSL2 usbipd vs 
 docs/deployment.md          Pi deployment planı (8 adım)
 docs/handoff.md             bu dosya
 firmware/esp32_bridge/      platformio.ini + src/main.cpp  (pio run ile derlenir)
-ros2/src/hoverboard_bridge/ ESP32 seri köprü düğümü (Python) + protokol + sahte ESP32
+ros2/src/hoverboard_bridge/ ESP32 seri köprü düğümü (Python) + protokol + ESP32 beyni
 ros2/src/mpu6050_driver/    IMU sürücüsü (Jazzy'de yok, kendimiz yazdık) + sahte I2C
+ros2/src/robot_sim/         kinematik dünya + ground truth + sahte IMU/GPS
 ros2/src/robot_bringup/     launch + ekf.yaml + urdf
 .devcontainer/              Dockerfile + devcontainer.json
 scripts/deploy.sh           push → Pi'da pull + colcon build
@@ -122,7 +123,10 @@ ros2_control `SystemInterface`'i onun üstüne sarılır, düğüm teleop aracı
 |---|---|
 | `hoverboard_bridge/protocol.py` | `PiCommand` (10 B) / `EspFeedback` (16 B) pack/unpack + checksum + resync eden çerçeve ayrıştırıcı. `main.cpp` ile **byte-byte aynı olduğu doğrulandı** (struct'lar firmware'den söküldü, gcc referans byte'larıyla karşılaştırıldı). ⚠️ uint8 bayraklar checksum'da **ikişerli** 16-bit kelimeye katlanıyor → yeni bayrak eklerken yanına pad gerekir. |
 | `hoverboard_bridge/bridge_node.py` | `/cmd_vel` → ters kinematik → seri; `EspFeedback` → `/odom`, `/joint_states`, `/battery`, `/diagnostics`. `~/clear_estop` servisi (std_srvs/Trigger). |
-| `hoverboard_bridge/fake_esp32.py` | pty üzerinde **sahte ESP32** — donanımsız tam döngü testi. `ros2 run hoverboard_bridge fake_esp32` |
+| `hoverboard_bridge/esp32_sim.py` | **ESP32'nin beyni**, tekerleksiz: protokol + watchdog + E-stop + çarpma vetosu + mixer. Arka uç takılabilir (`Backend` protokolü). ROS'suz. |
+| `hoverboard_bridge/fake_esp32.py` | ince CLI: `esp32_sim` + `LagBackend`. Dünyası/pozu yok — "çerçeveler ve güvenlik doğru mu" sorusunu cevaplar. `ros2 run hoverboard_bridge fake_esp32` |
+| `robot_sim/world.py` | ROS'suz kinematik dünya: tekerlek komutu → ölçülen rpm + **ground truth poz**. Arc entegrasyonu (Euler değil). Fizik YOK. |
+| `robot_sim/sim_node.py` | dünyayı koşturur; `/ground_truth`, sahte `/imu/data`, sahte `/gps/fix` yayınlar. `ros2 run robot_sim sim_node` |
 | `mpu6050_driver/mpu6050.py` | register seviyesi MPU6050 (ROS'suz, I2C bus enjekte edilir) |
 | `mpu6050_driver/imu_node.py` | `/imu/data` + `/imu/temperature` + `/diagnostics`; açılışta gyro bias kalibrasyonu |
 | `mpu6050_driver/fake_bus.py` | **sahte I2C chip** — register seviyesinde, config register'larını geri çözüp ölçekliyor |
@@ -177,45 +181,137 @@ olarak yayınlıyor; montaj yönü **URDF'teki `imu_joint` rpy'ında** tarif edi
 - ⚠️ udev ile sabit isim: `/dev/esp32`, `/dev/gps` (ikisi de USB-serial,
   numaraları kayar). Aynı çip kullanırlarsa VID:PID çakışır → farklı çip al.
 
-## Yol haritası (sıra önemli, atlanmaz)
-1. **Anakartı flash'la** (STM32, EFeru FOC firmware) — en riskli adım
-2. **ESP32 aracı katmanı** — tezgahta test
+## Yol haritası — İKİ İZ
+
+> Eski harita tek sıralı listeydi ve yazılımı donanım sırasına zincirliyordu.
+> Gerçek şu: simülasyon varsa yazılım, donanım gelmeden adım 6'ya kadar
+> ilerleyebilir. İki ize ayrıldı. **İz B'nin sırası atlanmaz; İz A paralel gider.**
+
+### İz A — Yazılım (donanımsız, şimdi yapılabilir)
+- ✅ **A1. Kinematik dünya + entegrasyon testleri repoda** — **BİTTİ**
+  - `esp32_sim.py` (beyin) / arka uç ayrımı yapıldı; `fake_esp32` ince CLI oldu
+  - `robot_sim` paketi: `world.py` (ground truth) + `sim_node.py` (sahte IMU/GPS)
+  - Entegrasyon testleri repoda: E-stop, çarpma vetosu, watchdog, EKF vs ground truth
+  - **Ölçülen:** ~8 m karede EKF hatası **0.08 m (%1)**, 35 sn'de yaw **4.3°**
+- **A2. Nav2 config** (eski adım 6) — kinematik dünyada waypoint takibi doğrulanır ⟵ *sıradaki*
+- **A3. Gazebo arka ucu** — aynı `fake_esp32`'nin arkasına takılır (mimari kararı
+  aşağıda), fizik + patinaj + engel dünyası. Eski adım 7'nin ön koşulu.
+- **A4. Manyetometre sürücüsü** — chip alınınca, `mpu6050_driver` deseniyle
+- **A5. CI** (GitHub Actions: colcon build + testler + `pio run`) — ertelendi
+
+### İz B — Donanım (sıra atlanmaz)
+1. **ST-Link al → anakartı flash'la** (STM32, EFeru FOC) — **tüm izin kilidi**, en riskli adım
+2. **ESP32 tezgah testi** — protokol + çarpma refleksi gerçek kartla
 3. **Şasi** — en sıkıcı, en uzun
-4. **ROS 2 teleop** — `/cmd_vel` → tekerlek (burada sürülebilir robot olur)
-5. **Odometri + lokalizasyon** — hall + IMU + GPS → `robot_localization` çift-EKF
-6. **Nav2 waypoint takibi** — açık alanda
-7. **Engelden kaçınma** — ultrasonik + kamera → Nav2 costmap
+4. **KALİBRASYON** — `cmd_per_rpm`, `steer_sign`, `invert_left/right`,
+   `wheel_separation`, `battery_scale`, `BUMP_BLOCKS_POSITIVE_SPEED`
+5. **Gerçek teleop** — burada sürülebilir robot olur
+6. **Gerçek sensörler** — IMU montajı + `imu_joint` rpy ölçümü, GPS, mag
+7. **Sahada Nav2 + engelden kaçınma**
+
+### İzlerin birleştiği yer: B4
+Sim'in parametreleri şu an **tahmin**. B4'te ölçülen sabitler sim'e girince
+sim'in tahminleri anlamlı olur. Sim'i şimdi kurmak = kalibrasyon günü hazır olmak.
+
+### ⚠️ Simülasyonun kanıtlamadığı şeyler (fazla güvenme)
+Bu projenin kullanıcı profili notu şunu diyor: *"Yazılım tarafı risksiz; riskler
+fizik/elektrik/RF tarafında."* **Simülasyon bu risklerin hiçbirini azaltmaz.**
+Patinaj, belgesiz TXTY kartının kaprisleri, GPS multipath, hub motorlarının
+manyetometreyi bozması, UART gürültüsü — hiçbiri sim'de yok. Sim zaten düşük
+riskli olan yazılımı sağlamlaştırır ve kalibrasyon gününü hızlandırır.
+**İz A ne kadar ilerlerse ilerlesin, B1 projenin darboğazı olarak kalır.**
+
+### Sim mimarisi kararı: tek sahte ESP32, iki arka uç
+```
+        /cmd_vel
+            ↓
+   hoverboard_bridge     ← GERÇEK kod, her iki dünyada da devrede
+            ↓ pty / 0xABCD çerçeveleri
+      fake_esp32 (protokol + watchdog + E-stop + çarpma vetosu)
+         ╱        ╲
+  --backend=kinematic   --backend=gazebo
+   (hızlı, CI, ground    (fizik, patinaj,
+    truth)                engel, kamera)
+```
+**Gerekçe:** Gazebo'nun kendi diff_drive eklentisini kullansaydık `hoverboard_bridge`,
+seri protokol, watchdog ve çarpma vetosu simülasyonda **hiç çalışmazdı** — yani
+robotta koşacak kodun bir kısmı hiç sınanmazdı. Bu kurguda protokol tek yerde
+kalır ve gerçek yığın her iki dünyada da devrededir.
+
+> **İstisna — IMU sürücüsü sim'de baypas edilir.** `sim_node` `/imu/data`'yı
+> doğrudan ground truth'tan üretir; `mpu6050_driver` devreye girmez. Sebebi:
+> o sürücünün değeri register seviyesinde ve zaten `fake_bus` ile birim test
+> edilmiş — sim'de tekrar sınamak bir şey eklemez. Bilinçli bir boşluk.
+>
+> ⚠️ **Bunun bir bedeli var, A1'de bizzat ısırdı:** sürücüyü baypas edince
+> `sim_node` çipin **ham çıktısını** değil, sürücünün **yayınladığı** şeyi
+> modellemek zorunda. İlk halinde çipin ham 2.4 dps gyro bias'ını yayınlıyordu
+> ve onu kimse çıkarmıyordu (gerçekte sürücü kalibre ediyor) → EKF 35 saniyede
+> **100° saptı**. Doğrusu: `imu_gyro_residual_bias_dps` = kalibrasyon **sonrası
+> artık** bias (varsayılan 0.1 dps).
+
+### A1'in ölçtüğü sayılar (kinematik dünya, fizik YOK)
+| Ölçüm | Değer |
+|---|---|
+| ~8 m karede EKF poz hatası | **0.083 m** (yolun %1'i) |
+| 35 sn'de yaw hatası | **4.3°** |
+| Yaw hatasının kaynağı | 0.1 dps artık gyro bias × 35 sn ≈ 3.5° — **neredeyse tamamı** |
+
+> **Bu sayıları fazla okuma.** Patinaj yok, kütle yok, devrilme yok. "Matematik
+> doğru bağlanmış" der; "robot bahçede iyi lokalize olur" DEMEZ. Patinaj gerçek
+> odometri hatasının en büyük tek kaynağı ve bu dünyada hiç yok.
+>
+> **Ama bir şeyi net gösteriyor:** yaw sapmasının tamamı gyro artık bias'ının
+> integralinden geliyor. 6-eksen IMU'da mutlak heading'i hiçbir şey gözlemlemiyor,
+> yani bias ne kadar küçük olursa olsun **sonsuza kadar birikiyor**. Karar 4'ün
+> "manyetometre en yüksek getirili harcama" demesinin sebebi artık bir sayı.
+> `test_yaw_drifts_without_a_magnetometer` bunu kalıcı olarak belgeliyor.
 
 ## ŞU AN NEREDEYIZ / SIRADAKİ İŞ
-ROS 2 workspace iskeleti **kuruldu ve sahte ESP32'ye karşı doğrulandı** (yukarı bak).
-Yazılım tarafı artık donanımı bekliyor. Sıradaki iş **ST-Link gelince yol
-haritası adım 1** (kartı flash'la) — o olmadan adım 2/4 açılmıyor.
+Yazılım İz A'da, **A1 bitti**; donanım B1'de (ST-Link) kilitli.
+**Sıradaki iş: A2 — Nav2 config**, artık doğrulanacak bir dünyası var.
 
-Donanım beklerken yazılımda yapılabilecekler (bağımsız):
-1. ✅ ~~IMU sürücüsü~~ — **yazıldı** (`mpu6050_driver`), sahte I2C ile doğrulandı.
-   `use_imu:=true` ile açılır. Kalan: gerçek chip gelince `i2cdetect -y 1` ile
-   0x68'i gör, `imu_joint` rpy'ını gerçek montaj yönüne göre ölç/yaz.
-2. ✅ ~~Çarpma refleksi~~ — **yazıldı**, yönlü veto, sahte ESP32'yle doğrulandı.
-   Ultrasonik kısmı **bilinçli olarak yapılmadı**: sensör envanterde yok, kaç
-   adet/hangi açı kararı verilmedi — montaj geometrisi bilinmeden "ön engel"
-   mantığı tahmin olurdu.
-3. Nav2 config (adım 6) — `robot_bringup/config/nav2.yaml` henüz yok.
-   `/bumper` artık var; Nav2'ye costmap katmanı olarak bağlanabilir.
-4. Manyetometre sürücüsü (QMC5883L) — chip alınınca. `mpu6050_driver` deseni
-   (register katmanı + sahte bus + ROS düğümü) aynen tekrarlanabilir.
-   Geldiğinde `ekf.yaml`'da **`ekf_global`'ın** imu0 yaw bayrağı açılacak
-   (`ekf_local`'ın DEĞİL — kötü heading base_link'i savurmasın).
+Tamamlananlar:
+- ✅ ROS 2 workspace iskeleti, sahte ESP32'ye karşı doğrulandı
+- ✅ IMU sürücüsü (`mpu6050_driver`). Kalan: gerçek chip gelince `i2cdetect -y 1`
+  ile 0x68'i gör, `imu_joint` rpy'ını gerçek montaj yönüne göre ölç/yaz (B6).
+- ✅ Çarpma refleksi — yönlü veto. Ultrasonik **bilinçli yapılmadı**.
+- ✅ **A1: kinematik dünya + kalıcı entegrasyon testleri**
+
+### Testleri koşmak
+```bash
+cd ros2 && source install/setup.bash
+python3 -m pytest src/hoverboard_bridge/test -q   # 20 birim + 3 entegrasyon (~50 sn)
+python3 -m pytest src/robot_sim/test -q           # 10 birim + 3 lokalizasyon (~95 sn)
+python3 -m pytest src/mpu6050_driver/test -q      # 16 birim (~0.1 sn)
+```
+**ROS'suz da koşarlar:** protokol ve dünya birim testleri saf Python (bilinçli
+tasarım); entegrasyon testleri `importorskip` ile temizce atlanır. Hook bunu
+her düzenlemede zorluyor.
+
+### Donanımsız tam yığın
+```bash
+ros2 run robot_sim sim_node
+ros2 launch robot_bringup robot.launch.py esp32_port:=/tmp/fake_esp32 \
+    use_localization:=true use_imu:=false     # sim_node /imu/data'yı kendi yayınlıyor
+```
+
+⚠️ **Neden A1 ilk işti:** E-stop, çarpma vetosu ve EKF doğrulamaları scratchpad'de
+(`/tmp`) yazılmıştı; devcontainer rebuild'i sildi, aynı test iki kez yazıldı.
+Artık repodalar.
 
 ## Bilinen blokerler / bekleyen alımlar
 - **ST-Link V2 klon (~150 TL)** — adım 1 için şart, henüz alınmadı
 - **Magnetometer QMC5883L (~100 TL)** — listedeki en yüksek getirili harcama
 - Multimetre doğrulaması (UART pinout) — kart elde olunca
 - Caster ×2 (125-150 mm kauçuk), mantar E-stop + kontaktör, sigorta
-- Dockerfile'daki `ros-jazzy-nmea-navsat-driver` paketi Jazzy apt'de olmayabilir
-  → imaj build'i orada patlarsa listeden çıkar, GPS sürücüsünü başka yolla çöz
-  (`sensors.launch.py` bu düğümü `use_gps:=true` ile çağırıyor)
-- `camera_ros` paketi Dockerfile'da kurulu değil (`sensors.launch.py` `use_camera:=true`
-  ile onu çağırıyor) — kamera adımına (7) gelince eklenecek.
+- ✅ ~~`ros-jazzy-nmea-navsat-driver` Jazzy apt'de olmayabilir~~ — **VAR**
+  (2.0.1-3noble, apt'te doğrulandı). Bloker değil.
+- `camera_ros` apt'te **var** (0.6.0-1noble) ama Dockerfile'a eklenmedi
+  (`sensors.launch.py` `use_camera:=true` ile onu çağırıyor) — kamera işine
+  gelince Dockerfile'a ekle, engel yok.
+- Gazebo: `ros-jazzy-ros-gz` 1.0.22 apt'te **var** → A3 için engel yok.
+  Makine: 4 çekirdek / 7 GB RAM (WSL2) — fizik simülasyonu koşar ama hızlı değil.
 - ⚠️ **Devcontainer rebuild bekliyor.** Dockerfile'a iki şey eklendi ama imaj
   yeniden derlenip doğrulanmadı (mevcut konteyner eski imajdan koşuyor):
   1. `python3-smbus2` (IMU sürücüsü için). Paketin noble/**universe**'te olduğu
