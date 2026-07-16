@@ -95,8 +95,11 @@ class HoverboardBridge(Node):
         self.declare_parameter("base_frame", "base_link")
         # Leave false in the full stack — the local EKF publishes odom->base_link.
         self.declare_parameter("publish_tf", False)
-        # Nav2 on Jazzy publishes TwistStamped on /cmd_vel; teleop_twist_keyboard
-        # publishes plain Twist. Pick per launch file rather than guessing.
+        # Verified against this workspace's Nav2 (1.3.12): controller_server
+        # publishes plain geometry_msgs/Twist on /cmd_vel, same as
+        # teleop_twist_keyboard — so false is right for both. Later Nav2 releases
+        # move to TwistStamped behind `enable_stamped_cmd_vel`; when that lands,
+        # check `ros2 topic info /cmd_vel` and flip this rather than guessing.
         self.declare_parameter("use_stamped_cmd_vel", False)
 
         p = self.get_parameter

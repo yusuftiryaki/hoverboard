@@ -66,6 +66,31 @@ Batarya 36V → [30-40A sigorta] → ┬→ [buck 5V/5A] → Pi (+ USB ile ESP32
   MCU'yu ayakta tut" fiziksel olarak mümkün değil. Bilinçli seçim.
 - Tüm GND'ler **tek ortak nokta**da birleşir (UART'ın çalışması buna bağlı).
 
+## A2'de bulunan tuzaklar (hepsi sessizce yanlış davranıyordu, hiçbiri hata vermedi)
+1. **`navsat_transform`'un IMU topic'i `imu`, `imu/data` DEĞİL.** `("imu/data",
+   "imu/data")` remap'i no-op'tu; düğüm kimsenin yayınlamadığı `/imu`'yu dinledi,
+   dönüşümü hiç hesaplamadı, **`/fromLL` dünyadaki her koordinat için (0,0)
+   döndürdü**. Hiçbir şey hata vermedi — GPS waypoint'leri sadece başka yere sürdü.
+   Kontrol: `ros2 node info /navsat_transform`.
+2. **`magnetic_declination_radians` manyetometre yokken 0 olmalı.** Sapma
+   *manyetometre* okumasını düzeltir; bizde manyetometre yok, o yüzden 0.112
+   koymak map frame'ini 6.4° döndürdü. `/fromLL` ile ölçüldü.
+3. **`xy_goal_tolerance` > lookahead mesafesi olamaz.** RPP "hedefe vardım mı"
+   sorusunu **takip noktasına** olan mesafeyle kıyaslıyor. Tolerans (1.5) >
+   lookahead (0.4) olunca RPP kalıcı olarak "vardım, hedef yönüne döneyim"
+   moduna girdi: **linear hız sıfır**, robot yerinde titredi. Belgelenmemiş bağlantı.
+4. **`plugins: []` ROS 2'de ifade edilemez** — boş YAML listesi tipini kaybeder,
+   `rclcpp` "No parameter value set" ile abort eder. Costmap katmanı istemesek de
+   listeye bir şey koymak gerekiyor (`inflation_layer`, şişirecek engel yok).
+5. **`default_server_timeout: 20` (ms) iş istasyonu varsayıyor.** Planner ACK'i
+   yetiştiremeyince BT, robotun fiziksel olarak vardığı waypoint'i "başarısız"
+   saydı. 1000 yapıldı — **Pi 4 bu kutudan yavaş, hızlı değil.**
+6. **`stop_on_failure: false` + `missed_waypoints`**: action `SUCCEEDED` döner
+   ama waypoint'ler kaçırılmış olabilir. Sadece status'e bakma, `missed_waypoints`'i say.
+7. **Kendi sim'imizde frame çakışması:** `sim_node` ground truth'u `map` diye
+   yayınlıyordu, ama `navsat`'ın `map`'i datum'un GPS hatasıyla çapalı — iki farklı
+   origin aynı ismi taşıyordu. Artık **`sim_world`**.
+
 ## Yol boyunca yapılan ÖNEMLİ düzeltmeler (tekrarlanmasın)
 1. ⚠️ **Flash sırasında batarya BAĞLI olmalı.** (Önce "bağlama" denmişti, YANLIŞ.)
    Kart self-latch ile besleniyor, MCU gücünü 36V'tan alıyor. **ST-Link'in
@@ -193,7 +218,14 @@ olarak yayınlıyor; montaj yönü **URDF'teki `imu_joint` rpy'ında** tarif edi
   - `robot_sim` paketi: `world.py` (ground truth) + `sim_node.py` (sahte IMU/GPS)
   - Entegrasyon testleri repoda: E-stop, çarpma vetosu, watchdog, EKF vs ground truth
   - **Ölçülen:** ~8 m karede EKF hatası **0.08 m (%1)**, 35 sn'de yaw **4.3°**
-- **A2. Nav2 config** (eski adım 6) — kinematik dünyada waypoint takibi doğrulanır ⟵ *sıradaki*
+- 🟡 **A2. Nav2 config** — **navigasyon katmanı BİTTİ, GPS waypoint kısmı BLOKE**
+  - `config/nav2.yaml` + `launch/nav2.launch.py`: RPP + rotation shim, NavFn,
+    rolling costmap. Testte doğrulandı: hedef verilince robot **gerçekten gidiyor**
+    (ground truth ile ölçüldü, `test_nav2.py`).
+  - ⛔ **GPS waypoint takibi manyetometreye takılı** — detay aşağıda. Nav2'nin
+    suçu değil; `ekf_global`'ın yaw'ı gözlemlenemiyor.
+  - ⚠️ **Costmap'ler boş** (menzil sensörü yok) → Nav2 burada bir **yol takipçisi**,
+    engelden kaçınıcı değil. Ağaca güvenle sürer. Engel = A3.
 - **A3. Gazebo arka ucu** — aynı `fake_esp32`'nin arkasına takılır (mimari kararı
   aşağıda), fizik + patinaj + engel dünyası. Eski adım 7'nin ön koşulu.
 - **A4. Manyetometre sürücüsü** — chip alınınca, `mpu6050_driver` deseniyle
@@ -268,8 +300,28 @@ kalır ve gerçek yığın her iki dünyada da devrededir.
 > `test_yaw_drifts_without_a_magnetometer` bunu kalıcı olarak belgeliyor.
 
 ## ŞU AN NEREDEYIZ / SIRADAKİ İŞ
-Yazılım İz A'da, **A1 bitti**; donanım B1'de (ST-Link) kilitli.
-**Sıradaki iş: A2 — Nav2 config**, artık doğrulanacak bir dünyası var.
+Yazılım İz A'da: **A1 bitti, A2'nin navigasyon yarısı bitti**; donanım B1'de
+(ST-Link) kilitli.
+
+### ⛔ A2'nin GPS yarısı manyetometreye takıldı — sim bunu kanıtladı
+`navsat_transform`, robotun **mutlak yönünü** `/imu/data`'nın orientation
+quaternion'undan okuyor. Bizim 6-eksen IMU'muzda orientation YOK ve bunu açıkça
+söylüyor (`orientation_covariance[0] = -1`). **`navsat_transform` o bayrağı
+kontrol etmiyor** — birim quaternion'u okuyup "robot doğuya bakıyor" sonucuna
+varıyor. Aynı anda `ekf_global`'ın yaw'ı da gözlemlenemez durumda (hiçbir yerde
+mutlak yön yok), GPS konum düzeltmeleri onu döndürüyor.
+
+**Ölçüldü:** ground truth yaw **+38.8°** iken `ekf_global` **-178.2°** dedi,
+sonra **-47.1°**. `ekf_global` `map→odom`'u yayınladığı için oradaki yanlış
+rotasyon **Nav2'nin her hedefini döndürüyor** → robot kuzeydeki waypoint'e hiç
+gitmedi ama Nav2 "vardım" dedi.
+
+**Simülasyonda kısmen çalışıyor olması ŞANS:** `robot_sim` robotu yaw=0
+(doğu) başlatıyor, birim quaternion da tesadüfen bunu söylüyor. Gerçek robot
+kuzeye bakarak başlarsa her GPS waypoint'i 90° şaşar.
+
+Çözüm Nav2 parametresi değil: **QMC5883L** (karar 4, A4/B6) ya da yön-başlatma
+manevrası + `use_odometry_yaw: true`. **Manyetometre artık İz A'nın da blokeri.**
 
 Tamamlananlar:
 - ✅ ROS 2 workspace iskeleti, sahte ESP32'ye karşı doğrulandı
@@ -282,8 +334,9 @@ Tamamlananlar:
 ```bash
 cd ros2 && source install/setup.bash
 python3 -m pytest src/hoverboard_bridge/test -q   # 20 birim + 3 entegrasyon (~50 sn)
-python3 -m pytest src/robot_sim/test -q           # 10 birim + 3 lokalizasyon (~95 sn)
+python3 -m pytest src/robot_sim/test -q           # 10 birim + 3 lokalizasyon + 1 nav2 (~140 sn)
 python3 -m pytest src/mpu6050_driver/test -q      # 16 birim (~0.1 sn)
+# hepsi: 53 test, ~190 sn
 ```
 **ROS'suz da koşarlar:** protokol ve dünya birim testleri saf Python (bilinçli
 tasarım); entegrasyon testleri `importorskip` ile temizce atlanır. Hook bunu

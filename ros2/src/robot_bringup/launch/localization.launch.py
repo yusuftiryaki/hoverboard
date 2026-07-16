@@ -74,7 +74,15 @@ def generate_launch_description():
             condition=IfCondition(use_gps),
             parameters=common,
             remappings=[
-                ("imu/data", "imu/data"),
+                # ⚠️ The topic is "imu", NOT "imu/data" — that is the name
+                # navsat_transform_node opens internally, whatever the EKFs call
+                # theirs. Remapping "imu/data" here is a silent no-op: the node
+                # then listens on /imu, nobody publishes there, it never gets a
+                # heading, never computes its transform, and /fromLL answers
+                # (0, 0) for every coordinate on earth. Nothing errors — GPS
+                # waypoints simply drive somewhere else. Verify with
+                # `ros2 node info /navsat_transform` after touching this.
+                ("imu", "imu/data"),
                 ("gps/fix", "gps/fix"),
                 # Feed it the GLOBAL estimate: closing this loop with the local
                 # one would leave the GPS transform blind to its own corrections.

@@ -151,7 +151,14 @@ class SimNode(Node):
 
         msg = Odometry()
         msg.header.stamp = stamp
-        msg.header.frame_id = "map"
+        # ⚠️ `sim_world`, NOT `map`. They are different frames and conflating them
+        # silently poisons every measurement taken with GPS on: navsat_transform's
+        # `map` is anchored at the FIRST GPS FIX, so it sits a couple of metres
+        # from the sim's true origin — that offset IS the GPS's absolute error.
+        # This published "map" until it was caught comparing ground truth against
+        # ekf_global and finding metres of disagreement that were really just two
+        # different origins wearing the same name.
+        msg.header.frame_id = "sim_world"
         msg.child_frame_id = "base_link_truth"
         msg.pose.pose.position.x = pose.x
         msg.pose.pose.position.y = pose.y
@@ -162,10 +169,12 @@ class SimNode(Node):
 
         # A separate frame, never base_link: publishing the true pose as
         # map->base_link would fight the EKF for the same transform and quietly
-        # make a broken filter look perfect in RViz.
+        # make a broken filter look perfect in RViz. sim_world is likewise
+        # disconnected from the robot's tf tree on purpose — the answer key must
+        # not be reachable from the frames the robot reasons in.
         tf = TransformStamped()
         tf.header.stamp = stamp
-        tf.header.frame_id = "map"
+        tf.header.frame_id = "sim_world"
         tf.child_frame_id = "base_link_truth"
         tf.transform.translation.x = pose.x
         tf.transform.translation.y = pose.y

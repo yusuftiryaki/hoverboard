@@ -1,0 +1,244 @@
+# Nav2 — GPS waypoint following in open ground (roadmap A2 / old step 6).
+#
+# ⚠️⚠️ READ THIS FIRST: THE COSTMAPS ARE EMPTY, BY CONSTRUCTION.
+#
+# This robot has NO range sensor. No LIDAR (handoff decision 3: cheap 2D lidar is
+# useless in sunlight), no ultrasonics (not bought, not decided), no depth
+# camera. Nothing populates an obstacle layer, so both costmaps are permanently
+# free space and every plan is a straight line.
+#
+# That means Nav2 here is a PATH FOLLOWER, not an obstacle avoider. It will drive
+# through a tree with total confidence. The only thing between the robot and an
+# obstacle today is the ESP32's bumper reflex — contact, not avoidance.
+# Obstacle avoidance is A3 (Gazebo + camera/ultrasonics -> costmap layers).
+#
+# This is coherent with the mission the hardware actually supports (decision 5):
+# open field, wide corridors, 2.5-5 m GPS. It is NOT "drive to the shop".
+#
+# Frames: map -> odom comes from ekf_global + navsat_transform, odom -> base_link
+# from ekf_local. Nav2 plans in `map`, so use_gps:=true is REQUIRED — without it
+# nothing publishes map->odom and Nav2 will sit there waiting for a transform.
+
+bt_navigator:
+  ros__parameters:
+    global_frame: map
+    robot_base_frame: base_link
+    # NOT /odom. That topic is raw wheel dead reckoning, which drifts without
+    # bound; the EKF's output is what everything else in this stack believes.
+    odom_topic: /odometry/filtered/local
+    bt_loop_duration: 10
+    # ⚠️ 1000 ms, not Nav2's default 20. This is how long the BT waits for an
+    # action server to ACKNOWLEDGE a goal, and 20 ms assumes a workstation. The
+    # planner missed it here — on a loaded 4-core box NavFn could not ack in
+    # time, so a waypoint the robot had physically reached was reported as
+    # failed. The Pi 4 is slower than this container, not faster.
+    default_server_timeout: 1000
+    wait_for_service_timeout: 1000
+    action_server_result_timeout: 900.0
+    navigators: ["navigate_to_pose", "navigate_through_poses"]
+    navigate_to_pose:
+      plugin: "nav2_bt_navigator::NavigateToPoseNavigator"
+    navigate_through_poses:
+      plugin: "nav2_bt_navigator::NavigateThroughPosesNavigator"
+
+controller_server:
+  ros__parameters:
+    controller_frequency: 20.0
+    costmap_update_timeout: 0.30
+    min_x_velocity_threshold: 0.001
+    # Differential drive: y velocity is not just small, it is impossible.
+    min_y_velocity_threshold: 0.5
+    min_theta_velocity_threshold: 0.001
+    failure_tolerance: 0.3
+    odom_topic: /odometry/filtered/local
+    progress_checker_plugins: ["progress_checker"]
+    goal_checker_plugins: ["goal_checker"]
+    controller_plugins: ["FollowPath"]
+
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      required_movement_radius: 0.5
+      # Generous: GPS wanders by metres, so a robot that is genuinely moving can
+      # briefly look stuck. A tight window here would abort good missions.
+      movement_time_allowance: 20.0
+
+    goal_checker:
+      plugin: "nav2_controller::SimpleGoalChecker"
+      # Loose on purpose: the GPS wanders by metres, so map->odom shifts under
+      # the robot. A tight tolerance would have it forever chasing a goal that
+      # keeps moving in its own estimate.
+      #
+      # ⚠️ BUT IT CANNOT EXCEED THE LOOKAHEAD DISTANCE. RPP asks "am I at the
+      # goal?" by comparing the distance to its LOOKAHEAD POINT against this
+      # value. Set it above min_lookahead_dist and the carrot — always ~a
+      # lookahead ahead — is permanently "within the goal", so RPP locks into
+      # rotate-to-goal-heading, commands zero linear velocity forever, and the
+      # robot sits and jiggles while the BT eventually reports "failed to make
+      # progress". It looks exactly like a broken controller.
+      # This cost real debugging time here; 1.5 m against a 0.4 m lookahead did
+      # precisely that. Keep this < min_lookahead_dist below.
+      xy_goal_tolerance: 1.0
+      # Heading at the goal is not meaningful for a waypoint mission, and with no
+      # magnetometer the absolute yaw is drifting anyway (decision 4).
+      yaw_goal_tolerance: 3.14
+      stateful: true
+
+    FollowPath:
+      # Rotation shim + Regulated Pure Pursuit.
+      #
+      # Why not DWB/MPPI: those exist to dodge obstacles in clutter by scoring
+      # trajectories against a costmap. Our costmap is empty — there is nothing
+      # to score. They would burn CPU choosing between equally free paths.
+      #
+      # RPP just follows the line, which is the whole job here.
+      #
+      # Why the shim: a differential drive robot cannot strafe. Facing 90 degrees
+      # from the path, RPP would carve a long arc; the shim rotates in place
+      # first, then hands over. It is what makes a diff-drive robot look sane.
+      plugin: "nav2_rotation_shim_controller::RotationShimController"
+      primary_controller: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
+      angular_dist_threshold: 0.785        # 45 deg: rotate first beyond this
+      forward_sampling_distance: 0.5
+      rotate_to_heading_angular_vel: 0.6
+      max_angular_accel: 1.0
+      simulate_ahead_time: 1.0
+
+      # ⚠️ These speeds are LOW ON PURPOSE and pair with the firmware's
+      # SPEED_LIMIT=300. Raise both together, and only after the robot has proven
+      # on real ground that it stops when told to (roadmap B4/B5).
+      desired_linear_vel: 0.5
+      # ⚠️ min_lookahead_dist MUST stay above the goal checker's
+      # xy_goal_tolerance (1.0) — see the warning there. The carrot never comes
+      # closer than this, so it never looks like the goal until the plan itself
+      # runs out near the real goal, which is exactly when it should.
+      # 1.2 m at 0.5 m/s is ~2.4 s of lookahead: long enough to cut corners, but
+      # this robot follows straight lines across open ground, so there are no
+      # corners worth preserving.
+      lookahead_dist: 1.5
+      min_lookahead_dist: 1.2
+      max_lookahead_dist: 2.5
+      lookahead_time: 1.5
+      use_velocity_scaled_lookahead_dist: true
+      rotate_to_heading_min_angle: 0.785
+      allow_reversing: false               # casters do not steer backwards well
+      use_rotate_to_heading: true
+      max_allowed_time_to_collision_up_to_carrot: 1.0
+      # No sensor feeds the costmap, so collision detection here would check the
+      # robot against empty space and always pass. Off, honestly, rather than on
+      # and meaningless.
+      use_collision_detection: false
+      use_regulated_linear_velocity_scaling: true
+      use_cost_regulated_linear_velocity_scaling: false
+      regulated_linear_scaling_min_radius: 0.9
+      regulated_linear_scaling_min_speed: 0.25
+      transform_tolerance: 0.2
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      update_frequency: 5.0
+      publish_frequency: 2.0
+      global_frame: odom
+      robot_base_frame: base_link
+      rolling_window: true
+      width: 6
+      height: 6
+      resolution: 0.05
+      # A circle around the 0.60 x 0.40 m deck. Circular rather than a polygon
+      # footprint: the chassis does not exist yet (B3), so a precise outline
+      # would be false precision.
+      robot_radius: 0.4
+      # ⚠️ `plugins: []` is not expressible: an empty YAML list loses its type
+      # and rclcpp aborts with "No parameter value set". So the list carries the
+      # one layer that is harmless without sensors — inflation has nothing to
+      # inflate, and the costmap stays free space either way. When A3 brings a
+      # camera or ultrasonics, an obstacle/voxel layer goes in front of this and
+      # the inflation is already wired up correctly.
+      plugins: ["inflation_layer"]
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 3.0
+        # robot_radius + ~0.15 m of margin.
+        inflation_radius: 0.55
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      update_frequency: 1.0
+      publish_frequency: 1.0
+      global_frame: map
+      robot_base_frame: base_link
+      # Rolling, not static: there is no map of a field, and none is needed for
+      # straight lines between GPS points.
+      rolling_window: true
+      # ⚠️ 60 x 60 m, so ±30 m around the robot. A goal outside this window
+      # cannot be planned to — a long route needs intermediate waypoints, which
+      # the rolling window then carries along.
+      # It was 100 x 100 at 0.1 m = ONE MILLION cells, and NavFn sweeps all of
+      # them every replan. That starved the planner on 4 cores and made it miss
+      # the BT's ack deadline. The Pi 4 has less to give, not more.
+      width: 60
+      height: 60
+      # 0.1 m, coarser than the local costmap: it spans 100 m and its only job is
+      # to hold a straight line. 0.05 would quadruple the cells for nothing.
+      resolution: 0.1
+      robot_radius: 0.4
+      # Same story as the local costmap: an empty plugin list is not a thing
+      # rclcpp can parse. Nothing observes obstacles, so nothing gets inflated.
+      plugins: ["inflation_layer"]
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.55
+
+planner_server:
+  ros__parameters:
+    expected_planner_frequency: 1.0
+    planner_plugins: ["GridBased"]
+    costmap_update_timeout: 1.0
+    GridBased:
+      # In an empty costmap NavFn returns a straight line, which is exactly the
+      # right plan. Smac/Hybrid-A* would buy kinematic feasibility we do not need
+      # from a differential drive that can turn in place.
+      plugin: "nav2_navfn_planner::NavfnPlanner"
+      # Loose, to match the goal checker and the GPS's real accuracy.
+      tolerance: 1.0
+      use_astar: false
+      allow_unknown: true
+
+behavior_server:
+  ros__parameters:
+    local_frame: odom
+    global_frame: map
+    robot_base_frame: base_link
+    transform_tolerance: 0.2
+    cycle_frequency: 10.0
+    behavior_plugins: ["spin", "backup", "drive_on_heading", "wait"]
+    spin:
+      plugin: "nav2_behaviors::Spin"
+    backup:
+      plugin: "nav2_behaviors::BackUp"
+    drive_on_heading:
+      plugin: "nav2_behaviors::DriveOnHeading"
+    wait:
+      plugin: "nav2_behaviors::Wait"
+    # ⚠️ These recoveries move the robot BLIND: they exist to shake loose from
+    # obstacles the costmap can see, and ours sees nothing. Backing up on contact
+    # is the ESP32 bumper's job, not this. Kept for the BT's sake, kept slow.
+    max_rotational_vel: 0.6
+    min_rotational_vel: 0.2
+    rotational_acc_lim: 1.0
+
+waypoint_follower:
+  ros__parameters:
+    loop_rate: 20
+    # false: one bad waypoint should not abandon the mission. In an open field
+    # the usual cause is a GPS wobble, and the next waypoint is often fine.
+    stop_on_failure: false
+    action_server_result_timeout: 900.0
+    waypoint_task_executor_plugin: "wait_at_waypoint"
+    wait_at_waypoint:
+      plugin: "nav2_waypoint_follower::WaitAtWaypoint"
+      enabled: true
+      # Let the GPS settle before the next leg is planned from this position.
+      waypoint_pause_duration: 2000

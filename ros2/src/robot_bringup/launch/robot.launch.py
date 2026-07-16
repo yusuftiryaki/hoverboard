@@ -16,14 +16,19 @@ As hardware lands, turn things on:
     # + IMU-based localization, still indoors (robot still at startup!)
     ros2 launch robot_bringup robot.launch.py use_localization:=true use_imu:=true
 
-    # full outdoor stack (roadmap step 5-6)
+    # full outdoor stack with GPS waypoint following (roadmap A2 / B7)
     ros2 launch robot_bringup robot.launch.py \\
-        use_localization:=true use_imu:=true use_gps:=true use_camera:=true
+        use_localization:=true use_imu:=true use_gps:=true use_nav2:=true
 
     # dev machine, no hardware at all — both the ESP32 and the IMU simulated
     ros2 run hoverboard_bridge fake_esp32
     ros2 launch robot_bringup robot.launch.py esp32_port:=/tmp/fake_esp32 \\
         use_localization:=true use_imu:=true fake_imu:=true
+
+    # the simulated world, with Nav2 on top (robot_sim publishes /imu/data itself)
+    ros2 run robot_sim sim_node
+    ros2 launch robot_bringup robot.launch.py esp32_port:=/tmp/fake_esp32 \\
+        use_localization:=true use_gps:=true use_imu:=false use_nav2:=true
 """
 
 import os
@@ -45,6 +50,7 @@ def generate_launch_description():
     use_localization = LaunchConfiguration("use_localization")
     use_gps = LaunchConfiguration("use_gps")
     use_imu = LaunchConfiguration("use_imu")
+    use_nav2 = LaunchConfiguration("use_nav2")
     use_camera = LaunchConfiguration("use_camera")
     esp32_port = LaunchConfiguration("esp32_port")
     fake_imu = LaunchConfiguration("fake_imu")
@@ -66,6 +72,11 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "fake_imu", default_value="false",
             description="Simulate the IMU — dev machine only.",
+        ),
+        DeclareLaunchArgument(
+            "use_nav2", default_value="false",
+            description="Run Nav2. Requires use_localization:=true AND use_gps:=true — "
+                        "Nav2 plans in `map`, which only exists once navsat_transform runs.",
         ),
         DeclareLaunchArgument(
             "esp32_port", default_value="/dev/esp32",
@@ -103,5 +114,10 @@ def generate_launch_description():
             PythonLaunchDescriptionSource(os.path.join(launch_dir, "localization.launch.py")),
             condition=IfCondition(use_localization),
             launch_arguments={"use_gps": use_gps}.items(),
+        ),
+
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(os.path.join(launch_dir, "nav2.launch.py")),
+            condition=IfCondition(use_nav2),
         ),
     ])

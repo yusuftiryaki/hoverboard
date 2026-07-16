@@ -116,23 +116,51 @@ navsat_transform:
     # Ignore the first fixes: the NEO-6M's early ones are the worst it will emit.
     delay: 3.0
 
-    # TODO: set for your site. Istanbul is roughly +6.4 deg east ~= 0.112 rad.
-    # Look it up at https://www.ngdc.noaa.gov/geomag/calculators/magcalc.shtml
-    # A wrong declination shows up as the robot driving at a constant angle to
-    # its intended heading — this only matters once the magnetometer is in.
-    magnetic_declination_radians: 0.112
+    # ⚠️ MUST STAY 0.0 UNTIL THE MAGNETOMETER EXISTS.
+    # Declination corrects a MAGNETOMETER's reading from magnetic north to true
+    # north. We have no magnetometer, so the yaw navsat_transform reads is not a
+    # magnetic bearing and there is nothing to correct — adding declination just
+    # rotates the map frame by that angle. It was set to 0.112 (Istanbul) here
+    # and did exactly that: every GPS coordinate came back 6.4 degrees rotated.
+    # Measured with `ros2 service call /fromLL ...` against known offsets.
+    # TODO with the QMC5883L (roadmap A4/B6): set it for the site —
+    # https://www.ngdc.noaa.gov/geomag/calculators/magcalc.shtml (Istanbul ~0.112).
+    magnetic_declination_radians: 0.0
 
-    # TODO: 0.0 assumes the IMU reports yaw per REP-103 (0 = east, ENU). Many
-    # drivers report 0 = north; then this must be pi/2. Verify by pointing the
-    # robot east and reading /imu/data.
+    # 0.0 assumes the IMU's yaw follows REP-103 (0 = east, ENU).
+    # ⚠️ TODO at B6: verify by pointing the robot east and reading /imu/data.
+    # Many drivers report 0 = north, which would need pi/2 here.
     yaw_offset: 0.0
+
+    # ⚠️⚠️ THE BIG ONE — navsat_transform NEEDS AN ABSOLUTE HEADING, AND WE HAVE NONE.
+    #
+    # It reads the robot's heading from /imu/data's ORIENTATION quaternion, to
+    # know how the map frame sits against UTM north. Our MPU6050 is 6-axis: it
+    # publishes orientation_covariance[0] = -1, meaning "there is no orientation
+    # here" (mpu6050_driver refuses to invent one). navsat_transform does not
+    # check that flag — it reads the identity quaternion and concludes yaw = 0,
+    # i.e. "the robot is facing east".
+    #
+    # In simulation that is true BY LUCK: robot_sim starts the robot at yaw 0.
+    # So the GPS waypoint tests pass, and they would pass just the same if this
+    # were completely broken. On the real robot, starting facing north puts every
+    # GPS waypoint 90 degrees out.
+    #
+    # This is handoff decision 4 arriving with a bill. GPS waypoint following is
+    # NOT usable outdoors until either:
+    #   a) the QMC5883L is mounted and calibrated (the real fix), or
+    #   b) a heading-init manoeuvre runs first (drive 5 m straight, take the
+    #      heading from GPS course-over-ground, seed the filter) and
+    #      use_odometry_yaw is set true here.
+    use_odometry_yaw: false
+    # false = the first valid fix becomes the map origin. That fix carries the
+    # GPS's full error, so the map frame is anchored a few metres off the true
+    # world — measured at 5.45 m in one run. Harmless for relative navigation
+    # (goals are converted through the same anchor), but it means map
+    # coordinates are NOT ground truth. Set a fixed datum instead when we want
+    # the same map frame across runs at a known site.
+    wait_for_datum: false
 
     zero_altitude: true
     broadcast_utm_transform: false
     publish_filtered_gps: true
-    # false = trust the IMU's heading, not the wheel odometry's. The wheel yaw
-    # has no absolute reference at all, so it must not seed the GPS transform.
-    use_odometry_yaw: false
-    # false = the first valid fix becomes the map origin. Set a fixed datum
-    # instead once we want the same map frame across runs at a known site.
-    wait_for_datum: false

@@ -20,6 +20,7 @@ import pytest
 
 SIM_STARTUP_S = 3.0
 STACK_STARTUP_S = 8.0     # robot_state_publisher + bridge + EKF
+NAV2_STARTUP_S = 20.0     # five lifecycle servers, costmaps included
 
 
 @pytest.fixture(scope="session")
@@ -74,6 +75,44 @@ def sim_stack(ros):
 
     def _make(*sim_args):
         stack = SimStack(*sim_args)
+        made.append(stack)
+        return stack
+
+    yield _make
+    for stack in made:
+        stack.close()
+
+
+class Nav2Stack(SimStack):
+    """The sim stack plus Nav2, with map pinned to odom.
+
+    Nav2 plans in `map`, which normally only exists once ekf_global and
+    navsat_transform are running — and those need an absolute heading we do not
+    have (see test_nav2.py). Pinning map->odom to identity isolates the
+    navigation layer from that gap, so this tests the planner, the controller and
+    the /cmd_vel -> protocol -> wheels chain on their own terms.
+
+    The trade-off is honest: map == odom means the goal is expressed in a frame
+    that drifts with the wheels. Fine over the tens of metres of a test, and not
+    what the real robot will do outdoors.
+    """
+
+    def __init__(self, *sim_args):
+        super().__init__(*sim_args)
+        self._spawn("ros2", "run", "tf2_ros", "static_transform_publisher",
+                    "--frame-id", "map", "--child-frame-id", "odom")
+        self._spawn("ros2", "launch", "robot_bringup", "nav2.launch.py")
+        # Nav2's lifecycle manager has to walk five servers through
+        # configure/activate, and the costmaps are the slow part.
+        time.sleep(NAV2_STARTUP_S)
+
+
+@pytest.fixture
+def nav2_stack(ros):
+    made = []
+
+    def _make(*sim_args):
+        stack = Nav2Stack(*sim_args)
         made.append(stack)
         return stack
 
