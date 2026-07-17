@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>qmc5883l_driver</name>
+  <version>0.1.0</version>
+  <description>
+    QMC5883L magnetometer driver publishing sensor_msgs/MagneticField. The
+    robot's only absolute heading reference: the 6-axis IMU's gyro drifts without
+    bound, which breaks GPS waypoint following. Applies hard/soft iron
+    calibration; imu_filter_madgwick turns the field into an orientation.
+  </description>
+  <maintainer email="enesis@entes.com.tr">Enes</maintainer>
+  <license>MIT</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>diagnostic_msgs</exec_depend>
+  <exec_depend>python3-smbus2</exec_depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

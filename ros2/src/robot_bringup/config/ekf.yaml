@@ -46,10 +46,13 @@ ekf_local:
     odom0_differential: false
     odom0_relative: false
 
-    # 6-axis IMU: yaw RATE is trustworthy, absolute yaw is not (no magnetometer
-    # yet — handoff decision 4). Take vyaw and ax; leave yaw to the global filter
-    # once the QMC5883L is on the mast.
-    imu0: imu/data
+    # ⚠️ imu/data_raw — the UNFUSED IMU, on purpose. ekf_local takes yaw RATE and
+    # ax, never absolute yaw, so that a bad heading can never yank base_link
+    # around. Everything downstream of odom->base_link (the controller, the local
+    # costmap) needs smooth and continuous far more than it needs true.
+    # The magnetometer's heading goes to ekf_global instead, where a jump lands
+    # in map->odom and nothing driving the robot feels it.
+    imu0: imu/data_raw
     imu0_config: [false, false, false,
                   false, false, false,
                   false, false, false,
@@ -96,19 +99,28 @@ ekf_global:
     odom1_differential: false
     odom1_relative: false
 
+    # ⚠️ imu/data — the MADGWICK-FUSED IMU, with a real orientation in it,
+    # because ABSOLUTE YAW IS ON HERE (index 5). This is the whole point of the
+    # magnetometer: without it, nothing observes heading, ekf_global's yaw is
+    # unobservable, and GPS position updates rotate it — measured at -178 deg
+    # while the truth was +38.8. ekf_global publishes map->odom, so that wrong
+    # yaw turned every Nav2 goal and GPS waypoint following simply did not work.
+    #
+    # Yaw is enabled HERE and NOT in ekf_local, deliberately: a bad heading fix
+    # then moves map->odom, which nothing driving the robot is holding onto.
     imu0: imu/data
     imu0_config: [false, false, false,
-                  false, false, false,
+                  false, false, true,
                   false, false, false,
                   false, false, true,
                   true,  false, false]
     imu0_queue_size: 20
+    # false = treat yaw as an absolute measurement, which is exactly what it now
+    # is. Setting this true would differentiate it back into a rate and throw
+    # away the only absolute heading the robot has.
     imu0_differential: false
     imu0_relative: false
     imu0_remove_gravitational_acceleration: true
-    # TODO once the magnetometer is mounted and calibrated: flip the yaw flag
-    # (index 5) to true here — NOT in ekf_local, so a bad heading fix cannot
-    # yank base_link around.
 
 navsat_transform:
   ros__parameters:
@@ -116,15 +128,18 @@ navsat_transform:
     # Ignore the first fixes: the NEO-6M's early ones are the worst it will emit.
     delay: 3.0
 
-    # ⚠️ MUST STAY 0.0 UNTIL THE MAGNETOMETER EXISTS.
-    # Declination corrects a MAGNETOMETER's reading from magnetic north to true
-    # north. We have no magnetometer, so the yaw navsat_transform reads is not a
-    # magnetic bearing and there is nothing to correct — adding declination just
-    # rotates the map frame by that angle. It was set to 0.112 (Istanbul) here
-    # and did exactly that: every GPS coordinate came back 6.4 degrees rotated.
-    # Measured with `ros2 service call /fromLL ...` against known offsets.
-    # TODO with the QMC5883L (roadmap A4/B6): set it for the site —
-    # https://www.ngdc.noaa.gov/geomag/calculators/magcalc.shtml (Istanbul ~0.112).
+    # ⚠️ NOW MEANINGFUL — the heading finally comes from a magnetometer, so
+    # there is a magnetic bearing to correct. Declination is the angle between
+    # magnetic and true north; get it wrong and the robot drives at a constant
+    # angle to every GPS course.
+    # 0.0 while there was no magnetometer, and set to 0.112 (Istanbul) here would
+    # have rotated the map frame by 6.4 degrees for nothing — it did, and
+    # `ros2 service call /fromLL` is how that was caught.
+    # ⚠️ TODO: set for YOUR site before any outdoor run —
+    # https://www.ngdc.noaa.gov/geomag/calculators/magcalc.shtml
+    # Istanbul is ~+6.4 deg east = 0.112 rad. Left at 0.0 because the simulator's
+    # field has no declination, and a real number here would silently break the
+    # sim tests while looking more correct.
     magnetic_declination_radians: 0.0
 
     # 0.0 assumes the IMU's yaw follows REP-103 (0 = east, ENU).
@@ -132,26 +147,19 @@ navsat_transform:
     # Many drivers report 0 = north, which would need pi/2 here.
     yaw_offset: 0.0
 
-    # ⚠️⚠️ THE BIG ONE — navsat_transform NEEDS AN ABSOLUTE HEADING, AND WE HAVE NONE.
+    # navsat_transform reads the robot's absolute heading from /imu/data's
+    # ORIENTATION quaternion, to know how the map frame sits against UTM north.
+    # false = take it from the IMU (now genuinely magnetometer-backed via
+    # imu_filter_madgwick) rather than from wheel odometry, whose yaw has no
+    # absolute reference at all and must never seed the GPS transform.
     #
-    # It reads the robot's heading from /imu/data's ORIENTATION quaternion, to
-    # know how the map frame sits against UTM north. Our MPU6050 is 6-axis: it
-    # publishes orientation_covariance[0] = -1, meaning "there is no orientation
-    # here" (mpu6050_driver refuses to invent one). navsat_transform does not
-    # check that flag — it reads the identity quaternion and concludes yaw = 0,
-    # i.e. "the robot is facing east".
-    #
-    # In simulation that is true BY LUCK: robot_sim starts the robot at yaw 0.
-    # So the GPS waypoint tests pass, and they would pass just the same if this
-    # were completely broken. On the real robot, starting facing north puts every
-    # GPS waypoint 90 degrees out.
-    #
-    # This is handoff decision 4 arriving with a bill. GPS waypoint following is
-    # NOT usable outdoors until either:
-    #   a) the QMC5883L is mounted and calibrated (the real fix), or
-    #   b) a heading-init manoeuvre runs first (drive 5 m straight, take the
-    #      heading from GPS course-over-ground, seed the filter) and
-    #      use_odometry_yaw is set true here.
+    # ⚠️ THIS ONLY WORKS BECAUSE THE MAGNETOMETER EXISTS. Before it, the 6-axis
+    # IMU published orientation_covariance[0] = -1 ("no orientation here") and
+    # navsat_transform — which never checks that flag — read the identity
+    # quaternion and concluded "facing east". It appeared to work in simulation
+    # purely because robot_sim starts the robot at yaw 0. On real ground, facing
+    # north, every GPS waypoint would have been 90 degrees out.
+    # If the magnetometer is ever removed or fails, this breaks silently again.
     use_odometry_yaw: false
     # false = the first valid fix becomes the map origin. That fix carries the
     # GPS's full error, so the map frame is anchored a few metres off the true

@@ -1,0 +1,40 @@
+# QMC5883L magnetometer — the robot's only absolute heading reference.
+#
+# Without it, ekf_global's yaw is unobservable and GPS waypoint following does
+# not work (measured: ekf_global claimed -178 deg while the truth was +38.8).
+# See docs/handoff.md decision 4 and docs/mag-calibration.md.
+
+qmc5883l:
+  ros__parameters:
+    i2c_bus: 1          # same bus as the IMU (docs/wiring-map.md 3d)
+    address: 0x0D
+    frame_id: mag_link  # on the mast in the URDF, >30 cm above the deck
+    rate_hz: 50.0
+    odr_hz: 100         # chip's own rate; keep it above rate_hz
+
+    # 2 Gauss: the earth is ~0.5 G, so this keeps the resolution. If the OVL flag
+    # starts firing (watch /diagnostics), the mount is picking up too much of the
+    # robot — MOVE IT rather than reaching for the 8 G range. A saturating
+    # compass is a mounting problem, and 8 G would only hide it.
+    range_gauss: 2
+    osr: 512            # most oversampling = least noise; we have rate to spare
+
+    # ⚠️⚠️ CALIBRATE BEFORE TRUSTING ANY HEADING — docs/mag-calibration.md.
+    #
+    # HARD IRON (tesla): the constant field the robot carries with it, from
+    # magnetised steel and DC in nearby wiring. It does NOT average out as the
+    # robot turns; it biases the heading by an amount that itself rotates.
+    # Measured in the test: an offset a third of the earth's field puts the
+    # heading >15 degrees out; subtracting it brings the error under 0.5.
+    #
+    # All zeros = UNCALIBRATED. The node warns loudly and /diagnostics goes WARN.
+    # An uncalibrated magnetometer is worse than none: confidently wrong.
+    hard_iron: [0.0, 0.0, 0.0]
+
+    # SOFT IRON: nearby ferrous material stretches the sphere of readings into an
+    # ellipsoid; this diagonal scale pulls it back. The full correction is a 3x3
+    # matrix, but for a mast-mounted sensor the diagonal carries most of it and
+    # is far easier to measure. Leave at 1.0 unless the calibration says otherwise.
+    soft_iron_scale: [1.0, 1.0, 1.0]
+
+    use_fake_bus: false

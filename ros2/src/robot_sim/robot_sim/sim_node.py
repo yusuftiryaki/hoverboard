@@ -35,7 +35,7 @@ from geometry_msgs.msg import Quaternion, TransformStamped
 from nav_msgs.msg import Odometry
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
-from sensor_msgs.msg import Imu, NavSatFix, NavSatStatus
+from sensor_msgs.msg import Imu, MagneticField, NavSatFix, NavSatStatus
 from tf2_ros import TransformBroadcaster
 
 from hoverboard_bridge.esp32_sim import TX_PERIOD_S, Esp32Sim, PtyLink, step_once
@@ -43,6 +43,12 @@ from robot_sim.world import KinematicWorld
 
 EARTH_RADIUS_M = 6378137.0
 STANDARD_GRAVITY = 9.80665
+
+# Istanbul-ish, matching qmc5883l_driver's fake bus. The horizontal component is
+# what gives a heading; the vertical only matters once the robot tilts, which
+# this flat kinematic world never does.
+EARTH_NORTH_T = 26e-6
+EARTH_DOWN_T = 36e-6
 
 
 def yaw_to_quaternion(yaw: float) -> Quaternion:
@@ -84,6 +90,19 @@ class SimNode(Node):
         self.declare_parameter("imu_gyro_noise_dps", 0.05)
         self.declare_parameter("imu_accel_noise", 0.05)
         self.declare_parameter("imu_rate_hz", 100.0)
+
+        # ---- Fake magnetometer -----------------------------------------------
+        # Publishes what qmc5883l_driver WOULD PUBLISH: the field AFTER hard/soft
+        # iron correction. Same reasoning as the gyro bias above — the driver is
+        # bypassed here, so its output contract is what gets modelled. Emitting
+        # the chip's raw hard-iron offset with nothing to remove it is exactly
+        # the mistake that drifted the estimate 100 degrees in A1.
+        self.declare_parameter("mag_rate_hz", 50.0)
+        # What survives calibration: an imperfect fit, plus the robot's own field
+        # changing with motor current. It biases the heading, and unlike the gyro
+        # it does NOT accumulate — a compass error stays an error.
+        self.declare_parameter("mag_residual_hard_iron_ut", [0.5, -0.3, 0.2])
+        self.declare_parameter("mag_noise_ut", 0.2)
 
         # ---- Fake GPS --------------------------------------------------------
         self.declare_parameter("gps_rate_hz", 5.0)      # NEO-6M default
@@ -127,14 +146,21 @@ class SimNode(Node):
         self._gps_bias_x = 0.0
         self._gps_bias_y = 0.0
 
+        self._mag_residual = [v * 1e-6 for v in p("mag_residual_hard_iron_ut").value]
+        self._mag_noise = p("mag_noise_ut").value * 1e-6
+
         self._truth_pub = self.create_publisher(Odometry, "ground_truth", 10)
-        self._imu_pub = self.create_publisher(Imu, "imu/data", 10)
+        # imu/data_raw, matching mpu6050_driver: no orientation here.
+        # imu_filter_madgwick fuses this with imu/mag into imu/data.
+        self._imu_pub = self.create_publisher(Imu, "imu/data_raw", 10)
+        self._mag_pub = self.create_publisher(MagneticField, "imu/mag", 10)
         self._gps_pub = self.create_publisher(NavSatFix, "gps/fix", 10)
         self._tf = TransformBroadcaster(self)
 
         self._last_tick = None
         self.create_timer(TX_PERIOD_S, self._tick)
         self.create_timer(1.0 / p("imu_rate_hz").value, self._publish_imu)
+        self.create_timer(1.0 / p("mag_rate_hz").value, self._publish_mag)
         self.create_timer(1.0 / p("gps_rate_hz").value, self._publish_gps)
 
     # ---- The world -----------------------------------------------------------
@@ -197,6 +223,33 @@ class SimNode(Node):
             msg.angular_velocity_covariance[axis * 4] = max(self._gyro_noise ** 2, 1e-4)
             msg.linear_acceleration_covariance[axis * 4] = max(self._accel_noise ** 2, 1e-2)
         self._imu_pub.publish(msg)
+
+    def _publish_mag(self) -> None:
+        """The earth's field in the robot's frame, post-calibration.
+
+        REP-103: yaw 0 = facing east, so the earth's horizontal field (pointing
+        north) lies along +y. Turning the robot by yaw rotates the field by -yaw
+        in the body frame — which is precisely the signal that makes the heading
+        observable, and the thing the 6-axis IMU could never provide.
+        """
+        yaw = self._world.pose.yaw
+        msg = MagneticField()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = "mag_link"
+        msg.magnetic_field.x = (
+            -EARTH_NORTH_T * math.sin(yaw) + self._mag_residual[0]
+            + self._rng.gauss(0.0, self._mag_noise)
+        )
+        msg.magnetic_field.y = (
+            EARTH_NORTH_T * math.cos(yaw) + self._mag_residual[1]
+            + self._rng.gauss(0.0, self._mag_noise)
+        )
+        msg.magnetic_field.z = (
+            -EARTH_DOWN_T + self._mag_residual[2]
+            + self._rng.gauss(0.0, self._mag_noise)
+        )
+        msg.magnetic_field_covariance[0] = -1.0
+        self._mag_pub.publish(msg)
 
     def _publish_gps(self) -> None:
         dt = 1.0 / self.get_parameter("gps_rate_hz").value

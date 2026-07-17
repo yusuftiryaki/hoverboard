@@ -111,6 +111,7 @@ firmware/esp32_bridge/      platformio.ini + src/main.cpp  (pio run ile derlenir
 ros2/src/hoverboard_bridge/ ESP32 seri köprü düğümü (Python) + protokol + ESP32 beyni
 ros2/src/mpu6050_driver/    IMU sürücüsü (Jazzy'de yok, kendimiz yazdık) + sahte I2C
 ros2/src/robot_sim/         kinematik dünya + ground truth + sahte IMU/GPS
+ros2/src/qmc5883l_driver/   manyetometre sürücüsü + sahte I2C (mutlak yönün tek kaynağı)
 ros2/src/robot_bringup/     launch + ekf.yaml + urdf
 .devcontainer/              Dockerfile + devcontainer.json
 scripts/deploy.sh           push → Pi'da pull + colcon build
@@ -228,7 +229,8 @@ olarak yayınlıyor; montaj yönü **URDF'teki `imu_joint` rpy'ında** tarif edi
     engelden kaçınıcı değil. Ağaca güvenle sürer. Engel = A3.
 - **A3. Gazebo arka ucu** — aynı `fake_esp32`'nin arkasına takılır (mimari kararı
   aşağıda), fizik + patinaj + engel dünyası. Eski adım 7'nin ön koşulu.
-- **A4. Manyetometre sürücüsü** — chip alınınca, `mpu6050_driver` deseniyle
+- ✅ **A4. Manyetometre sürücüsü** — **yazıldı** (`qmc5883l_driver` + madgwick),
+  yaw sorunu çözüldü. Chip hâlâ alınmadı; sahte I2C'ye karşı doğrulandı.
 - **A5. CI** (GitHub Actions: colcon build + testler + `pio run`) — ertelendi
 
 ### İz B — Donanım (sıra atlanmaz)
@@ -303,7 +305,48 @@ kalır ve gerçek yığın her iki dünyada da devrededir.
 Yazılım İz A'da: **A1 bitti, A2'nin navigasyon yarısı bitti**; donanım B1'de
 (ST-Link) kilitli.
 
-### ⛔ A2'nin GPS yarısı manyetometreye takıldı — sim bunu kanıtladı
+### ✅ A4 (manyetometre) yazıldı — yaw sorunu ÇÖZÜLDÜ, ölçüldü
+`qmc5883l_driver` + `imu_filter_madgwick` devrede. Zincir:
+```
+mpu6050  ──► /imu/data_raw ─┐
+                            ├──► imu_filter_madgwick ──► /imu/data (orientation VAR)
+qmc5883l ──► /imu/mag ──────┘                               │
+                                          ekf_global (yaw AÇIK) + navsat_transform
+```
+**Ölçüldü (dönüşlerle birlikte):**
+| | truth | ekf_global | hata |
+|---|---|---|---|
+| başlangıç | +0.0° | +1.1° | **1.1°** |
+| dönüş sonrası | +166.9° | +169.7° | **2.8°** |
+| dönüş sonrası | -26.8° | -22.1° | **4.7°** |
+| dönüş sonrası | -137.7° | -129.7° | **8.0°** |
+
+**Öncesi -178° idi.** `ekf_local` hâlâ sapıyor (8→10°) — **kasıtlı**: mutlak yaw
+sadece `ekf_global`'a veriliyor, `ekf_local`'a asla (kötü heading base_link'i
+savurmasın; karar 4'ün zaten söylediği ayrım).
+
+⚠️ **Chip HÂLÂ ALINMADI** (~100 TL). Sürücü `mpu6050_driver` deseniyle yazıldı
+ve sahte I2C'ye karşı doğrulandı: kalibrasyonsuz hard iron **>15° yön hatası**
+veriyor, kalibrasyonla **<0.5°**. Gerçek çipte `i2cdetect -y 1` ile 0x0D'yi gör.
+
+### ⛔ AÇIK SORUN: GPS waypoint'i hâlâ tamamlanmıyor (ama sebebi ARTIK yaw DEĞİL)
+Manyetometre sonrası: waypoint 0 **başarılı**, waypoint 1'de Nav2 hedefi
+(7.45, 2.94) iken robot 2 dakika **doğuya sürüp 40 m'ye gitti**, sonra "Goal failed".
+
+**Lokalizasyon suçsuz — ölçüldü:** ground truth (40.23, 3.37), `/odometry/gps`
+(38.45, 3.63), `ekf_global` (38.14, 3.15) → üçü ~2 m içinde uyuşuyor. Yani
+konum ve yaw doğru; **kontrolcü robotu yanlış yöne sürüyor**.
+
+Sıradaki oturumun ilk işi bu. Şüpheler (sırayla denenecek):
+1. `ekf_global`'ın yaw düzeltmeleri `map→odom`'u sıçratıyor → kontrolcünün
+   base_link'e dönüştürdüğü yol sürekli dönüyor, robot kaçan havucu kovalıyor.
+   Kontrol: `/received_global_plan` ve `/lookahead_point`'i sürüş sırasında izle.
+2. `ekf_local` yaw'ı (10° sapma) ile `ekf_global` yaw'ı arasındaki fark
+   `map→odom`'a yığılıyor.
+3. RPP'nin `min_lookahead_dist: 1.2` + `xy_goal_tolerance: 1.0` ayarı A2'de
+   NavigateToPose için ayarlandı; GPS gürültüsüyle birlikte yeniden bakılmalı.
+
+### (tarihçe) A2 sırasında GPS'in bloke olma sebebi — çözüldü
 `navsat_transform`, robotun **mutlak yönünü** `/imu/data`'nın orientation
 quaternion'undan okuyor. Bizim 6-eksen IMU'muzda orientation YOK ve bunu açıkça
 söylüyor (`orientation_covariance[0] = -1`). **`navsat_transform` o bayrağı

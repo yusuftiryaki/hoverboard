@@ -50,10 +50,13 @@ def generate_launch_description():
     use_localization = LaunchConfiguration("use_localization")
     use_gps = LaunchConfiguration("use_gps")
     use_imu = LaunchConfiguration("use_imu")
+    use_mag = LaunchConfiguration("use_mag")
+    use_imu_filter = LaunchConfiguration("use_imu_filter")
     use_nav2 = LaunchConfiguration("use_nav2")
     use_camera = LaunchConfiguration("use_camera")
     esp32_port = LaunchConfiguration("esp32_port")
     fake_imu = LaunchConfiguration("fake_imu")
+    fake_mag = LaunchConfiguration("fake_mag")
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -68,10 +71,22 @@ def generate_launch_description():
             "use_imu", default_value="false",
             description="Run the MPU6050. The robot must be still while it calibrates.",
         ),
+        DeclareLaunchArgument(
+            "use_mag", default_value="false",
+            description="Run the QMC5883L. Calibrate it first — docs/mag-calibration.md.",
+        ),
+        DeclareLaunchArgument(
+            "use_imu_filter", default_value="false",
+            description="Fuse IMU + mag into /imu/data. REQUIRED with use_gps.",
+        ),
         DeclareLaunchArgument("use_camera", default_value="false"),
         DeclareLaunchArgument(
             "fake_imu", default_value="false",
             description="Simulate the IMU — dev machine only.",
+        ),
+        DeclareLaunchArgument(
+            "fake_mag", default_value="false",
+            description="Simulate the magnetometer — dev machine only.",
         ),
         DeclareLaunchArgument(
             "use_nav2", default_value="false",
@@ -105,8 +120,11 @@ def generate_launch_description():
             launch_arguments={
                 "use_gps": use_gps,
                 "use_imu": use_imu,
+                "use_mag": use_mag,
+                "use_imu_filter": use_imu_filter,
                 "use_camera": use_camera,
                 "fake_imu": fake_imu,
+                "fake_mag": fake_mag,
             }.items(),
         ),
 

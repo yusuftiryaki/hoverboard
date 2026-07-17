@@ -122,7 +122,11 @@ class Mpu6050Node(Node):
             )
 
         # ---- ROS interfaces --------------------------------------------------
-        self._imu_pub = self.create_publisher(Imu, "imu/data", 10)
+        # imu/data_raw, NOT imu/data. The ROS convention is that /imu/data
+        # carries an orientation and /imu/data_raw does not — and this chip has
+        # none. imu_filter_madgwick subscribes here, fuses in the magnetometer's
+        # field, and publishes the orientation-bearing /imu/data.
+        self._imu_pub = self.create_publisher(Imu, "imu/data_raw", 10)
         self._temp_pub = self.create_publisher(Temperature, "imu/temperature", 10)
         self._diag_pub = self.create_publisher(DiagnosticArray, "/diagnostics", 10)
 

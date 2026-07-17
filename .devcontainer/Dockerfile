@@ -24,7 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # --- ROS 2 packages central to the robot (trim if the image gets too big) ----
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ros-jazzy-robot-localization \
+      ros-jazzy-robot-localization ros-jazzy-imu-filter-madgwick \
       ros-jazzy-navigation2 ros-jazzy-nav2-bringup \
       ros-jazzy-ros2-control ros-jazzy-ros2-controllers \
       ros-jazzy-diff-drive-controller \
