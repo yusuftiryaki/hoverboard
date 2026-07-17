@@ -53,6 +53,18 @@ riskler fizik/elektrik/RF tarafında. Ek bütçe ~2-3 bin TL.
 7. **IMU → Pi I2C** (ESP32'ye değil; denge robotu yapmıyoruz, lokalizasyon Pi'da).
 8. **Ultrasonik → ESP32** (refleks katmanı) — firmware eklentisi henüz YAZILMADI.
 9. **GPS → USB-TTL**, tercihen **FTDI** (ESP32'nin çipiyle VID:PID çakışmasın).
+10. ⚠️ **Sahte sensörler elle türetilmiş fiziğe çivilenir, kendi matematiğine
+    değil** (2026-07-17, A6'dan sonra alındı). Bir fikstürü kendi formülüyle
+    test etmek, onun sadece kendisiyle tutarlı olduğunu kanıtlar. Somut bedeli:
+    `fake_bus` alanı aynalıyordu, testin `heading_of`'u aynı işareti geri
+    çeviriyordu, 17 test yeşildi ve A2 haftalarca "bozuk" göründü. Kural:
+    her sahte sensör için elle hesaplanmış sayılara karşı **en az bir** test
+    (`test_field_matches_hand_computed_physics` deseni).
+11. ⚠️ **Yönle ilgili her şey SÜPÜRÜLEREK test edilir, tek noktada değil**
+    (2026-07-17). Ayna, 90° montaj ofseti ve yanlış declination — üçü de tek bir
+    yönde kusursuz görünür, ve tüm testlerimiz yaw=0'da başlıyordu (`sin(0)=0`,
+    aynalı ve doğru alan orada birebir aynı). Yön testleri robotu **tam tur**
+    döndürmeli (`test_absolute_yaw_holds_through_a_full_turn`).
 
 ## Güç / E-stop tasarımı
 ```
@@ -110,7 +122,7 @@ docs/handoff.md             bu dosya
 firmware/esp32_bridge/      platformio.ini + src/main.cpp  (pio run ile derlenir)
 ros2/src/hoverboard_bridge/ ESP32 seri köprü düğümü (Python) + protokol + ESP32 beyni
 ros2/src/mpu6050_driver/    IMU sürücüsü (Jazzy'de yok, kendimiz yazdık) + sahte I2C
-ros2/src/robot_sim/         kinematik dünya + ground truth + sahte IMU/GPS
+ros2/src/robot_sim/         kinematik dünya + ground truth + sahte IMU/mag/GPS + yığın testleri
 ros2/src/qmc5883l_driver/   manyetometre sürücüsü + sahte I2C (mutlak yönün tek kaynağı)
 ros2/src/robot_bringup/     launch + ekf.yaml + urdf
 .devcontainer/              Dockerfile + devcontainer.json
@@ -152,10 +164,13 @@ ros2_control `SystemInterface`'i onun üstüne sarılır, düğüm teleop aracı
 | `hoverboard_bridge/esp32_sim.py` | **ESP32'nin beyni**, tekerleksiz: protokol + watchdog + E-stop + çarpma vetosu + mixer. Arka uç takılabilir (`Backend` protokolü). ROS'suz. |
 | `hoverboard_bridge/fake_esp32.py` | ince CLI: `esp32_sim` + `LagBackend`. Dünyası/pozu yok — "çerçeveler ve güvenlik doğru mu" sorusunu cevaplar. `ros2 run hoverboard_bridge fake_esp32` |
 | `robot_sim/world.py` | ROS'suz kinematik dünya: tekerlek komutu → ölçülen rpm + **ground truth poz**. Arc entegrasyonu (Euler değil). Fizik YOK. |
-| `robot_sim/sim_node.py` | dünyayı koşturur; `/ground_truth`, sahte `/imu/data`, sahte `/gps/fix` yayınlar. `ros2 run robot_sim sim_node` |
+| `robot_sim/sim_node.py` | dünyayı koşturur; `/ground_truth` (frame **`sim_world`**), sahte `/imu/data_raw`, `/imu/mag`, `/gps/fix` yayınlar. GPS hatası Ornstein-Uhlenbeck (beyaz değil — beyaz gürültü EKF'te fazla güzel ortalanırdı). `ros2 run robot_sim sim_node` |
 | `mpu6050_driver/mpu6050.py` | register seviyesi MPU6050 (ROS'suz, I2C bus enjekte edilir) |
-| `mpu6050_driver/imu_node.py` | `/imu/data` + `/imu/temperature` + `/diagnostics`; açılışta gyro bias kalibrasyonu |
+| `mpu6050_driver/imu_node.py` | **`/imu/data_raw`** + `/imu/temperature` + `/diagnostics`; açılışta gyro bias kalibrasyonu. ⚠️ `data_raw`, `data` değil: ROS geleneğinde `/imu/data` orientation taşır, bu düğüm taşımıyor (`orientation_covariance[0] = -1`). |
 | `mpu6050_driver/fake_bus.py` | **sahte I2C chip** — register seviyesinde, config register'larını geri çözüp ölçekliyor |
+| `qmc5883l_driver/qmc5883l.py` | register seviyesi QMC5883L. ⚠️ **little-endian** — aynı bus'taki MPU6050 big-endian. Karıştırmak hata vermez, sadece yönü döndürür; testle çivili. |
+| `qmc5883l_driver/mag_node.py` | `/imu/mag`; hard/soft iron uygular, OVL örneklerini düşürür, kalibrasyonsuzken bağırır. **Yön HESAPLAMAZ** — çıplak pusula okuması sadece robot düzken yöndür; eğim telafisi madgwick'in işi. |
+| `qmc5883l_driver/fake_bus.py` | sahte I2C chip; hard iron + 12-bit kuantizasyon modeller. ⚠️ Dünya alanı modeli `sim_node.py` ile **tekrarlı** — A6'nın kalan borcu. |
 | `robot_bringup/config/ekf.yaml` | çift-EKF + navsat_transform, gerekçeleri yorumda |
 | `robot_bringup/config/hoverboard_bridge.yaml` | düğüm parametreleri, **CALIBRATE** işaretleriyle |
 | `robot_bringup/urdf/robot.urdf.xacro` | 2 tahrik + 2 caster + sensör frame'leri (direkte mag/GPS) |
@@ -317,11 +332,19 @@ kalır ve gerçek yığın her iki dünyada da devrededir.
 > `test_yaw_drifts_without_a_magnetometer` bunu kalıcı olarak belgeliyor.
 
 ## ŞU AN NEREDEYIZ / SIRADAKİ İŞ
-Yazılım İz A'da: **A1, A2, A4 bitti** (A2 uçtan uca GPS waypoint ile doğrulandı);
-donanım B1'de (ST-Link) kilitli. **72 test geçiyor.**
+*(son güncelleme: 2026-07-17)*
 
-Sıradaki iş seçenekleri: **A3** (Gazebo arka ucu — fizik/patinaj/engel) ya da
-**A5** (CI). Ya da alan modeli tekrarını temizle (A6'nın kalan borcu).
+Yazılım İz A'da: **A1, A2, A4, A6 bitti** (A2 uçtan uca GPS waypoint ile
+doğrulandı); donanım B1'de (ST-Link) kilitli. **72 test geçiyor.**
+Son commit: `be0aad9` (A6 — aynalı manyetometre düzeltmesi). **Push EDİLMEDİ.**
+
+Kullanıcıya soruldu, **cevap bekliyor** — sıradaki iş seçenekleri:
+- **A3** (Gazebo arka ucu — fizik/patinaj/engel). Sim'in en büyük yalanı
+  patinajın yokluğu; A3 onu kapatır.
+- **A5** (CI) — A6 tam olarak CI'ın yakalayacağı türden bir regresyondu.
+- **A6'nın kalan borcu**: dünya alanı modeli `sim_node.py` + `fake_bus.py`'de
+  tekrarlı. Tek yere indirmek `robot_sim`'i `qmc5883l_driver`'a bağımlı kılar —
+  **mimari karar olduğu için sorulmadan yapılmadı.**
 
 ### ✅ A4 (manyetometre) yazıldı — yaw sorunu ÇÖZÜLDÜ, ölçüldü
 `qmc5883l_driver` + `imu_filter_madgwick` devrede. Zincir:
@@ -413,7 +436,10 @@ gitmedi ama Nav2 "vardım" dedi.
 kuzeye bakarak başlarsa her GPS waypoint'i 90° şaşar.
 
 Çözüm Nav2 parametresi değil: **QMC5883L** (karar 4, A4/B6) ya da yön-başlatma
-manevrası + `use_odometry_yaw: true`. **Manyetometre artık İz A'nın da blokeri.**
+manevrası + `use_odometry_yaw: true`. ~~**Manyetometre artık İz A'nın da
+blokeri.**~~ — **iptal (2026-07-17)**: A4 sürücüyü yazdı, A6 sim'deki aynayı
+düzeltti; İz A artık bloke değil, GPS waypoint uçtan uca geçiyor. Manyetometre
+**İz B'nin** blokeri olmayı sürdürüyor (chip alınmadı, B6'da gerçek montaj).
 
 Tamamlananlar:
 - ✅ ROS 2 workspace iskeleti, sahte ESP32'ye karşı doğrulandı
@@ -426,20 +452,36 @@ Tamamlananlar:
 ```bash
 cd ros2 && source install/setup.bash
 python3 -m pytest src/hoverboard_bridge/test -q   # 20 birim + 3 entegrasyon (~50 sn)
-python3 -m pytest src/robot_sim/test -q           # 10 birim + 3 lokalizasyon + 1 nav2 (~140 sn)
+python3 -m pytest src/robot_sim/test -q           # 10 birim + 5 yığın (~175 sn)
 python3 -m pytest src/mpu6050_driver/test -q      # 16 birim (~0.1 sn)
-# hepsi: 53 test, ~190 sn
+python3 -m pytest src/qmc5883l_driver/test -q     # 18 birim (~0.1 sn)
+# hepsi: 72 test, ~230 sn
 ```
 **ROS'suz da koşarlar:** protokol ve dünya birim testleri saf Python (bilinçli
 tasarım); entegrasyon testleri `importorskip` ile temizce atlanır. Hook bunu
 her düzenlemede zorluyor.
 
+⚠️ **`source install/setup.bash` YAPMAZSAN yığın testleri sessizce ATLANIR** —
+"10 passed, 2 skipped" görürsün ve her şey yolunda sanırsın. A6'yı yakalayan
+testler tam da atlanan o testler. `-rs` ile atlananları listele.
+
 ### Donanımsız tam yığın
 ```bash
 ros2 run robot_sim sim_node
+
+# yerel yarı (odom->base_link): sadece tekerlek + gyro
 ros2 launch robot_bringup robot.launch.py esp32_port:=/tmp/fake_esp32 \
-    use_localization:=true use_imu:=false     # sim_node /imu/data'yı kendi yayınlıyor
+    use_localization:=true use_imu:=false
+
+# TAM yığın — GPS waypoint'in gerçekten koştuğu yapılandırma:
+# madgwick + ekf_global + navsat_transform + Nav2
+ros2 launch robot_bringup robot.launch.py esp32_port:=/tmp/fake_esp32 \
+    use_localization:=true use_gps:=true use_nav2:=true \
+    use_imu:=false use_mag:=false use_imu_filter:=true
 ```
+`use_imu:=false use_mag:=false`: `sim_node` `/imu/data_raw` ve `/imu/mag`'i
+kendisi yayınlıyor; gerçek sürücüleri de açmak topic için kavga ettirir.
+`use_imu_filter:=true` **şart** — `/imu/data`'yı (orientation'lı) üreten o.
 
 ⚠️ **Neden A1 ilk işti:** E-stop, çarpma vetosu ve EKF doğrulamaları scratchpad'de
 (`/tmp`) yazılmıştı; devcontainer rebuild'i sildi, aynı test iki kez yazıldı.
@@ -457,13 +499,9 @@ Artık repodalar.
   gelince Dockerfile'a ekle, engel yok.
 - Gazebo: `ros-jazzy-ros-gz` 1.0.22 apt'te **var** → A3 için engel yok.
   Makine: 4 çekirdek / 7 GB RAM (WSL2) — fizik simülasyonu koşar ama hızlı değil.
-- ⚠️ **Devcontainer rebuild bekliyor.** Dockerfile'a iki şey eklendi ama imaj
-  yeniden derlenip doğrulanmadı (mevcut konteyner eski imajdan koşuyor):
-  1. `python3-smbus2` (IMU sürücüsü için). Paketin noble/**universe**'te olduğu
-     Launchpad'den teyit edildi (0.4.3-1), konteynerde universe açık → gelmeli.
-     Pi tarafında `rosdep install` zaten çeker.
-  2. **Parolasız sudo** (`/etc/sudoers.d/ubuntu`). Sebep: taban imajın `ubuntu`
-     kullanıcısı `sudo` grubunda ama parolası kilitli → sudo kimsenin bilmediği
-     bir parola soruyordu. `visudo -c` build guard'ı var. Detay: `docs/devcontainer.md`.
-
-  Rebuild sonrası kontrol: `sudo -n true && python3 -c "import smbus2"`
+- ✅ ~~**Devcontainer rebuild bekliyor.**~~ — **yapıldı, doğrulandı (2026-07-17)**:
+  `sudo -n true` ✓, `import smbus2` ✓, `imu_filter_madgwick` ✓ (/opt/ros/jazzy).
+  İmajdakiler: `python3-smbus2` (IMU sürücüsü), **parolasız sudo**
+  (`/etc/sudoers.d/ubuntu` — taban imajın `ubuntu` kullanıcısı sudo grubundaydı
+  ama parolası kilitliydi; `visudo -c` build guard'ı var, detay
+  `docs/devcontainer.md`), `ros-jazzy-imu-filter-madgwick` (A4).
