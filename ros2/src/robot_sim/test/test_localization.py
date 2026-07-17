@@ -28,6 +28,7 @@ import rclpy                            # noqa: E402
 from geometry_msgs.msg import Twist     # noqa: E402
 from nav_msgs.msg import Odometry       # noqa: E402
 from rclpy.node import Node             # noqa: E402
+from sensor_msgs.msg import Imu         # noqa: E402
 
 
 def yaw_of(q):
@@ -45,11 +46,18 @@ class Probe(Node):
         self._pub = self.create_publisher(Twist, "/cmd_vel", 10)
         self.truth = None
         self.ekf = None
+        self.ekf_global = None
+        self.imu = None
         self.cmd = (0.0, 0.0)
         self.create_subscription(Odometry, "/ground_truth",
                                  lambda m: setattr(self, "truth", m), 10)
         self.create_subscription(Odometry, "/odometry/filtered/local",
                                  lambda m: setattr(self, "ekf", m), 10)
+        # Only published when the global half is up (GlobalStack).
+        self.create_subscription(Odometry, "/odometry/filtered/global",
+                                 lambda m: setattr(self, "ekf_global", m), 10)
+        self.create_subscription(Imu, "/imu/data",
+                                 lambda m: setattr(self, "imu", m), 10)
         self.create_timer(0.05, self._tick)
 
     def _tick(self):
@@ -72,6 +80,14 @@ class Probe(Node):
     def yaw_error(self):
         return angle_diff(yaw_of(self.truth.pose.pose.orientation),
                           yaw_of(self.ekf.pose.pose.orientation))
+
+    @property
+    def true_yaw(self):
+        return yaw_of(self.truth.pose.pose.orientation)
+
+    def absolute_yaw_error(self, msg):
+        """How far an ABSOLUTE heading estimate is from the truth, in degrees."""
+        return math.degrees(angle_diff(self.true_yaw, yaw_of(msg)))
 
 
 @pytest.fixture
@@ -127,3 +143,54 @@ def test_yaw_drifts_without_a_magnetometer(sim_stack, probe):
     # clearly drifting, but not wildly diverging.
     assert 2.0 < drift_deg < 30.0, (
         f"expected visible bounded yaw drift, got {drift_deg:.1f} deg")
+
+
+def test_absolute_yaw_holds_through_a_full_turn(global_stack, probe):
+    """The magnetometer's whole job, measured at every heading.
+
+    ⚠️ SPIN THE ROBOT — do not test one heading. This is the test that was
+    missing, and its absence cost a session: sim_node and qmc5883l's fake_bus
+    both had x = -B sin(yaw) instead of +B sin(yaw), mirroring the simulated
+    earth, and the driver's unit tests inverted the same sign right back so they
+    agreed with each other. Every heading test started the robot at yaw 0, where
+    sin(0) = 0 and the mirrored and correct fields are IDENTICAL. The suite was
+    green while the compass ran backwards.
+
+    Downstream it was anything but subtle: the mag told madgwick the robot was
+    turning the wrong way, madgwick split the difference with the gyro (measured:
+    it tracked 0.897 of the true rotation), ekf_global's yaw came out ~120 deg
+    off, that landed in map->odom, and Nav2 sent the robot 40 m the wrong way
+    while looking like a broken controller.
+
+    A full turn is what makes any of that visible. A mirror, a 90 deg mounting
+    offset and a wrong declination all look perfect at exactly one heading.
+    """
+    global_stack()
+    probe.drive(0.0, 0.0, 4.0)
+
+    assert probe.imu is not None, (
+        "no /imu/data — imu_filter_madgwick is not running or has no /imu/mag")
+    assert probe.ekf_global is not None, (
+        "no /odometry/filtered/global — ekf_global is not running")
+
+    worst_madgwick = 0.0
+    worst_ekf = 0.0
+    # ~0.35 rad/s for 20 s: a bit over one full revolution, sampled throughout.
+    end = time.monotonic() + 20.0
+    probe.cmd = (0.0, 0.35)
+    while time.monotonic() < end:
+        rclpy.spin_once(probe, timeout_sec=0.02)
+        worst_madgwick = max(worst_madgwick, probe.absolute_yaw_error(probe.imu.orientation))
+        worst_ekf = max(worst_ekf, probe.absolute_yaw_error(probe.ekf_global.pose.pose.orientation))
+    probe.drive(0.0, 0.0, 1.0)
+
+    # Measured after the fix: madgwick within ~2 deg at every heading, ekf_global
+    # the same but for brief transients when a GPS update lands. Mirrored, these
+    # ran to 88 and 120. The thresholds are loose enough to survive noise and
+    # nowhere near loose enough to survive a sign error.
+    assert worst_madgwick < 15.0, (
+        f"madgwick's fused yaw is {worst_madgwick:.1f} deg off at some heading — "
+        "suspect the magnetometer's sign convention or its mounting")
+    assert worst_ekf < 25.0, (
+        f"ekf_global's yaw is {worst_ekf:.1f} deg off at some heading; "
+        "map->odom carries this straight into every Nav2 goal")

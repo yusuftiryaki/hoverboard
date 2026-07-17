@@ -219,18 +219,21 @@ olarak yayınlıyor; montaj yönü **URDF'teki `imu_joint` rpy'ında** tarif edi
   - `robot_sim` paketi: `world.py` (ground truth) + `sim_node.py` (sahte IMU/GPS)
   - Entegrasyon testleri repoda: E-stop, çarpma vetosu, watchdog, EKF vs ground truth
   - **Ölçülen:** ~8 m karede EKF hatası **0.08 m (%1)**, 35 sn'de yaw **4.3°**
-- 🟡 **A2. Nav2 config** — **navigasyon katmanı BİTTİ, GPS waypoint kısmı BLOKE**
+- ✅ **A2. Nav2 config** — **BİTTİ, GPS waypoint takibi uçtan uca doğrulandı**
   - `config/nav2.yaml` + `launch/nav2.launch.py`: RPP + rotation shim, NavFn,
     rolling costmap. Testte doğrulandı: hedef verilince robot **gerçekten gidiyor**
     (ground truth ile ölçüldü, `test_nav2.py`).
-  - ⛔ **GPS waypoint takibi manyetometreye takılı** — detay aşağıda. Nav2'nin
-    suçu değil; `ekf_global`'ın yaw'ı gözlemlenemiyor.
+  - **GPS waypoint ölçüldü:** L rotası (6 m doğu + 4 m kuzey) → `status 4
+    SUCCEEDED, missed=0, gerçek hata 0.73 m`. Uzun süre "bloke" görünüyordu;
+    sebep Nav2 değil, **simülatörün aynalı manyetometresiydi** (A6).
   - ⚠️ **Costmap'ler boş** (menzil sensörü yok) → Nav2 burada bir **yol takipçisi**,
     engelden kaçınıcı değil. Ağaca güvenle sürer. Engel = A3.
 - **A3. Gazebo arka ucu** — aynı `fake_esp32`'nin arkasına takılır (mimari kararı
   aşağıda), fizik + patinaj + engel dünyası. Eski adım 7'nin ön koşulu.
 - ✅ **A4. Manyetometre sürücüsü** — **yazıldı** (`qmc5883l_driver` + madgwick),
   yaw sorunu çözüldü. Chip hâlâ alınmadı; sahte I2C'ye karşı doğrulandı.
+- ✅ **A6. Aynalı manyetometre hatası** — sim'deki tek eksi işareti; A2'yi ve
+  A4'ün "kanıtını" sahte kılmıştı. Düzeltildi + tam-tur regresyon testi eklendi.
 - **A5. CI** (GitHub Actions: colcon build + testler + `pio run`) — ertelendi
 
 ### İz B — Donanım (sıra atlanmaz)
@@ -254,6 +257,18 @@ Patinaj, belgesiz TXTY kartının kaprisleri, GPS multipath, hub motorlarının
 manyetometreyi bozması, UART gürültüsü — hiçbiri sim'de yok. Sim zaten düşük
 riskli olan yazılımı sağlamlaştırır ve kalibrasyon gününü hızlandırır.
 **İz A ne kadar ilerlerse ilerlesin, B1 projenin darboğazı olarak kalır.**
+
+⚠️ **Dahası: sim'in KENDİSİ hata kaynağı.** A6 bunu pahalıya öğretti — simülatör
+dünyanın manyetik alanını aynalıyordu ve tüm testler yeşilken A2'yi haftalarca
+"bozuk" gösterdi. Sim bir yalan söylediğinde, ölçtüğün her şey o yalanı ölçer.
+Korunma yolları (A6'dan çıkanlar):
+- **Fikstürü kendi matematiğiyle test etme.** Testin yardımcısı fikstürün
+  hatasını tersine çeviriyorsa, ikisinin birbiriyle uyuştuğunu kanıtlarsın.
+  Elle türetilmiş sayılara çivile (`test_field_matches_hand_computed_physics`).
+- **Tek bir çalışma noktasında test etme.** Ayna, 90° montaj ofseti ve yanlış
+  declination — üçü de tek bir yönde kusursuz görünür. **Süpür** (tam tur).
+- **Elle koşulan ölçüm kanıt değildir.** A4'ün tablosu elle alınmıştı ve yanlıştı.
+  Ölçebiliyorsan teste çevir; çeviremiyorsan kanıtlamış sayma.
 
 ### Sim mimarisi kararı: tek sahte ESP32, iki arka uç
 ```
@@ -302,8 +317,11 @@ kalır ve gerçek yığın her iki dünyada da devrededir.
 > `test_yaw_drifts_without_a_magnetometer` bunu kalıcı olarak belgeliyor.
 
 ## ŞU AN NEREDEYIZ / SIRADAKİ İŞ
-Yazılım İz A'da: **A1 bitti, A2'nin navigasyon yarısı bitti**; donanım B1'de
-(ST-Link) kilitli.
+Yazılım İz A'da: **A1, A2, A4 bitti** (A2 uçtan uca GPS waypoint ile doğrulandı);
+donanım B1'de (ST-Link) kilitli. **72 test geçiyor.**
+
+Sıradaki iş seçenekleri: **A3** (Gazebo arka ucu — fizik/patinaj/engel) ya da
+**A5** (CI). Ya da alan modeli tekrarını temizle (A6'nın kalan borcu).
 
 ### ✅ A4 (manyetometre) yazıldı — yaw sorunu ÇÖZÜLDÜ, ölçüldü
 `qmc5883l_driver` + `imu_filter_madgwick` devrede. Zincir:
@@ -313,38 +331,69 @@ mpu6050  ──► /imu/data_raw ─┐
 qmc5883l ──► /imu/mag ──────┘                               │
                                           ekf_global (yaw AÇIK) + navsat_transform
 ```
-**Ölçüldü (dönüşlerle birlikte):**
-| | truth | ekf_global | hata |
+**Ölçüldü — tam tur döndürerek, her yönde (A6 düzeltmesinden SONRA):**
+| truth | /imu/data (madgwick) | ekf_global | hata |
 |---|---|---|---|
-| başlangıç | +0.0° | +1.1° | **1.1°** |
-| dönüş sonrası | +166.9° | +169.7° | **2.8°** |
-| dönüş sonrası | -26.8° | -22.1° | **4.7°** |
-| dönüş sonrası | -137.7° | -129.7° | **8.0°** |
+| +0.0° | +1.3° | +1.3° | **1.3°** |
+| +76.9° | +78.5° | +78.5° | **1.6°** |
+| +156.4° | +156.3° | +156.0° | **0.5°** |
+| -126.8° | -128.1° | -127.7° | **0.9°** |
 
-**Öncesi -178° idi.** `ekf_local` hâlâ sapıyor (8→10°) — **kasıtlı**: mutlak yaw
-sadece `ekf_global`'a veriliyor, `ekf_local`'a asla (kötü heading base_link'i
-savurmasın; karar 4'ün zaten söylediği ayrım).
+Artık **testle korunuyor**: `test_absolute_yaw_holds_through_a_full_turn`.
+
+⚠️ **A4'ün ilk "kanıt" tablosu YANLIŞTI** — aynalı bir simülatörde ölçülmüştü
+(A6'ya bak). Ders: elle bir kez koşulan ölçüm, kanıt değil. Testine çevir.
+
+`ekf_local` hâlâ sapıyor (8→10°) — **kasıtlı**: mutlak yaw sadece `ekf_global`'a
+veriliyor, `ekf_local`'a asla (kötü heading base_link'i savurmasın; karar 4'ün
+zaten söylediği ayrım).
 
 ⚠️ **Chip HÂLÂ ALINMADI** (~100 TL). Sürücü `mpu6050_driver` deseniyle yazıldı
 ve sahte I2C'ye karşı doğrulandı: kalibrasyonsuz hard iron **>15° yön hatası**
 veriyor, kalibrasyonla **<0.5°**. Gerçek çipte `i2cdetect -y 1` ile 0x0D'yi gör.
 
-### ⛔ AÇIK SORUN: GPS waypoint'i hâlâ tamamlanmıyor (ama sebebi ARTIK yaw DEĞİL)
-Manyetometre sonrası: waypoint 0 **başarılı**, waypoint 1'de Nav2 hedefi
-(7.45, 2.94) iken robot 2 dakika **doğuya sürüp 40 m'ye gitti**, sonra "Goal failed".
+### ✅ A6: GPS waypoint SORUNU ÇÖZÜLDÜ — sebep simülatörün aynalı manyetometresiydi
+**Semptom:** waypoint 0 başarılı, waypoint 1'de robot hedefin 40 m ötesine sürüp
+"Goal failed". Kontrolcü bozuk gibi görünüyordu. **Değildi.**
 
-**Lokalizasyon suçsuz — ölçüldü:** ground truth (40.23, 3.37), `/odometry/gps`
-(38.45, 3.63), `ekf_global` (38.14, 3.15) → üçü ~2 m içinde uyuşuyor. Yani
-konum ve yaw doğru; **kontrolcü robotu yanlış yöne sürüyor**.
+**Kök neden — tek bir eksi işareti**, `sim_node.py` ve `qmc5883l_driver/fake_bus.py`:
+```python
+bx = -EARTH_NORTH_T * math.sin(yaw)   # YANLIŞ — dünyanın alanını AYNALIYOR
+bx =  EARTH_NORTH_T * math.sin(yaw)   # doğru: R(-yaw) @ (0,N) = (N sin, N cos)
+```
+Zincir: mag "ters yöne dönüyorsun" dedi → madgwick gyro'yla kavga edip **gerçek
+dönüşün 0.897'sini** gördü → `ekf_global` yaw'ı **~120° şaştı** → bu `map→odom`'a
+düştü → Nav2 her hedefi 120° çevirdi → robot kaçan havucu kovaladı.
 
-Sıradaki oturumun ilk işi bu. Şüpheler (sırayla denenecek):
-1. `ekf_global`'ın yaw düzeltmeleri `map→odom`'u sıçratıyor → kontrolcünün
-   base_link'e dönüştürdüğü yol sürekli dönüyor, robot kaçan havucu kovalıyor.
-   Kontrol: `/received_global_plan` ve `/lookahead_point`'i sürüş sırasında izle.
-2. `ekf_local` yaw'ı (10° sapma) ile `ekf_global` yaw'ı arasındaki fark
-   `map→odom`'a yığılıyor.
-3. RPP'nin `min_lookahead_dist: 1.2` + `xy_goal_tolerance: 1.0` ayarı A2'de
-   NavigateToPose için ayarlandı; GPS gürültüsüyle birlikte yeniden bakılmalı.
+**Bu bir SİM hatasıydı, robot kodunda değil.** `mag_node` yön hesaplamıyor, alanı
+kalibre edip geçiriyor; gerçek çipten gerçek alan gelir. Ama A2 ve A4'ün
+doğrulaması bu yalan söyleyen sim üzerinden yapıldığı için ikisi de sahte sonuç
+verdi.
+
+**Neden aylarca hayatta kaldı — asıl ders bu:**
+1. **İki hata birbirini götürdü.** `fake_bus` aynalıydı, testin `heading_of`
+   yardımcısı da (`atan2(-x, y)`) — çarpımları kimlik. Testler kendi içinde
+   tutarlı, dünyaya göre aynalı bir evreni doğruluyordu.
+2. **Her test yaw=0'da başlıyordu.** `sin(0)=0` — aynalı ve doğru alan orada
+   **birebir aynı**. Hata tam olarak görünmez olduğu noktada aranıyordu.
+3. **`ekf_global`'ın yaw'ına bakan test YOKTU.** `SimStack` `use_gps:=false` ile
+   kalkıyordu, `Nav2Stack` `map→odom`'u kimliğe sabitliyordu → manyetometrenin
+   var olma sebebinin sıfır kapsaması vardı. A4'ün "kanıtı" elle bir kez
+   koşulmuş, düz süren, yaw 0'da başlayan bir ölçümdü.
+
+**Şimdi korunuyor:** `test_absolute_yaw_holds_through_a_full_turn` — robotu
+**tam tur döndürüp** her yönde madgwick + `ekf_global` yaw'ını ground truth'a
+karşı ölçer. Bozuk işaretle koşulup **53.8° ile patladığı doğrulandı**. Yeni
+`GlobalStack` (conftest) GPS + madgwick + ekf_global'ı gerçekten kaldırır.
+
+**Kabul testi geçiyor** (`measure_gps_wp.py`, L rotası 6 m doğu + 4 m kuzey):
+`status 4 SUCCEEDED, missed=0, gerçek hata 0.73 m` — 27 sn'de. Yani **A2 artık
+gerçekten bitti**.
+
+⚠️ **Kalan borç:** dünya alanı modeli hâlâ **iki yerde** (`sim_node.py` ve
+`fake_bus.py`) — bu hatanın ta kendisi. İkisi de Python; protokolün C++/Python
+mecburiyeti burada yok, yani paylaşılabilir. Yeni test sapmayı 37 sn'de yakalar,
+o yüzden acil değil ama yapılmalı.
 
 ### (tarihçe) A2 sırasında GPS'in bloke olma sebebi — çözüldü
 `navsat_transform`, robotun **mutlak yönünü** `/imu/data`'nın orientation

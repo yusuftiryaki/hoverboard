@@ -43,15 +43,21 @@ class SimStack:
     use_imu:=false on purpose: sim_node publishes /imu/data itself, standing in
     for what mpu6050_driver would emit. Launching the driver too would fight it
     for the topic.
+
+    Subclasses vary the bringup via LAUNCH_ARGS rather than launching a second
+    robot.launch.py: two of them would put two bridges on one pty and two
+    ekf_locals on one topic, which does not error — it just quietly makes every
+    reading meaningless.
     """
+
+    LAUNCH_ARGS = ("use_localization:=true", "use_imu:=false", "use_gps:=false")
 
     def __init__(self, *sim_args):
         self._procs = []
         self._spawn("ros2", "run", "robot_sim", "sim_node", *sim_args)
         time.sleep(SIM_STARTUP_S)
         self._spawn("ros2", "launch", "robot_bringup", "robot.launch.py",
-                    "esp32_port:=/tmp/fake_esp32", "use_localization:=true",
-                    "use_imu:=false", "use_gps:=false")
+                    "esp32_port:=/tmp/fake_esp32", *self.LAUNCH_ARGS)
         time.sleep(STACK_STARTUP_S)
 
     def _spawn(self, *cmd):
@@ -75,6 +81,38 @@ def sim_stack(ros):
 
     def _make(*sim_args):
         stack = SimStack(*sim_args)
+        made.append(stack)
+        return stack
+
+    yield _make
+    for stack in made:
+        stack.close()
+
+
+class GlobalStack(SimStack):
+    """The sim stack with the GLOBAL half switched on: GPS, madgwick, ekf_global.
+
+    SimStack runs use_gps:=false, which leaves ekf_global, navsat_transform and
+    imu_filter_madgwick out entirely — so for a long time nothing under test ever
+    looked at the robot's ABSOLUTE heading, the one thing the magnetometer is for.
+    A mirrored field in the simulator survived a full green suite because of it,
+    and only turned up when the fused yaw was measured against ground truth by
+    hand. This class exists so that measurement is automated.
+
+    use_mag:=false for the same reason as use_imu: sim_node publishes /imu/mag
+    itself, so the real driver would only fight it for the topic.
+    """
+
+    LAUNCH_ARGS = ("use_localization:=true", "use_imu:=false", "use_mag:=false",
+                   "use_gps:=true", "use_imu_filter:=true")
+
+
+@pytest.fixture
+def global_stack(ros):
+    made = []
+
+    def _make(*sim_args):
+        stack = GlobalStack(*sim_args)
         made.append(stack)
         return stack
 

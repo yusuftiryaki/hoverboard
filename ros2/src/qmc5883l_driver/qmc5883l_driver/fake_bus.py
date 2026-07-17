@@ -119,8 +119,16 @@ class FakeQMC5883LBus:
         REP-103: x forward, y left, z up; yaw 0 = facing east. The earth's
         horizontal field points north, i.e. along +y at yaw 0.
         """
-        # Rotating the robot by yaw rotates the field by -yaw in the body frame.
-        bx = -EARTH_NORTH_T * math.sin(self.yaw)
+        # Rotating the robot by yaw rotates the field by -yaw in the body frame:
+        # R(-yaw) @ (0, N) = (N sin yaw, N cos yaw). Sanity check the signs
+        # against a heading rather than trusting the algebra — facing north
+        # (yaw +90) the field lies straight along FORWARD, so bx = +N.
+        # ⚠️ This read `-EARTH_NORTH_T * sin(yaw)` and mirrored the whole earth.
+        # Nothing caught it: sim_node had the same flip, and the test helper
+        # inverted it back, so the fixtures all agreed with each other. It
+        # surfaced only when the fused heading was measured against ground truth
+        # and madgwick came out fighting the gyro. See docs/handoff.md.
+        bx = EARTH_NORTH_T * math.sin(self.yaw)
         by = EARTH_NORTH_T * math.cos(self.yaw)
         bz = -EARTH_DOWN_T                       # down is -z in REP-103
         return (

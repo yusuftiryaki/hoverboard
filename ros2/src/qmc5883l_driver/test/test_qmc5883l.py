@@ -32,10 +32,65 @@ def make(**kwargs):
 def heading_of(field):
     """Level-robot compass heading, REP-103: 0 = east, CCW positive.
 
-    The earth's horizontal field points north (+y at yaw 0), so the robot's yaw
-    is the angle of that vector measured back from +y.
+    Projecting the world's north-pointing field into the body frame gives
+    x = B sin(yaw), y = B cos(yaw) — so the yaw is that vector's angle measured
+    back from +y, which is exactly atan2(x, y).
+
+    ⚠️ This deliberately does NOT mirror fake_bus's own maths. It used to read
+    atan2(-x, y), the exact inverse of the sign error fake_bus had, so the two
+    cancelled and every heading test passed against a mirrored world. A helper
+    that undoes the fixture's bug tests only that they agree with each other.
+    test_field_matches_hand_computed_physics below is what anchors both to
+    reality; keep it independent of this function.
     """
-    return math.atan2(-field[0], field[1])
+    return math.atan2(field[0], field[1])
+
+
+def test_field_matches_hand_computed_physics():
+    """The convention, pinned to numbers derived by hand rather than by code.
+
+    This is the test that was missing, and its absence let a mirrored
+    magnetometer through: sim_node and fake_bus both had x = -B sin(yaw), and
+    the test helper inverted it right back. Everything agreed; all of it was
+    the mirror image of the earth.
+
+    Facing north, a north-pointing field lies straight along the robot's
+    FORWARD axis. If x comes out negative here, the fixture is claiming the
+    field is behind a robot that is driving at it.
+    """
+    # No hard iron: this test is about the earth's field and the body frame,
+    # nothing else. The default fixture carries an offset on purpose.
+    bus, mag = make(hard_iron_t=(0.0, 0.0, 0.0))
+
+    # One LSB at the 2 G range (12000 LSB/Gauss). The reading is quantised by a
+    # 12-bit ADC, so demanding more precision than this tests the arithmetic of
+    # the test rather than the convention it is here to pin.
+    lsb = 1e-4 / 12000.0
+
+    # Facing east (yaw 0): forward is east, left is north -> all of it on +y.
+    bus.set_heading_deg(0.0)
+    x, y, _ = mag.read().field
+    assert x == pytest.approx(0.0, abs=lsb)
+    assert y == pytest.approx(EARTH_NORTH_T, abs=lsb)
+
+    # Facing north (yaw +90): forward IS north -> all of it on +x, and POSITIVE.
+    bus.set_heading_deg(90.0)
+    x, y, _ = mag.read().field
+    assert x == pytest.approx(EARTH_NORTH_T, abs=lsb)
+    assert y == pytest.approx(0.0, abs=lsb)
+
+    # Facing west (yaw 180): north is now to the robot's RIGHT -> -y.
+    bus.set_heading_deg(180.0)
+    x, y, _ = mag.read().field
+    assert x == pytest.approx(0.0, abs=lsb)
+    assert y == pytest.approx(-EARTH_NORTH_T, abs=lsb)
+
+    # Facing north-east (yaw +45): the field splits evenly, both components +.
+    bus.set_heading_deg(45.0)
+    x, y, _ = mag.read().field
+    half = EARTH_NORTH_T * math.sqrt(0.5)
+    assert x == pytest.approx(half, abs=lsb)
+    assert y == pytest.approx(half, abs=lsb)
 
 
 def test_chip_id():

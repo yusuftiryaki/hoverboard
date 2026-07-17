@@ -236,8 +236,18 @@ class SimNode(Node):
         msg = MagneticField()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = "mag_link"
+        # R(-yaw) @ (0, N) = (N sin yaw, N cos yaw): facing north (yaw +90) the
+        # field lies straight along FORWARD, so x = +N.
+        # ⚠️ This read `-EARTH_NORTH_T * sin(yaw)`, mirroring the simulated
+        # earth. The magnetometer then told madgwick the robot was turning the
+        # way it was not, madgwick split the difference with the gyro, and
+        # ekf_global's yaw came out ~120 deg wrong — which sent Nav2's goals
+        # somewhere else entirely and looked exactly like a broken controller.
+        # Invisible at yaw 0, where sin is 0 and both conventions agree; every
+        # sim test happened to start there. Keep this in step with
+        # qmc5883l_driver's fake_bus, which had the identical flip.
         msg.magnetic_field.x = (
-            -EARTH_NORTH_T * math.sin(yaw) + self._mag_residual[0]
+            EARTH_NORTH_T * math.sin(yaw) + self._mag_residual[0]
             + self._rng.gauss(0.0, self._mag_noise)
         )
         msg.magnetic_field.y = (
