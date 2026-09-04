@@ -124,6 +124,8 @@ ros2/src/hoverboard_bridge/ ESP32 seri köprü düğümü (Python) + protokol + 
 ros2/src/mpu6050_driver/    IMU sürücüsü (Jazzy'de yok, kendimiz yazdık) + sahte I2C
 ros2/src/robot_sim/         kinematik dünya + ground truth + sahte IMU/mag/GPS + yığın testleri
 ros2/src/qmc5883l_driver/   manyetometre sürücüsü + sahte I2C (mutlak yönün tek kaynağı)
+ros2/src/ina228_driver/     INA228 register seviyesi akım sürücüsü + sahte I2C
+ros2/src/battery_manager/   SoC tahmini + yetkili /battery yayıncısı
 ros2/src/robot_bringup/     launch + ekf.yaml + urdf
 .devcontainer/              Dockerfile + devcontainer.json
 scripts/deploy.sh           push → Pi'da pull + colcon build
@@ -149,6 +151,18 @@ için Pi'la el sıkışma gerektirir; veto ise Nav2'nin hiçbir şey yapmadan ge
 
 **Ultrasonik refleksi YAZILMADI** — sensörler envanterde yok, alım kararı da
 verilmedi (`wiring-map.md` 6. bölüm).
+
+### Batarya izleme (SP1)
+`ina228_driver` ve `battery_manager` yazılımı donanımsız tamamlandı. INA228,
+köprünün ham `/battery_raw` voltajını ve Pi I2C akımını birleştirerek tek yetkili
+`/battery` mesajını yayınlar; INA228 yoksa düğüm voltaj-yalnız moda düşer
+(`current` ve `percentage` = NaN, diagnostics WARN). SoC açılışta dinlenim
+voltajından başlar, akımı coulomb sayar ve tam şarj kuyruğunda %100'e sıfırlanır.
+
+Gerçek INA228 ve şönt henüz alınmadı. `shunt_ohms`, `invert_current` ve
+`capacity_ah` gerçek paket üzerinde kalibre edilmelidir; şöntün BMS içindeki
+ortak eksi hattı multimetreyle doğrulanmadan bağlanmamalıdır. SP1, motor komut
+yoluna ve ESP32 seri protokolüne dokunmaz.
 
 ### ROS 2 workspace (kuruldu, donanımsız doğrulandı)
 **Mimari kararı:** kinematiği+odometriyi **kendi Python düğümümüz** yapıyor,
@@ -249,6 +263,9 @@ olarak yayınlıyor; montaj yönü **URDF'teki `imu_joint` rpy'ında** tarif edi
   yaw sorunu çözüldü. Chip hâlâ alınmadı; sahte I2C'ye karşı doğrulandı.
 - ✅ **A6. Aynalı manyetometre hatası** — sim'deki tek eksi işareti; A2'yi ve
   A4'ün "kanıtını" sahte kılmıştı. Düzeltildi + tam-tur regresyon testi eklendi.
+- ✅ **SP1. Batarya izleme yazılımı** — INA228 register sürücüsü, sahte I2C,
+  coulomb sayan SoC ve sensör yokken voltaj-yalnız `/battery` modu yazıldı;
+  launch'ta köprü `/battery_raw`, `battery_monitor` `/battery` yayınlıyor.
 - **A5. CI** (GitHub Actions: colcon build + testler + `pio run`) — ertelendi
 
 ### İz B — Donanım (sıra atlanmaz)
@@ -256,7 +273,9 @@ olarak yayınlıyor; montaj yönü **URDF'teki `imu_joint` rpy'ında** tarif edi
 2. **ESP32 tezgah testi** — protokol + çarpma refleksi gerçek kartla
 3. **Şasi** — en sıkıcı, en uzun
 4. **KALİBRASYON** — `cmd_per_rpm`, `steer_sign`, `invert_left/right`,
-   `wheel_separation`, `battery_scale`, `BUMP_BLOCKS_POSITIVE_SPEED`
+  `wheel_separation`, `battery_scale`, `BUMP_BLOCKS_POSITIVE_SPEED`,
+  `shunt_ohms`, `invert_current`, `capacity_ah`; INA228 şönt yerleşimi de
+  multimetreyle doğrulanacak
 5. **Gerçek teleop** — burada sürülebilir robot olur
 6. **Gerçek sensörler** — IMU montajı + `imu_joint` rpy ölçümü, GPS, mag
 7. **Sahada Nav2 + engelden kaçınma**
@@ -332,16 +351,19 @@ kalır ve gerçek yığın her iki dünyada da devrededir.
 > `test_yaw_drifts_without_a_magnetometer` bunu kalıcı olarak belgeliyor.
 
 ## ŞU AN NEREDEYIZ / SIRADAKİ İŞ
-*(son güncelleme: 2026-07-17)*
+*(son güncelleme: 2026-09-04)*
 
-Yazılım İz A'da: **A1, A2, A4, A6 bitti** (A2 uçtan uca GPS waypoint ile
-doğrulandı); donanım B1'de (ST-Link) kilitli. **72 test geçiyor.**
-Son commit: `be0aad9` (A6 — aynalı manyetometre düzeltmesi). **Push EDİLMEDİ.**
+Yazılım İz A'da: **A1, A2, A4, A6 ve SP1 bitti** (A2 uçtan uca GPS waypoint
+ile doğrulandı); donanım B1'de (ST-Link) kilitli. SP1 kapsamı **18 test geçti**;
+tam workspace doğrulaması **90 test** ve seçili workspace build'i temiz geçti.
+Son commit: `4f1246a`; bu oturumdaki SP1 değişiklikleri henüz commit edilmedi.
 
 Kullanıcıya soruldu, **cevap bekliyor** — sıradaki iş seçenekleri:
 - **A3** (Gazebo arka ucu — fizik/patinaj/engel). Sim'in en büyük yalanı
   patinajın yokluğu; A3 onu kapatır.
 - **A5** (CI) — A6 tam olarak CI'ın yakalayacağı türden bir regresyondu.
+- **SP3 → SP5** — batarya davranışı ve docking zincirinin tasarım dokümanındaki
+  sonraki alt projeleri; SP1'in ölçüm katmanı hazır.
 - **A6'nın kalan borcu**: dünya alanı modeli `sim_node.py` + `fake_bus.py`'de
   tekrarlı. Tek yere indirmek `robot_sim`'i `qmc5883l_driver`'a bağımlı kılar —
   **mimari karar olduğu için sorulmadan yapılmadı.**
@@ -490,6 +512,8 @@ Artık repodalar.
 ## Bilinen blokerler / bekleyen alımlar
 - **ST-Link V2 klon (~150 TL)** — adım 1 için şart, henüz alınmadı
 - **Magnetometer QMC5883L (~100 TL)** — listedeki en yüksek getirili harcama
+- **INA228 modülü + 1.5 mΩ / ≥50 A şönt (~150-300 TL)** — SP1 yazılımı hazır;
+  gerçek sensör takılınca işaret, şönt değeri ve paket kapasitesi kalibre edilecek
 - Multimetre doğrulaması (UART pinout) — kart elde olunca
 - Caster ×2 (125-150 mm kauçuk), mantar E-stop + kontaktör, sigorta
 - ✅ ~~`ros-jazzy-nmea-navsat-driver` Jazzy apt'de olmayabilir~~ — **VAR**

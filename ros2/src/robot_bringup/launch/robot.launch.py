@@ -46,6 +46,7 @@ def generate_launch_description():
     pkg = get_package_share_directory("robot_bringup")
     launch_dir = os.path.join(pkg, "launch")
     bridge_params = os.path.join(pkg, "config", "hoverboard_bridge.yaml")
+    battery_params = os.path.join(pkg, "config", "battery_manager.yaml")
 
     use_localization = LaunchConfiguration("use_localization")
     use_gps = LaunchConfiguration("use_gps")
@@ -57,6 +58,7 @@ def generate_launch_description():
     esp32_port = LaunchConfiguration("esp32_port")
     fake_imu = LaunchConfiguration("fake_imu")
     fake_mag = LaunchConfiguration("fake_mag")
+    fake_battery = LaunchConfiguration("fake_battery")
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -89,6 +91,10 @@ def generate_launch_description():
             description="Simulate the magnetometer — dev machine only.",
         ),
         DeclareLaunchArgument(
+            "fake_battery", default_value="false",
+            description="Simulate the INA228 — dev machine only.",
+        ),
+        DeclareLaunchArgument(
             "use_nav2", default_value="false",
             description="Run Nav2. Requires use_localization:=true AND use_gps:=true — "
                         "Nav2 plans in `map`, which only exists once navsat_transform runs.",
@@ -108,9 +114,20 @@ def generate_launch_description():
             name="hoverboard_bridge",
             output="screen",
             parameters=[bridge_params, {"port": esp32_port}],
+            remappings=[("battery", "battery_raw")],
             # If the serial port vanishes (ESP32 unplugged, USB brownout) the
             # node dies on purpose. Respawning is right: the ESP32's own watchdog
             # has already stopped the motors, and coming back up is what we want.
+            respawn=True,
+            respawn_delay=2.0,
+        ),
+
+        Node(
+            package="battery_manager",
+            executable="battery_monitor",
+            name="battery_monitor",
+            output="screen",
+            parameters=[battery_params, {"use_fake_bus": fake_battery}],
             respawn=True,
             respawn_delay=2.0,
         ),

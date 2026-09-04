@@ -145,6 +145,26 @@ geri çekilebilsin diye. E-stop'tan farkı bu: E-stop latch'li ve **her yönü**
 | GPS (NEO-6M) | UART | USB-TTL öneri (`/dev/ttyUSB1`) | **⚠️ anten Pi'dan >20cm, USB3/HDMI gürültüsü GPS bandında** |
 | Pi Camera V2 | CSI | kamera şerit konnektörü | Zemin segmentasyonu (adım 7) |
 
+### INA228 akım sensörü (SP1 — batarya izleme)
+
+Amaç: coulomb sayan SoC için paket akımını ölçmek. Pi I2C bus 1, adres 0x40
+(MPU6050 0x68 ile çakışmaz).
+
+**Şönt yerleşimi — MULTİMETREYLE DOĞRULA, TAHMİN YÜRÜTME:**
+- Tercih: paketin ortak ana eksi hattı; böylece aynı şönt hem deşarjı hem de
+  şarj akımını görür.
+- Hoverboard BMS'inde şarj ve deşarj eksileri ayrıysa süreklilik ölçümüyle
+  doğrula. Ortak hat yoksa şönt deşarj hattına konur; şarj tespiti voltaj
+  sıçramasından yapılır.
+- Düşük-taraf montajda INA228 VBUS pini şasi civarında kalır ve kullanılmaz;
+  paket voltajı köprünün ham `/battery_raw` yayınıdır. VBUS'u boşta bırakma,
+  GND'ye bağla.
+- Hedef şönt: 1.5 mΩ / en az 50 A. `shunt_ohms` config'te CALIBRATE edilir.
+- `invert_current` ile işareti düzelt: robot bataryadan çalışırken
+  `/battery.current` küçük NEGATİF olmalı.
+- INA228 I2C tarafı Pi'ın 3.3 V alanındadır. Tüm GND'ler mevcut tek ortak
+  noktada birleşir.
+
 ---
 
 ## 4. Topraklama ve mantık seviyeleri (atlanırsa hiçbir şey çalışmaz)
@@ -187,3 +207,5 @@ Güç        : Batarya → sigorta → {buck→Pi/ESP32} + {E-stop→MCU}
       belli olmadan "ön engel" mantığı yazılamaz.
 - [ ] GPS: USB-TTL mü Pi donanım UART'ı mı (USB-TTL daha az dertli).
 - [ ] Buck akım marjı (Pi 3A + ESP32 + sensörler → ≥5A buck).
+- [ ] INA228 modülü + 1.5 mΩ / ≥50 A şönt alımı ve BMS şönt konumunun
+  multimetreyle doğrulanması.

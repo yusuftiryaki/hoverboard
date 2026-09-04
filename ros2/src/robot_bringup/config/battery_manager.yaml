@@ -1,0 +1,17 @@
+# INA228 is optional until the sensor and shunt are installed.
+battery_monitor:
+  ros__parameters:
+    i2c_bus: 1
+    address: 0x40
+    rate_hz: 10.0
+    # CALIBRATE against the installed shunt.
+    shunt_ohms: 0.0015
+    # CALIBRATE so discharge is negative per BatteryState convention.
+    invert_current: false
+    # CALIBRATE by measuring a full discharge cycle.
+    capacity_ah: 4.4
+    cells: 10
+    full_voltage_per_cell: 4.15
+    taper_current_a: 0.3
+    full_hold_s: 30.0
+    init_window_s: 5.0

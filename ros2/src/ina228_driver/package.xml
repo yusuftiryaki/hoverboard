@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>ina228_driver</name>
+  <version>0.1.0</version>
+  <description>
+    INA228 high/low-side current monitor driver, register level, no ROS.
+    Reads VSHUNT and computes current in Python using the known shunt value.
+  </description>
+  <maintainer email="enesis@entes.com.tr">Enes</maintainer>
+  <license>MIT</license>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
