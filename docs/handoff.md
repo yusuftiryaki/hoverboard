@@ -266,6 +266,10 @@ olarak yayınlıyor; montaj yönü **URDF'teki `imu_joint` rpy'ında** tarif edi
 - ✅ **SP1. Batarya izleme yazılımı** — INA228 register sürücüsü, sahte I2C,
   coulomb sayan SoC ve sensör yokken voltaj-yalnız `/battery` modu yazıldı;
   launch'ta köprü `/battery_raw`, `battery_monitor` `/battery` yayınlıyor.
+- 🟡 **A3. Gazebo ilk dilim** — `GazeboBackend`, düz zeminli `hoverbot` modeli,
+  ROS-GZ `/cmd_vel`/`odometry` köprüsü ve `gazebo.launch.py` eklendi. Gazebo
+  launch smoke testiyle server, model spawn ve bridge başlangıcı doğrulandı;
+  tam fizik/Nav2 kabul testi henüz yapılmadı.
 - **A5. CI** (GitHub Actions: colcon build + testler + `pio run`) — ertelendi
 
 ### İz B — Donanım (sıra atlanmaz)
@@ -360,7 +364,8 @@ Son commit: `4f1246a`; bu oturumdaki SP1 değişiklikleri henüz commit edilmedi
 
 Kullanıcıya soruldu, **cevap bekliyor** — sıradaki iş seçenekleri:
 - **A3** (Gazebo arka ucu — fizik/patinaj/engel). Sim'in en büyük yalanı
-  patinajın yokluğu; A3 onu kapatır.
+  patinajın yokluğu; ilk backend/world dilimi hazır, sırada slip ve engel
+  senaryoları var.
 - **A5** (CI) — A6 tam olarak CI'ın yakalayacağı türden bir regresyondu.
 - **SP3 → SP5** — batarya davranışı ve docking zincirinin tasarım dokümanındaki
   sonraki alt projeleri; SP1'in ölçüm katmanı hazır.

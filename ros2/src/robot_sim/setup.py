@@ -9,6 +9,9 @@ setup(
     data_files=[
         ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
         ("share/" + package_name, ["package.xml"]),
+        ("share/" + package_name + "/gazebo", [
+            "gazebo/empty.sdf", "gazebo/hoverbot.sdf", "gazebo/bridge.yaml",
+        ]),
     ],
     install_requires=["setuptools"],
     zip_safe=True,

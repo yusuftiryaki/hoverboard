@@ -39,6 +39,7 @@ from sensor_msgs.msg import Imu, MagneticField, NavSatFix, NavSatStatus
 from tf2_ros import TransformBroadcaster
 
 from hoverboard_bridge.esp32_sim import TX_PERIOD_S, Esp32Sim, PtyLink, step_once
+from robot_sim.gazebo_backend import GazeboBackend
 from robot_sim.world import KinematicWorld
 
 EARTH_RADIUS_M = 6378137.0
@@ -73,6 +74,7 @@ class SimNode(Node):
         self.declare_parameter("wheel_radius", 0.0825)
         self.declare_parameter("wheel_separation", 0.5)
         self.declare_parameter("board_units_per_rpm", 1.0)
+        self.declare_parameter("backend", "kinematic")
 
         # ---- Fake IMU --------------------------------------------------------
         # This publishes what mpu6050_driver WOULD PUBLISH, not what the chip
@@ -119,11 +121,20 @@ class SimNode(Node):
 
         p = self.get_parameter
         self._rng = random.Random(int(p("seed").value))
-        self._world = KinematicWorld(
-            wheel_radius=p("wheel_radius").value,
-            wheel_separation=p("wheel_separation").value,
-            board_units_per_rpm=p("board_units_per_rpm").value,
-        )
+        if p("backend").value == "gazebo":
+            self._world = GazeboBackend(
+                self,
+                wheel_radius=p("wheel_radius").value,
+                wheel_separation=p("wheel_separation").value,
+                board_units_per_rpm=p("board_units_per_rpm").value,
+            )
+            self.get_logger().info("Gazebo fizik backend'i seçildi")
+        else:
+            self._world = KinematicWorld(
+                wheel_radius=p("wheel_radius").value,
+                wheel_separation=p("wheel_separation").value,
+                board_units_per_rpm=p("board_units_per_rpm").value,
+            )
         self._link = PtyLink(p("link").value)
         self._esp = Esp32Sim(
             estop=p("estop").value,

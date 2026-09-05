@@ -5,9 +5,8 @@
   <version>0.1.0</version>
   <description>
     Hardware-free simulated world for the robot. Drives hoverboard_bridge's
-    Esp32Sim brain with kinematic ground truth and publishes fake IMU and GPS
-    derived from it, so the localization stack can be measured against an answer
-    key the real robot cannot provide. Kinematics only — no physics, no slip.
+    Esp32Sim brain with a kinematic backend or Gazebo Sim physics backend.
+    The real bridge, binary protocol and safety logic stay in the loop.
   </description>
   <maintainer email="enesis@entes.com.tr">Enes</maintainer>
   <license>MIT</license>
