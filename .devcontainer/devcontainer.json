@@ -40,7 +40,6 @@
         "ms-iot.vscode-ros",              // ROS 2: build tasks, launch, msg browsing
         "ms-python.python",               // Python nodes
         "ms-python.vscode-pylance",
-        "ms-vscode.cpptools",             // C++ nodes + firmware IntelliSense
         "ms-vscode.cmake-tools",          // ament_cmake / colcon
         "twxs.cmake",
         "platformio.platformio-ide",      // ESP32 firmware build/flash/monitor
@@ -55,9 +54,7 @@
       "settings": {
         "ros.distro": "jazzy",
         "files.associations": { "*.ino": "cpp" },
-        "terminal.integrated.defaultProfile.linux": "bash",
-        // PlatformIO manages firmware IntelliSense; avoid cpptools fighting it there
-        "C_Cpp.intelliSenseEngine": "default"
+        "terminal.integrated.defaultProfile.linux": "bash"
       }
     }
   },

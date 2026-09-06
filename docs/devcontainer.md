@@ -44,7 +44,6 @@ gerçeği Dockerfile.
 |---------|---------|
 | `ms-iot.vscode-ros` | ROS 2 build task'ları, launch, mesaj/topic gezme |
 | `ms-python.python` + `pylance` | Python düğümler |
-| `ms-vscode.cpptools` | C++ düğümler + firmware IntelliSense |
 | `ms-vscode.cmake-tools`, `twxs.cmake` | ament_cmake / colcon |
 | `platformio.platformio-ide` | ESP32 derle / flash / monitor |
 | `ms-vscode.vscode-serial-monitor` | ESP32 ↔ Pi seri hattını canlı izle |
