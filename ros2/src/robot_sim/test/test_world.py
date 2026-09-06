@@ -9,7 +9,7 @@ import math
 
 import pytest
 
-from robot_sim.world import KinematicWorld
+from robot_sim.world import CircularObstacle, KinematicWorld
 
 # Wheel RPM for 1 m/s at r=0.0825: 1 / (2*pi*0.0825) * 60
 RPM_FOR_1MS = 60.0 / (2.0 * math.pi * 0.0825)
@@ -132,6 +132,21 @@ def test_slip_reduces_ground_truth_speed_but_preserves_hall_measurement():
     assert measured_r == pytest.approx(target, rel=1e-3)
     assert slipped.v == pytest.approx(no_slip.v * 0.75, rel=1e-3)
     assert slipped.pose.x < no_slip.pose.x
+
+
+def test_circular_obstacle_stops_ground_truth_at_collision_boundary():
+    obstacle = CircularObstacle(x=1.0, y=0.0, radius=0.2)
+    world = KinematicWorld(
+        tau=1e-9,
+        obstacles=(obstacle,),
+        robot_radius=0.3,
+    )
+    for _ in range(200):
+        world.step(RPM_FOR_1MS, RPM_FOR_1MS, 0.02)
+
+    assert world.collision
+    assert world.pose.x == pytest.approx(0.5, abs=0.03)
+    assert world.pose.y == pytest.approx(0.0, abs=1e-9)
 
 
 def test_acceleration_is_reported_for_the_fake_imu():

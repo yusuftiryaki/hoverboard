@@ -30,6 +30,13 @@ class Pose:
     yaw: float = 0.0    # rad, CCW from east (REP-103)
 
 
+@dataclass(frozen=True)
+class CircularObstacle:
+    x: float
+    y: float
+    radius: float
+
+
 class KinematicWorld:
     """Differential drive kinematics with a first-order wheel lag."""
 
@@ -48,12 +55,17 @@ class KinematicWorld:
         # 0.0 = no slip (perfect grip), 0.1 = 10% slip loss, etc.
         # Realistically 0.05-0.15 on varied terrain; 0.0 here means "ideal road".
         slip_factor: float = 0.0,
+        obstacles: Tuple[CircularObstacle, ...] = (),
+        robot_radius: float = 0.35,
     ) -> None:
         self.wheel_radius = wheel_radius
         self.wheel_separation = wheel_separation
         self.board_units_per_rpm = board_units_per_rpm
         self._tau = tau
         self._slip_factor = slip_factor
+        self._obstacles = tuple(obstacles)
+        self.robot_radius = robot_radius
+        self.collision = False
 
         self.pose = Pose()
         self.v = 0.0          # body forward velocity, m/s
@@ -90,14 +102,28 @@ class KinematicWorld:
         # uses. Using the same approximation in both would hide the bridge's
         # discretisation error from the very comparison meant to expose it.
         yaw0 = self.pose.yaw
+        next_x, next_y, next_yaw = self.pose.x, self.pose.y, yaw0
         if abs(omega) < 1e-9:
-            self.pose.x += v * math.cos(yaw0) * dt
-            self.pose.y += v * math.sin(yaw0) * dt
+            next_x += v * math.cos(yaw0) * dt
+            next_y += v * math.sin(yaw0) * dt
         else:
             radius = v / omega
             yaw1 = yaw0 + omega * dt
-            self.pose.x += radius * (math.sin(yaw1) - math.sin(yaw0))
-            self.pose.y -= radius * (math.cos(yaw1) - math.cos(yaw0))
-            self.pose.yaw = math.atan2(math.sin(yaw1), math.cos(yaw1))
+            next_x += radius * (math.sin(yaw1) - math.sin(yaw0))
+            next_y -= radius * (math.cos(yaw1) - math.cos(yaw0))
+            next_yaw = math.atan2(math.sin(yaw1), math.cos(yaw1))
+
+        if self._collides(next_x, next_y):
+            self.collision = True
+        else:
+            self.collision = False
+            self.pose.x, self.pose.y, self.pose.yaw = next_x, next_y, next_yaw
 
         return self._meas_l, self._meas_r
+
+    def _collides(self, x: float, y: float) -> bool:
+        return any(
+            math.hypot(x - obstacle.x, y - obstacle.y)
+            <= self.robot_radius + obstacle.radius
+            for obstacle in self._obstacles
+        )

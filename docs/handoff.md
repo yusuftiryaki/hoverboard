@@ -283,6 +283,9 @@ olarak yayınlıyor; montaj yönü **URDF'teki `imu_joint` rpy'ında** tarif edi
 - 🟡 **A3c. Obstacle/collision:** costmap katmanında zemin engelleri; Nav2
   bunlara göre yol planlasın. Test: çizgi engel, robot saptırsın ve geçsin;
   engel geometrisi tüm kritik noktalarda doğrulansın.
+- ✅ **A3c ilk dilim:** `KinematicWorld` dairesel engel + robot yarıçapı ile
+  collision sınırında duruyor; kabul testi eklendi. Bu henüz Nav2 costmap veya
+  rota değiştirme değildir; yalnızca ground-truth fizik sınırını doğrular.
 - **A5. CI** (GitHub Actions: colcon build + testler + `pio run`) — ertelendi
 
 ### İz B — Donanım (sıra atlanmaz)
@@ -368,9 +371,9 @@ kalır ve gerçek yığın her iki dünyada da devrededir.
 > `test_yaw_drifts_without_a_magnetometer` bunu kalıcı olarak belgeliyor.
 
 ## ŞU AN NEREDEYIZ / SIRADAKİ İŞ
-*(son güncelleme: 2026-09-04)*
+*(son güncelleme: 2026-09-06)*
 
-Yazılım İz A'da: **A1, A2, A4, A6 ve SP1 bitti** (A2 uçtan uca GPS waypoint
+Yazılım İz A'da: **A1, A2, A3 ilk dilimleri, A4, A6 ve SP1 bitti** (A2 uçtan uca GPS waypoint
 ile doğrulandı); donanım B1'de (ST-Link) kilitli. SP1 kapsamı **18 test geçti**;
 tam workspace doğrulaması **90 test** ve seçili workspace build'i temiz geçti.
 Son commit: `4f1246a`; bu oturumdaki SP1 değişiklikleri henüz commit edilmedi.
