@@ -44,11 +44,16 @@ class KinematicWorld:
         board_units_per_rpm: float = 1.0,
         # Wheel spin-up time constant. A guess: hub motors under a ~15 kg robot.
         tau: float = 0.09,
+        # Slip factor: fraction of commanded wheel speed lost to friction/slip.
+        # 0.0 = no slip (perfect grip), 0.1 = 10% slip loss, etc.
+        # Realistically 0.05-0.15 on varied terrain; 0.0 here means "ideal road".
+        slip_factor: float = 0.0,
     ) -> None:
         self.wheel_radius = wheel_radius
         self.wheel_separation = wheel_separation
         self.board_units_per_rpm = board_units_per_rpm
         self._tau = tau
+        self._slip_factor = slip_factor
 
         self.pose = Pose()
         self.v = 0.0          # body forward velocity, m/s
@@ -66,8 +71,13 @@ class KinematicWorld:
         self._meas_l += (target_l - self._meas_l) * alpha
         self._meas_r += (target_r - self._meas_r) * alpha
 
-        rpm_l = self._meas_l / self.board_units_per_rpm
-        rpm_r = self._meas_r / self.board_units_per_rpm
+        # Apply slip to ground truth only. Hall feedback remains the wheel's
+        # measured spin; this exposes the odometry error caused by wheel slip.
+        slipped_l = self._meas_l * (1.0 - self._slip_factor)
+        slipped_r = self._meas_r * (1.0 - self._slip_factor)
+
+        rpm_l = slipped_l / self.board_units_per_rpm
+        rpm_r = slipped_r / self.board_units_per_rpm
         v_l = rpm_l / 60.0 * 2.0 * math.pi * self.wheel_radius
         v_r = rpm_r / 60.0 * 2.0 * math.pi * self.wheel_radius
 

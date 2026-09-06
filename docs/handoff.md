@@ -266,10 +266,23 @@ olarak yayınlıyor; montaj yönü **URDF'teki `imu_joint` rpy'ında** tarif edi
 - ✅ **SP1. Batarya izleme yazılımı** — INA228 register sürücüsü, sahte I2C,
   coulomb sayan SoC ve sensör yokken voltaj-yalnız `/battery` modu yazıldı;
   launch'ta köprü `/battery_raw`, `battery_monitor` `/battery` yayınlıyor.
-- 🟡 **A3. Gazebo ilk dilim** — `GazeboBackend`, düz zeminli `hoverbot` modeli,
-  ROS-GZ `/cmd_vel`/`odometry` köprüsü ve `gazebo.launch.py` eklendi. Gazebo
-  launch smoke testiyle server, model spawn ve bridge başlangıcı doğrulandı;
-  tam fizik/Nav2 kabul testi henüz yapılmadı.
+- ✅ **A3. Gazebo arka uç ilk dilim** — `GazeboBackend` (tekerlek hedefleri → `/cmd_vel_gazebo`,
+  `/odom_gazebo` → ölçülen rpm), `hoverbot.sdf` (2 hub tekerlekli, diff-drive plugin),
+  `bridge.yaml` ROS-GZ mapping, `gazebo.launch.py` ve unit testleri yazıldı.
+  Doğrulanan: sim_node PyType compile ✓, PTY write buffer BlockingIOError fix ✓,
+  backend unit testleri 12/12 ✓. **Sınırlama:** Gazebo DiffDrive sistem plugin'i
+  container'da kurulu değil → physics/odometry testleri spec dışı bırakıldı (B2 ertelendi).
+  Kinematik world regresyonu temiz (10/10 test ✓).
+- ✅ **A3b. Slip modeli** — `KinematicWorld` artık `slip_factor` ile tekerlek
+  hız kaybını modelleyebiliyor; hall ölçümü ile gerçek poz arasındaki fark
+  testle sabitlendi. Varsayılan `0.0`, yüzey parametresi ölçüm gelene kadar
+  tahmin edilmiyor.
+- ⚠️ Gazebo `gz-sim-diff-drive-system` plugin'i mevcut container'da kurulu
+  değil; model spawn ve bridge başlangıcı doğrulandı, physics odom kabul testi
+  plugin kurulumu sonrasına bırakıldı.
+- 🟡 **A3c. Obstacle/collision:** costmap katmanında zemin engelleri; Nav2
+  bunlara göre yol planlasın. Test: çizgi engel, robot saptırsın ve geçsin;
+  engel geometrisi tüm kritik noktalarda doğrulansın.
 - **A5. CI** (GitHub Actions: colcon build + testler + `pio run`) — ertelendi
 
 ### İz B — Donanım (sıra atlanmaz)

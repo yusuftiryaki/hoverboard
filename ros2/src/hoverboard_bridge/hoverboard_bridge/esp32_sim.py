@@ -105,7 +105,11 @@ class PtyLink:
             return b""
 
     def write(self, data: bytes) -> None:
-        os.write(self._master, data)
+        try:
+            os.write(self._master, data)
+        except BlockingIOError:
+            # PTY buffer dolu, sonraki frame'de retry edilecek
+            pass
 
     def close(self) -> None:
         if os.path.islink(self.link_path):

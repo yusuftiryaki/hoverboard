@@ -120,6 +120,20 @@ def test_board_units_per_rpm_scales_the_world_not_the_belief():
     assert slow.v == pytest.approx(fast.v / 2.0, rel=1e-3)
 
 
+def test_slip_reduces_ground_truth_speed_but_preserves_hall_measurement():
+    no_slip = KinematicWorld(slip_factor=0.0)
+    slipped = KinematicWorld(slip_factor=0.25)
+    target = RPM_FOR_1MS
+    settled(no_slip, target, target, seconds=3.0)
+    settled(slipped, target, target, seconds=3.0)
+    measured_l, measured_r = slipped.step(target, target, 0.02)
+
+    assert measured_l == pytest.approx(target, rel=1e-3)
+    assert measured_r == pytest.approx(target, rel=1e-3)
+    assert slipped.v == pytest.approx(no_slip.v * 0.75, rel=1e-3)
+    assert slipped.pose.x < no_slip.pose.x
+
+
 def test_acceleration_is_reported_for_the_fake_imu():
     w = KinematicWorld(tau=0.09)
     w.step(RPM_FOR_1MS, RPM_FOR_1MS, 0.02)

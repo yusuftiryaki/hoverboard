@@ -74,6 +74,7 @@ class SimNode(Node):
         self.declare_parameter("wheel_radius", 0.0825)
         self.declare_parameter("wheel_separation", 0.5)
         self.declare_parameter("board_units_per_rpm", 1.0)
+        self.declare_parameter("slip_factor", 0.0)
         self.declare_parameter("backend", "kinematic")
 
         # ---- Fake IMU --------------------------------------------------------
@@ -134,6 +135,7 @@ class SimNode(Node):
                 wheel_radius=p("wheel_radius").value,
                 wheel_separation=p("wheel_separation").value,
                 board_units_per_rpm=p("board_units_per_rpm").value,
+                slip_factor=p("slip_factor").value,
             )
         self._link = PtyLink(p("link").value)
         self._esp = Esp32Sim(

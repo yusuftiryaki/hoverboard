@@ -2,6 +2,7 @@
 ros2/build/
 ros2/install/
 ros2/log/
+build/
 
 # PlatformIO
 firmware/*/.pio/
@@ -14,3 +15,4 @@ __pycache__/
 
 # VS Code C++ IntelliSense database — generated, and it reaches 1 GB
 .vscode/browse.vc.db*
+.vscode/
