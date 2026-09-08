@@ -112,18 +112,20 @@ def generate_launch_description():
         # every velocity and acceleration it derives is wrong by the real-time
         # factor. Declared here and threaded into every node below.
         #
-        # ⚠️⚠️ NEVER TRUE ON THE ROBOT. With no /clock publisher a node on sim
-        # time sits at t = 0 forever, so hoverboard_bridge's cmd_timeout
-        # (age = now - last_cmd_time) is permanently zero and NEVER trips — it
-        # would keep resending the last /cmd_vel after the publisher died. The
-        # ESP32's own watchdog cannot save that either: the bridge is still
-        # talking. Default false, and it belongs to the Gazebo world only.
+        # ⚠️⚠️ NEVER TRUE ON THE ROBOT. Default false; it belongs to the Gazebo
+        # world only. MEASURED with use_sim_time on and nobody publishing
+        # /clock: an rclpy timer fires ZERO times in four seconds. So _tx_tick
+        # never runs — the bridge sends no commands, no odometry and no
+        # diagnostics. The wheels do stop (the ESP32's 200 ms watchdog sees the
+        # silence), so this fails safe; what it does NOT do is say why. The
+        # drivetrain node is simply dead, quietly, and the robot stops with
+        # nothing in any log to explain it.
         DeclareLaunchArgument(
             "use_sim_time", default_value="false",
             description="Take time from /clock. Required with the Gazebo backend "
                         "(gazebo.launch.py). NEVER on the real robot: with no "
-                        "/clock the clock never advances and the bridge's "
-                        "cmd_timeout deadman never fires.",
+                        "/clock nothing clock-driven runs at all, so the bridge "
+                        "goes silent and the ESP32 watchdog stops the wheels.",
         ),
 
         IncludeLaunchDescription(

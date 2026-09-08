@@ -319,7 +319,10 @@ class SimNode(Node):
         self._last_tick = now
         step_once(self._esp, self._world, self._link, now, dt)
         self._publish_truth()
-        # GazeboBackend has no collision flag; absent means "not colliding".
+        # Both backends carry a real `collision`: KinematicWorld sets it when
+        # the circle test refuses a step, GazeboBackend from hoverbot.sdf's
+        # chassis contact sensor. The getattr default is only for a backend
+        # that has yet to grow one — it is a fallback, not the gazebo case.
         self._collision_pub.publish(Bool(data=getattr(self._world, "collision", False)))
 
     def _publish_truth(self) -> None:

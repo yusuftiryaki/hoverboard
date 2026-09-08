@@ -128,3 +128,43 @@ def test_watchdog_stops_the_wheels_when_cmd_vel_stops(harness, probe):
     probe.sending = False                 # the Pi "dies"
     probe.settle(3.0)
     assert abs(probe.vx) < STOPPED, "no /cmd_vel must mean no motion"
+
+
+def test_sim_time_without_a_clock_silences_the_bridge_instead_of_freezing_it(ros):
+    """The assumption robot.launch.py's use_sim_time warning rests on.
+
+    ⚠️ This pins a PLATFORM behaviour, not our own code, and it is here because
+    the safety note about it was once written from reasoning rather than
+    measurement — and the reasoning was wrong. The note claimed that on sim time
+    with no /clock the bridge's `age = now - last_cmd_time` would be
+    permanently zero, so `cmd_timeout` would never trip and the last /cmd_vel
+    would be resent forever after its publisher died. That would be a runaway.
+
+    Measured instead: rclpy does not run a clock-driven timer at all while ROS
+    time is frozen. `_tx_tick` never fires, so the bridge sends nothing, and the
+    ESP32's own 200 ms watchdog stops the wheels. It fails SAFE — but silently
+    and completely: no commands, no odometry, no diagnostics, no log line. Which
+    is still a good enough reason to keep use_sim_time false on the robot.
+
+    If a future rclpy runs frozen-clock timers after all, this test fails, and
+    the warning it guards has to become a real runtime guard in bridge_node.
+    """
+    node = rclpy.create_node(
+        "frozen_clock_probe",
+        parameter_overrides=[rclpy.parameter.Parameter("use_sim_time", value=True)],
+    )
+    fires = []
+    node.create_timer(0.05, lambda: fires.append(node.get_clock().now().nanoseconds))
+    try:
+        # 80 periods' worth of wall time. Nobody publishes /clock in this test.
+        end = time.monotonic() + 4.0
+        while time.monotonic() < end:
+            rclpy.spin_once(node, timeout_sec=0.05)
+        assert not fires, (
+            f"a clock-driven timer fired {len(fires)} times on a frozen sim "
+            "clock. hoverboard_bridge's _tx_tick would then run with a "
+            "permanently zero command age, cmd_timeout would never trip, and a "
+            "dead /cmd_vel publisher would leave the last command driving the "
+            "wheels. That needs a real guard in bridge_node, not a comment.")
+    finally:
+        node.destroy_node()

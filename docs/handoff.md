@@ -174,11 +174,22 @@ bir kez bile koşturulmamıştı ve **aşağıdakilerin tamamı sessizce yanlı�
    zamanına ayarlı bir düğüm asılı kalır ve biri fark ederdi. `use_sim_time`
    argümanı description/localization/nav2'de vardı, **`robot.launch.py` onu hiç
    tanımlamıyordu**; şimdi köprü ve battery dahil her düğüme geçiyor.
-   ⚠️⚠️ **GERÇEK ROBOTTA ASLA `true` OLMAZ** (varsayılan `false`): `/clock`
-   yayınlayan yoksa saat sonsuza kadar t=0'da kalır, yani `hoverboard_bridge`'in
-   `cmd_timeout` deadman'ı (`age = now - last_cmd_time`) hep sıfır çıkar ve
-   **hiç tetiklenmez** — yayıncı ölse bile son `/cmd_vel` gönderilmeye devam
-   eder. ESP32'nin kendi watchdog'u da kurtarmaz, çünkü köprü hâlâ konuşuyordur.
+   ⚠️⚠️ **GERÇEK ROBOTTA ASLA `true` OLMAZ** (varsayılan `false`). Sebebi
+   **ölçüldü** (`use_sim_time=True`, `/clock` yayınlayan yok, 4 sn):
+   **rclpy timer'ı 0 kez tetiklendi.** Yani `_tx_tick` hiç koşmaz — köprü
+   komut da göndermez, odometri de, diagnostics de. Motorlar durur (ESP32'nin
+   200 ms watchdog'u devreye girer), *yani güvenli tarafa düşer*; ama
+   drivetrain düğümü **sessizce tamamen ölmüştür** ve sebebini söyleyen hiçbir
+   log yoktur. Robot durur ve neden durduğunu kimse bilmez.
+   ⚠️ Not: burada bir kez "son `/cmd_vel` gönderilmeye devam eder" diye
+   yazılmıştı — **yanlıştı, ölçülmeden yazılmıştı.** Timer koşmadığı için
+   tekrar gönderim de yok. Sonuç (robotta asla açma) aynı, gerekçe değil.
+   Ölçüm artık test:
+   `test_sim_time_without_a_clock_silences_the_bridge_instead_of_freezing_it`
+   (hoverboard_bridge). Karşıt kontrol de yapıldı — `use_sim_time` kapalıyken
+   aynı timer 4 sn'de **80 kez** tetikleniyor, yani test boş değil. İleride
+   rclpy donmuş saatte timer koşturmaya başlarsa test patlar, ve o gün bu uyarı
+   yorumdan çıkıp `bridge_node`'a gerçek bir korumaya dönüşmek zorunda.
 5. **"RTF 2-3" iddiası yanlıştı.** `/stats`'tan ölçüldü: `<physics>` elementi
    hiç yokken bile step **1 ms**, gerçekleşen RTF **1.0000**. `empty.sdf`'e
    yine de açık `<physics>` konuldu — davranışı değiştirmiyor, sayıyı
@@ -547,9 +558,10 @@ kalır ve gerçek yığın her iki dünyada da devrededir.
 *(son güncelleme: 2026-09-08)*
 
 Yazılım İz A'da: **A1, A2, A3 (a–d, tamamı), A4, A6 (borcu dahil) ve SP1 bitti**;
-donanım B1'de (ST-Link) kilitli. Tam workspace doğrulaması **139 test**
-geçti (robot_sim 59, hoverboard_bridge 23, mpu6050 16, qmc5883l 23,
+donanım B1'de (ST-Link) kilitli. Tam workspace doğrulaması **140 test**
+geçti (robot_sim 59, hoverboard_bridge 24, mpu6050 16, qmc5883l 23,
 ina228 8, battery_manager 10), atlanan yok, **7 paketin tamamı** temiz build ediyor.
+Ölçülen süre: **9 dk 15 sn**.
 
 ⚠️ **Suite artık ~9.5 dakika** — dört Nav2 yığını ve iki Gazebo dünyası
 sırayla kalkıyor. Elle koşma alışkanlığı bu süreyle zayıflar; **A5 (CI) artık
@@ -682,13 +694,13 @@ Tamamlananlar:
 ### Testleri koşmak
 ```bash
 cd ros2 && source install/setup.bash
-python3 -m pytest src/hoverboard_bridge/test -q   # 23 (~50 sn)
+python3 -m pytest src/hoverboard_bridge/test -q   # 24 (~54 sn)
 python3 -m pytest src/robot_sim/test -q           # 59; 4'ü Nav2, 6'sı Gazebo (~490 sn)
 python3 -m pytest src/mpu6050_driver/test -q      # 16 (~0.1 sn)
 python3 -m pytest src/qmc5883l_driver/test -q     # 23 (~0.1 sn)
 python3 -m pytest src/ina228_driver/test -q       #  8 (~0.1 sn)
 python3 -m pytest src/battery_manager/test -q     # 10 (~18 sn)
-# hepsi: 139 test, ~9.5 dk
+# hepsi: 140 test, ~9.3 dk
 
 # Yığın kaldırmayan hızlı süzgeç (saniyeler). test_gazebo_config.py bunun
 # içinde ve A3'ün asıl hatasını — köprünün hiçbir şeye bağlı olmaması — tam
