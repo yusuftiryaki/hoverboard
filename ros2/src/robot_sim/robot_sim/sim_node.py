@@ -32,14 +32,18 @@ import random
 
 import rclpy
 from geometry_msgs.msg import Quaternion, TransformStamped
-from nav_msgs.msg import Odometry
+from nav_msgs.msg import OccupancyGrid, Odometry
+from rclpy.exceptions import ParameterUninitializedException
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+from rclpy.parameter import Parameter
+from rclpy.qos import DurabilityPolicy, QoSProfile
 from sensor_msgs.msg import Imu, MagneticField, NavSatFix, NavSatStatus
 from tf2_ros import TransformBroadcaster
 
 from hoverboard_bridge.esp32_sim import TX_PERIOD_S, Esp32Sim, PtyLink, step_once
 from robot_sim.gazebo_backend import GazeboBackend
+from robot_sim.obstacle_map import DEFAULT_GRID, build_obstacle_grid, parse_obstacle_params
 from robot_sim.world import KinematicWorld
 
 EARTH_RADIUS_M = 6378137.0
@@ -57,8 +61,11 @@ def yaw_to_quaternion(yaw: float) -> Quaternion:
 
 
 class SimNode(Node):
-    def __init__(self) -> None:
-        super().__init__("sim_node")
+    # **kwargs so tests can construct the node in-process with
+    # parameter_overrides instead of shelling out to `ros2 run`; the obstacle
+    # wiring is checked that way in test_obstacle_node.py.
+    def __init__(self, **kwargs) -> None:
+        super().__init__("sim_node", **kwargs)
 
         self.declare_parameter("link", "/tmp/fake_esp32")
         self.declare_parameter("estop", False)
@@ -76,6 +83,15 @@ class SimNode(Node):
         self.declare_parameter("board_units_per_rpm", 1.0)
         self.declare_parameter("slip_factor", 0.0)
         self.declare_parameter("backend", "kinematic")
+        # Obstacles as flat [x0, y0, x1, y1, ...] + [r0, r1, ...]: ROS
+        # parameters cannot hold a list of tuples.
+        # ⚠️ Declared BY TYPE with no default, not as `[]`. An empty list has no
+        # inferable type: rclpy reads it as a BYTE_ARRAY and then REJECTS the
+        # double array you actually pass — the same untyped-empty-list trap as
+        # nav2.yaml's `plugins: []`. Unset means an obstacle-free world, which
+        # is what every pre-A3c test expects.
+        self.declare_parameter("obstacle_centers", Parameter.Type.DOUBLE_ARRAY)
+        self.declare_parameter("obstacle_radii", Parameter.Type.DOUBLE_ARRAY)
 
         # ---- Fake IMU --------------------------------------------------------
         # This publishes what mpu6050_driver WOULD PUBLISH, not what the chip
@@ -122,6 +138,13 @@ class SimNode(Node):
 
         p = self.get_parameter
         self._rng = random.Random(int(p("seed").value))
+        # Parsed ONCE and shared: the world collides against these objects and
+        # the published map draws these same objects. Parsing twice would be
+        # two models of one world, which is precisely how A6 happened.
+        self._obstacles = parse_obstacle_params(
+            self._unset_as_empty("obstacle_centers"),
+            self._unset_as_empty("obstacle_radii"),
+        )
         if p("backend").value == "gazebo":
             self._world = GazeboBackend(
                 self,
@@ -130,12 +153,23 @@ class SimNode(Node):
                 board_units_per_rpm=p("board_units_per_rpm").value,
             )
             self.get_logger().info("Gazebo fizik backend'i seçildi")
+            if self._obstacles:
+                # Gazebo's obstacles live in hoverbot.sdf, not in a ROS
+                # parameter. Publishing a map of obstacles this backend will
+                # happily drive through is the phantom-obstacle bug, so say so
+                # rather than let the map and the physics disagree in silence.
+                self.get_logger().warning(
+                    "obstacle_centers Gazebo backend'inde YOKSAYILIYOR — "
+                    "engelleri hoverbot.sdf'e ekle; yayınlanan harita fizikle "
+                    "uyuşmayacak"
+                )
         else:
             self._world = KinematicWorld(
                 wheel_radius=p("wheel_radius").value,
                 wheel_separation=p("wheel_separation").value,
                 board_units_per_rpm=p("board_units_per_rpm").value,
                 slip_factor=p("slip_factor").value,
+                obstacles=self._obstacles,
             )
         self._link = PtyLink(p("link").value)
         self._esp = Esp32Sim(
@@ -168,7 +202,14 @@ class SimNode(Node):
         self._imu_pub = self.create_publisher(Imu, "imu/data_raw", 10)
         self._mag_pub = self.create_publisher(MagneticField, "imu/mag", 10)
         self._gps_pub = self.create_publisher(NavSatFix, "gps/fix", 10)
+        # TRANSIENT_LOCAL: the map is published once and latched, so a costmap
+        # that subscribes later still receives it.
+        map_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self._obstacle_map_pub = self.create_publisher(OccupancyGrid, "obstacle_map", map_qos)
         self._tf = TransformBroadcaster(self)
+
+        if self._obstacles:
+            self._publish_obstacle_map()
 
         self._last_tick = None
         self.create_timer(TX_PERIOD_S, self._tick)
@@ -177,6 +218,42 @@ class SimNode(Node):
         self.create_timer(1.0 / p("gps_rate_hz").value, self._publish_gps)
 
     # ---- The world -----------------------------------------------------------
+    def _unset_as_empty(self, name: str) -> list:
+        """Read a type-declared array parameter that may never have been set.
+
+        Reading an uninitialized one raises rather than returning [], so "no
+        obstacles given" gets said once, here, instead of at each call site.
+        """
+        try:
+            return list(self.get_parameter(name).value)
+        except ParameterUninitializedException:
+            return []
+
+    def _publish_obstacle_map(self) -> None:
+        """Latch the world's obstacles as an OccupancyGrid.
+
+        ⚠️ frame_id is `sim_world`, NOT `map`. These obstacles sit at ground
+        truth coordinates, while `map` is anchored to the navsat datum with the
+        GPS error baked in — the same two-origins-under-one-name trap that made
+        /ground_truth `sim_world` in the first place. Feeding this to Nav2's
+        global costmap (global_frame: map) is therefore a separate decision and
+        not a relabel: on the real robot the costmap's picture of the world IS
+        offset from the world by the localization error, and that offset is
+        worth simulating honestly rather than defining away.
+        """
+        spec = DEFAULT_GRID
+        message = OccupancyGrid()
+        message.header.frame_id = "sim_world"
+        message.header.stamp = self.get_clock().now().to_msg()
+        message.info.resolution = spec.resolution
+        message.info.width = spec.width
+        message.info.height = spec.height
+        message.info.origin.position.x = spec.origin_x
+        message.info.origin.position.y = spec.origin_y
+        message.info.origin.orientation.w = 1.0
+        message.data = build_obstacle_grid(self._obstacles, spec)
+        self._obstacle_map_pub.publish(message)
+
     def _tick(self) -> None:
         now = self.get_clock().now().nanoseconds * 1e-9
         dt = TX_PERIOD_S if self._last_tick is None else now - self._last_tick
