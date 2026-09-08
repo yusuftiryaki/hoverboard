@@ -13,9 +13,13 @@
 
   <exec_depend>rclpy</exec_depend>
   <exec_depend>hoverboard_bridge</exec_depend>
+  <!-- For earth_field: the simulated magnetic field has ONE definition, and it
+       lives with the magnetometer driver. See A6 in docs/handoff.md. -->
+  <exec_depend>qmc5883l_driver</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>nav_msgs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
 
   <test_depend>python3-pytest</test_depend>

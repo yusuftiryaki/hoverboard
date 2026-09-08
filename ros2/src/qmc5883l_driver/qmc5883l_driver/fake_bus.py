@@ -13,6 +13,8 @@ broken calibration pass.
 from __future__ import annotations
 
 import math
+
+from qmc5883l_driver import earth_field
 import random
 from typing import Dict, List
 
@@ -37,8 +39,10 @@ _RNG_BITS_TO_GAUSS = {0b00: 2, 0b01: 8}
 
 # Istanbul-ish: ~26 uT north, ~36 uT down. The horizontal component is what a
 # compass actually works with; the vertical part only matters once the robot tilts.
-EARTH_NORTH_T = 26e-6
-EARTH_DOWN_T = 36e-6
+# Re-exported so importers (and tests) keep their existing spelling; the
+# single definition lives in earth_field.py — see the warning there.
+EARTH_NORTH_T = earth_field.EARTH_NORTH_T
+EARTH_DOWN_T = earth_field.EARTH_DOWN_T
 
 
 def _clamp_int16(value: float) -> int:
@@ -119,18 +123,11 @@ class FakeQMC5883LBus:
         REP-103: x forward, y left, z up; yaw 0 = facing east. The earth's
         horizontal field points north, i.e. along +y at yaw 0.
         """
-        # Rotating the robot by yaw rotates the field by -yaw in the body frame:
-        # R(-yaw) @ (0, N) = (N sin yaw, N cos yaw). Sanity check the signs
-        # against a heading rather than trusting the algebra — facing north
-        # (yaw +90) the field lies straight along FORWARD, so bx = +N.
-        # ⚠️ This read `-EARTH_NORTH_T * sin(yaw)` and mirrored the whole earth.
-        # Nothing caught it: sim_node had the same flip, and the test helper
-        # inverted it back, so the fixtures all agreed with each other. It
-        # surfaced only when the fused heading was measured against ground truth
-        # and madgwick came out fighting the gyro. See docs/handoff.md.
-        bx = EARTH_NORTH_T * math.sin(self.yaw)
-        by = EARTH_NORTH_T * math.cos(self.yaw)
-        bz = -EARTH_DOWN_T                       # down is -z in REP-103
+        # ⚠️ The rotation itself is NOT computed here. It used to be, and
+        # sim_node computed its own copy, and both had the same sign flipped —
+        # A6. One definition now, in earth_field; this file only adds what a
+        # real chip adds on top of it.
+        bx, by, bz = earth_field.field_in_body_frame(self.yaw)
         return (
             bx + self._hard_iron[0] + self._rng.gauss(0.0, self._noise),
             by + self._hard_iron[1] + self._rng.gauss(0.0, self._noise),

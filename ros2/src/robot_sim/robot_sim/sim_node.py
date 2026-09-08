@@ -39,21 +39,17 @@ from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.qos import DurabilityPolicy, QoSProfile
 from sensor_msgs.msg import Imu, MagneticField, NavSatFix, NavSatStatus
+from std_msgs.msg import Bool
 from tf2_ros import TransformBroadcaster
 
 from hoverboard_bridge.esp32_sim import TX_PERIOD_S, Esp32Sim, PtyLink, step_once
+from qmc5883l_driver import earth_field
 from robot_sim.gazebo_backend import GazeboBackend
 from robot_sim.obstacle_map import DEFAULT_GRID, build_obstacle_grid, parse_obstacle_params
 from robot_sim.world import KinematicWorld
 
 EARTH_RADIUS_M = 6378137.0
 STANDARD_GRAVITY = 9.80665
-
-# Istanbul-ish, matching qmc5883l_driver's fake bus. The horizontal component is
-# what gives a heading; the vertical only matters once the robot tilts, which
-# this flat kinematic world never does.
-EARTH_NORTH_T = 26e-6
-EARTH_DOWN_T = 36e-6
 
 
 def yaw_to_quaternion(yaw: float) -> Quaternion:
@@ -92,6 +88,13 @@ class SimNode(Node):
         # is what every pre-A3c test expects.
         self.declare_parameter("obstacle_centers", Parameter.Type.DOUBLE_ARRAY)
         self.declare_parameter("obstacle_radii", Parameter.Type.DOUBLE_ARRAY)
+        # UNSURVEYED obstacles: physically there, absent from the published map.
+        # This is not the phantom-obstacle bug — that was the opposite, a map
+        # the physics did not share. This is the real world: the tree nobody
+        # entered into the survey. The costmaps cannot see it (nothing observes
+        # obstacles at runtime, nav2.yaml explains why), so Nav2 drives into it.
+        self.declare_parameter("unsurveyed_obstacle_centers", Parameter.Type.DOUBLE_ARRAY)
+        self.declare_parameter("unsurveyed_obstacle_radii", Parameter.Type.DOUBLE_ARRAY)
         # Keep in step with nav2.yaml's costmap robot_radius — see world.py.
         self.declare_parameter("robot_radius", 0.4)
 
@@ -147,6 +150,10 @@ class SimNode(Node):
             self._unset_as_empty("obstacle_centers"),
             self._unset_as_empty("obstacle_radii"),
         )
+        self._unsurveyed = parse_obstacle_params(
+            self._unset_as_empty("unsurveyed_obstacle_centers"),
+            self._unset_as_empty("unsurveyed_obstacle_radii"),
+        )
         if p("backend").value == "gazebo":
             self._world = GazeboBackend(
                 self,
@@ -155,15 +162,18 @@ class SimNode(Node):
                 board_units_per_rpm=p("board_units_per_rpm").value,
             )
             self.get_logger().info("Gazebo fizik backend'i seçildi")
-            if self._obstacles:
-                # Gazebo's obstacles live in hoverbot.sdf, not in a ROS
-                # parameter. Publishing a map of obstacles this backend will
-                # happily drive through is the phantom-obstacle bug, so say so
-                # rather than let the map and the physics disagree in silence.
-                self.get_logger().warning(
-                    "obstacle_centers Gazebo backend'inde YOKSAYILIYOR — "
-                    "engelleri hoverbot.sdf'e ekle; yayınlanan harita fizikle "
-                    "uyuşmayacak"
+            if self._obstacles or self._unsurveyed:
+                # ⚠️ REFUSE, do not warn. Gazebo's obstacles live in
+                # hoverbot.sdf; this backend cannot honour a ROS parameter. It
+                # used to log a warning and carry on, which meant publishing a
+                # map of obstacles the physics would happily drive through —
+                # the phantom-obstacle bug with a warning nobody reads in front
+                # of it. Refusing keeps the map and the physics unable to
+                # disagree. Spawning these in Gazebo is A3's own remaining work.
+                raise ValueError(
+                    "obstacle parameters are not supported by the gazebo "
+                    "backend — put obstacles in hoverbot.sdf, or run with "
+                    "backend:=kinematic"
                 )
         else:
             self._world = KinematicWorld(
@@ -171,7 +181,8 @@ class SimNode(Node):
                 wheel_separation=p("wheel_separation").value,
                 board_units_per_rpm=p("board_units_per_rpm").value,
                 slip_factor=p("slip_factor").value,
-                obstacles=self._obstacles,
+                # Both kinds collide identically; only the map tells them apart.
+                obstacles=self._obstacles + self._unsurveyed,
                 robot_radius=p("robot_radius").value,
             )
         self._link = PtyLink(p("link").value)
@@ -200,6 +211,11 @@ class SimNode(Node):
         self._mag_noise = p("mag_noise_ut").value * 1e-6
 
         self._truth_pub = self.create_publisher(Odometry, "ground_truth", 10)
+        # ⚠️ An ORACLE, like /ground_truth: the real robot has nothing that can
+        # publish this. Nothing in the robot stack may subscribe to it — it
+        # exists so tests can ask "did it actually hit something?" instead of
+        # inferring it from a frozen pose. Named _truth for that reason.
+        self._collision_pub = self.create_publisher(Bool, "collision_truth", 10)
         # imu/data_raw, matching mpu6050_driver: no orientation here.
         # imu_filter_madgwick fuses this with imu/mag into imu/data.
         self._imu_pub = self.create_publisher(Imu, "imu/data_raw", 10)
@@ -276,6 +292,8 @@ class SimNode(Node):
         self._last_tick = now
         step_once(self._esp, self._world, self._link, now, dt)
         self._publish_truth()
+        # GazeboBackend has no collision flag; absent means "not colliding".
+        self._collision_pub.publish(Bool(data=getattr(self._world, "collision", False)))
 
     def _publish_truth(self) -> None:
         stamp = self.get_clock().now().to_msg()
@@ -342,27 +360,15 @@ class SimNode(Node):
         msg = MagneticField()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = "mag_link"
-        # R(-yaw) @ (0, N) = (N sin yaw, N cos yaw): facing north (yaw +90) the
-        # field lies straight along FORWARD, so x = +N.
-        # ⚠️ This read `-EARTH_NORTH_T * sin(yaw)`, mirroring the simulated
-        # earth. The magnetometer then told madgwick the robot was turning the
-        # way it was not, madgwick split the difference with the gyro, and
-        # ekf_global's yaw came out ~120 deg wrong — which sent Nav2's goals
-        # somewhere else entirely and looked exactly like a broken controller.
-        # Invisible at yaw 0, where sin is 0 and both conventions agree; every
-        # sim test happened to start there. Keep this in step with
-        # qmc5883l_driver's fake_bus, which had the identical flip.
-        msg.magnetic_field.x = (
-            EARTH_NORTH_T * math.sin(yaw) + self._mag_residual[0]
-            + self._rng.gauss(0.0, self._mag_noise)
-        )
-        msg.magnetic_field.y = (
-            EARTH_NORTH_T * math.cos(yaw) + self._mag_residual[1]
-            + self._rng.gauss(0.0, self._mag_noise)
-        )
-        msg.magnetic_field.z = (
-            -EARTH_DOWN_T + self._mag_residual[2]
-            + self._rng.gauss(0.0, self._mag_noise)
+        # ⚠️ The field is NOT recomputed here. This node used to carry its own
+        # copy of the rotation, qmc5883l_driver's fake_bus carried another, and
+        # both had the same sign flipped — the mirrored earth of A6, which cost
+        # weeks of blaming Nav2. One definition, in earth_field; this node only
+        # adds the residual hard iron and the noise on top.
+        truth = earth_field.field_in_body_frame(yaw)
+        msg.magnetic_field.x, msg.magnetic_field.y, msg.magnetic_field.z = (
+            component + residual + self._rng.gauss(0.0, self._mag_noise)
+            for component, residual in zip(truth, self._mag_residual)
         )
         msg.magnetic_field_covariance[0] = -1.0
         self._mag_pub.publish(msg)

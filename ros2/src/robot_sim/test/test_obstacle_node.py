@@ -105,3 +105,55 @@ def test_obstacle_params_reach_both_the_world_and_a_latched_map(context, tmp_pat
 def test_mismatched_obstacle_params_fail_loudly_at_startup(context, tmp_path):
     with pytest.raises(ValueError, match="obstacle_radii"):
         make_sim(tmp_path, obstacle_centers=[1.0, 2.0, 3.0, 4.0], obstacle_radii=[0.3])
+
+
+def test_unsurveyed_obstacles_collide_but_never_reach_the_map(context, tmp_path):
+    """The real world's asymmetry: physically there, absent from the survey.
+
+    Not to be confused with the phantom-obstacle bug, which was the opposite —
+    a map the physics did not share. That one is impossible by construction now.
+    This one is the tree nobody wrote down, and the whole point is that Nav2
+    cannot see it. test_nav2.py measures what that costs.
+    """
+    node = make_sim(
+        tmp_path,
+        obstacle_centers=[2.0, 0.0], obstacle_radii=[0.5],
+        unsurveyed_obstacle_centers=[5.0, 1.0], unsurveyed_obstacle_radii=[0.25],
+    )
+    received = []
+    listener = rclpy.create_node("unsurveyed_listener")
+    listener.create_subscription(
+        OccupancyGrid, "obstacle_map", received.append,
+        QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL),
+    )
+    try:
+        surveyed = CircularObstacle(x=2.0, y=0.0, radius=0.5)
+        unsurveyed = CircularObstacle(x=5.0, y=1.0, radius=0.25)
+        # The world collides against both; only the map distinguishes them.
+        assert node._world._obstacles == (surveyed, unsurveyed)
+
+        deadline = node.get_clock().now().nanoseconds + 5_000_000_000
+        while not received and node.get_clock().now().nanoseconds < deadline:
+            rclpy.spin_once(listener, timeout_sec=0.1)
+        assert received, "latched obstacle_map hiç gelmedi"
+        data = received[0].data
+
+        # Cell centres of each obstacle: (x - -30.0) / 0.1, likewise y.
+        assert data[DEFAULT_GRID.index(320, 300)] == OCCUPIED    # surveyed
+        assert data[DEFAULT_GRID.index(350, 310)] != OCCUPIED    # unsurveyed
+    finally:
+        listener.destroy_node()
+        node.destroy_node()
+
+
+def test_the_gazebo_backend_refuses_obstacle_parameters(context, tmp_path):
+    """Refuse, do not warn.
+
+    Gazebo's obstacles live in hoverbot.sdf; the backend cannot honour a ROS
+    parameter. It used to log a warning and carry on, which published a map of
+    obstacles the physics would drive straight through — the phantom-obstacle
+    bug with a warning in front of it that nobody reads in a test log.
+    """
+    with pytest.raises(ValueError, match="gazebo backend"):
+        make_sim(tmp_path, backend="gazebo",
+                 obstacle_centers=[1.0, 1.0], obstacle_radii=[0.3])

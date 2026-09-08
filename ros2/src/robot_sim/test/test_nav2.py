@@ -38,6 +38,7 @@ from nav2_msgs.action import NavigateToPose         # noqa: E402
 from nav_msgs.msg import Odometry                   # noqa: E402
 from rclpy.action import ActionClient               # noqa: E402
 from rclpy.node import Node                         # noqa: E402
+from std_msgs.msg import Bool                       # noqa: E402
 
 GOAL_X, GOAL_Y = 5.0, 2.0
 # The goal checker stops at xy_goal_tolerance (1.0 m), so the robot legitimately
@@ -68,16 +69,34 @@ DETOUR_Y = 1.2
 STRAIGHT_LINE_Y = 0.5
 
 
-def wall_sim_args():
-    """sim_node CLI args placing the wall. Every value must be written with a
-    decimal point: `3` would arrive as an integer and rclpy rejects it against
-    a DOUBLE_ARRAY parameter."""
+def _as_list(values):
+    """ROS CLI syntax for a double array. Every value needs a decimal point:
+    `3` would arrive as an integer and rclpy rejects it against DOUBLE_ARRAY."""
+    return "[" + ",".join(f"{float(v)}" for v in values) + "]"
+
+
+def unsurveyed_sim_args():
+    """A tree nobody entered into the survey, sitting on the straight line.
+
+    Physically present, absent from /obstacle_map — so the costmaps never learn
+    about it and Nav2 plans straight through. Same shape as the surveyed wall,
+    so the two tests differ in exactly one thing: whether the map knows.
+    """
     centers = [value for y in WALL_YS for value in (WALL_X, y)]
     radii = [WALL_RADIUS] * len(WALL_YS)
-    as_list = lambda values: "[" + ",".join(f"{float(v)}" for v in values) + "]"
     return ("--ros-args",
-            "-p", f"obstacle_centers:={as_list(centers)}",
-            "-p", f"obstacle_radii:={as_list(radii)}")
+            "-p", f"unsurveyed_obstacle_centers:={_as_list(centers)}",
+            "-p", f"unsurveyed_obstacle_radii:={_as_list(radii)}")
+
+
+def wall_sim_args():
+    """sim_node CLI args placing the wall, SURVEYED: in the world and on the
+    published map both, so Nav2 can plan around it."""
+    centers = [value for y in WALL_YS for value in (WALL_X, y)]
+    radii = [WALL_RADIUS] * len(WALL_YS)
+    return ("--ros-args",
+            "-p", f"obstacle_centers:={_as_list(centers)}",
+            "-p", f"obstacle_radii:={_as_list(radii)}")
 
 
 class Navigator(Node):
@@ -88,7 +107,14 @@ class Navigator(Node):
         # go AROUND?" are different questions, and only the second one can tell
         # a detour from a robot that drove through the wall and out the far side.
         self.path = []
+        # The simulator's collision oracle — nothing on the real robot can
+        # publish this, which is exactly why a test may read it and the robot
+        # stack may not. Latching: a jam that clears still counts as a jam.
+        self.collided = False
         self.create_subscription(Odometry, "/ground_truth", self._on_truth, 10)
+        self.create_subscription(
+            Bool, "/collision_truth",
+            lambda m: setattr(self, "collided", self.collided or m.data), 10)
         self.client = ActionClient(self, NavigateToPose, "navigate_to_pose")
 
     def _on_truth(self, message):
@@ -247,3 +273,52 @@ def test_without_the_wall_the_same_goal_is_a_straight_line(nav2_stack, navigator
     assert deviation < STRAIGHT_LINE_Y, (
         f"with nothing in the way the robot still swung {deviation:.2f} m off "
         f"the line — the detour test cannot tell avoidance from wandering")
+
+
+def test_an_unsurveyed_obstacle_jams_the_robot_and_nav2_claims_success(
+        nav2_stack, navigator):
+    """⚠️ THIS TEST DOCUMENTS A DEFICIENCY, NOT A FEATURE.
+
+    The same wall and the same goal as the detour test, with one difference:
+    this wall is not on the map. Nothing in the costmaps knows it exists (the
+    robot has no range sensor — nav2.yaml's header explains why), so Nav2 plans
+    straight through, the robot jams against it, and Nav2 reports SUCCEEDED.
+
+    Why the lie is convincing: a jammed robot's wheels keep turning. The hall
+    sensors report the commanded speed, the bridge integrates it into odometry,
+    the EKF believes it — yaw comes from the gyro, but vx comes from the wheels
+    and nothing contradicts them — and the goal checker watches the robot
+    arrive. Only ground truth knows it never moved. The real robot does exactly
+    this: hub motors slipping against a rock report a healthy 0.5 m/s. The
+    simulator is not being unfair here, it is being accurate.
+
+    Fixing it needs a second opinion on whether the robot is moving, and every
+    candidate is blocked on hardware: GPS (present, but ekf_global is kept out
+    of this stack by the yaw problem), motor current from the INA228 (SP1's
+    software is ready, the sensor is not bought), or the bumper (contact only,
+    and this wall gets hit dead-on). So it is documented rather than fixed.
+
+    When it IS fixed, this test fails. That is the point of it — read the
+    failure as "the gap closed", update it, and say so in the handoff.
+    """
+    nav2_stack(*unsurveyed_sim_args())
+    navigator.spin(3.0)
+    assert navigator.truth is not None, "no /ground_truth — is sim_node up?"
+
+    status = navigator.go(WALL_GOAL_X, WALL_GOAL_Y, timeout=180.0)
+    navigator.spin(1.0)
+    x, y = navigator.position
+    error = math.hypot(x - WALL_GOAL_X, y - WALL_GOAL_Y)
+
+    assert navigator.collided, (
+        "the robot never touched the unsurveyed wall — if something now avoids "
+        "obstacles it cannot see, this test no longer describes reality")
+    assert x < WALL_X, (
+        f"ground truth puts the robot at x={x:.2f}, past the wall at {WALL_X} — "
+        f"the world let it drive through")
+    assert error > ARRIVAL_TOLERANCE, (
+        f"the robot is only {error:.2f} m from the goal despite the wall")
+    # The deficiency itself, pinned. Not an endorsement.
+    assert status == 4, (
+        f"Nav2 reported {status} instead of a bogus SUCCEEDED — if it now "
+        f"detects being stuck, delete this assertion and update the handoff")
