@@ -5,7 +5,8 @@
   <version>0.1.0</version>
   <description>
     Hardware-free simulated world for the robot. Drives hoverboard_bridge's
-    Esp32Sim brain with a kinematic backend or Gazebo Sim physics backend.
+    Esp32Sim brain with a kinematic backend (fast, CI, exact ground truth) or
+    a Gazebo Sim physics backend (mass, friction, wheel slip, obstacles).
     The real bridge, binary protocol and safety logic stay in the loop.
   </description>
   <maintainer email="enesis@entes.com.tr">Enes</maintainer>
@@ -21,8 +22,13 @@
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
+  <!-- The gazebo backend only. Contacts is how /collision_truth stops being a
+       guess in the physics world; the kinematic backend never imports it. -->
+  <exec_depend>ros_gz_interfaces</exec_depend>
 
   <test_depend>python3-pytest</test_depend>
+  <!-- test_gazebo_config.py parses bridge.yaml against the SDFs. -->
+  <test_depend>python3-yaml</test_depend>
 
   <export>
     <build_type>ament_python</build_type>

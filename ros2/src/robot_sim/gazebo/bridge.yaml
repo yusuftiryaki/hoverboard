@@ -1,10 +1,55 @@
-- ros_topic_name: "/cmd_vel_gazebo"
+# ros_gz_bridge topic map for the A3 physics backend.
+#
+# ⚠️ EVERY gz_topic_name HERE MUST EXIST IN hoverbot.sdf / empty.sdf. The bridge
+# does not check: naming a gz topic nobody publishes is silent, and a
+# ROS_TO_GZ entry pointed at nothing swallows commands without a word. That is
+# exactly what this file used to do — it looked for /model/hoverbot/cmd_vel and
+# /model/hoverbot/odometry while the SDF published /cmd_vel and /odometry, so
+# the whole bridge was connected to nothing and every test that could have
+# noticed had been deferred. test_gazebo_config.py now parses this file and the
+# SDFs together and fails if they drift apart again; it needs no Gazebo and
+# takes milliseconds.
+
+# Sim time. Without this the ROS half of the stack runs on the wall clock while
+# Gazebo runs on its own, and every dt the EKF and the bridge compute is taken
+# against the wrong clock. Needs use_sim_time:=true on the ROS nodes to matter.
+- ros_topic_name: "/clock"
+  gz_topic_name: "/clock"
+  ros_type_name: "rosgraph_msgs/msg/Clock"
+  gz_type_name: "gz.msgs.Clock"
+  direction: GZ_TO_ROS
+
+# The wheel command GazeboBackend produces, after the simulated ESP32 has had
+# its say (watchdog, e-stop, bumper veto, mixer).
+- ros_topic_name: "/gazebo/cmd_vel"
   gz_topic_name: "/model/hoverbot/cmd_vel"
   ros_type_name: "geometry_msgs/msg/Twist"
   gz_type_name: "gz.msgs.Twist"
   direction: ROS_TO_GZ
-- ros_topic_name: "/odom_gazebo"
-  gz_topic_name: "/model/hoverbot/odometry"
+
+# What the WHEELS say: DiffDrive's dead reckoning from the joint angles, the
+# stand-in for the hall sensors. GazeboBackend converts it back to board units
+# and hands it to Esp32Sim as measured wheel speed.
+- ros_topic_name: "/gazebo/wheel_odometry"
+  gz_topic_name: "/model/hoverbot/wheel_odometry"
   ros_type_name: "nav_msgs/msg/Odometry"
   gz_type_name: "gz.msgs.Odometry"
+  direction: GZ_TO_ROS
+
+# What the WORLD says: OdometryPublisher differentiating the true model pose.
+# The answer key. Nothing in the robot stack may subscribe to this.
+- ros_topic_name: "/gazebo/ground_truth"
+  gz_topic_name: "/model/hoverbot/ground_truth"
+  ros_type_name: "nav_msgs/msg/Odometry"
+  gz_type_name: "gz.msgs.Odometry"
+  direction: GZ_TO_ROS
+
+# The chassis contact sensor -> /collision_truth. ⚠️ gz-sim names a contact
+# sensor's topic from its scoped position in the world and IGNORES the <topic>
+# given in the SDF, so this long name is the real one and it embeds the world
+# name (empty) and the model name (hoverbot). Change either and change this.
+- ros_topic_name: "/gazebo/contacts"
+  gz_topic_name: "/world/empty/model/hoverbot/link/base_link/sensor/chassis_contact/contact"
+  ros_type_name: "ros_gz_interfaces/msg/Contacts"
+  gz_type_name: "gz.msgs.Contacts"
   direction: GZ_TO_ROS

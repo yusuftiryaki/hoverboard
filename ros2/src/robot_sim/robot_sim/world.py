@@ -13,7 +13,13 @@ no motor torque curve. Wheels turn exactly as commanded (through a lag) and the
 robot goes exactly where perfect differential-drive kinematics says. Slip alone
 is the single biggest source of real odometry error, so a good result here proves
 the maths is wired up correctly — NOT that the robot will localize well outdoors.
-That question needs A3 (Gazebo) and, more honestly, dirt.
+
+For slip, `backend:=gazebo` puts the same simulated ESP32 on top of real physics
+and the difference is measurable: stepping to 1 m/s there, the wheels over-report
+by 143 mm over 2.5 m, and ramping to the same speed over the same distance costs
+2 mm (test_gazebo_physics.py). This file's `slip_factor` models the same effect
+as a number YOU choose; that one derives it from friction and mass. Honestly,
+though, the real answer needs dirt.
 """
 
 from __future__ import annotations

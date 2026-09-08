@@ -1,6 +1,6 @@
-"""The kinematic world as a ROS node: ESP32 + wheels + IMU + GPS, no hardware.
+"""The simulated world as a ROS node: ESP32 + wheels + IMU + GPS, no hardware.
 
-    /cmd_vel ─► hoverboard_bridge ─pty─► Esp32Sim ─► KinematicWorld ─► ground truth
+    /cmd_vel ─► hoverboard_bridge ─pty─► Esp32Sim ─►  backend  ─► ground truth
                       ▲                                    │
                       └────────── EspFeedback ◄────────────┘
                                                            ├─► /ground_truth  (the answer key)
@@ -22,7 +22,22 @@ which fake_bus already unit-tests; re-testing it through a simulated I2C bus
 would add nothing. hoverboard_bridge is NOT bypassed — the real bridge and the
 real 0xABCD protocol stay in the loop, which is the whole reason Esp32Sim exists.
 
-⚠️ NOT physics. No slip, no mass, no tipping. See world.py.
+⚠️ TWO backends, chosen with `backend:=`:
+
+    kinematic (default)  KinematicWorld — fast, deterministic, exact ground
+                         truth, and NO physics: no slip, no mass, no tipping.
+                         The wheels turn exactly as commanded and the robot
+                         goes exactly where the maths says. See world.py.
+    gazebo               GazeboBackend — real physics under the same simulated
+                         ESP32: mass, friction, wheel slip, obstacles it
+                         actually collides with. Needs `gz sim` running; see
+                         robot_bringup/launch/gazebo.launch.py.
+
+Everything below the backend line — the fake IMU, magnetometer and GPS, the
+ground truth publisher, the obstacle map — is shared, and reads the backend's
+`pose`, `v` and `omega`. In the Gazebo world those come from the model's TRUE
+pose, never from its wheel odometry; conflating the two would make
+/ground_truth agree with /odom by construction (see gazebo_backend.py).
 """
 
 from __future__ import annotations
@@ -79,6 +94,9 @@ class SimNode(Node):
         self.declare_parameter("board_units_per_rpm", 1.0)
         self.declare_parameter("slip_factor", 0.0)
         self.declare_parameter("backend", "kinematic")
+        # Which Gazebo world to spawn obstacles into; must match the world name
+        # in empty.sdf and the -world argument `ros_gz_sim create` is given.
+        self.declare_parameter("gazebo_world", "empty")
         # Obstacles as flat [x0, y0, x1, y1, ...] + [r0, r1, ...]: ROS
         # parameters cannot hold a list of tuples.
         # ⚠️ Declared BY TYPE with no default, not as `[]`. An empty list has no
@@ -155,26 +173,35 @@ class SimNode(Node):
             self._unset_as_empty("unsurveyed_obstacle_radii"),
         )
         if p("backend").value == "gazebo":
+            if p("slip_factor").value:
+                # Slip is what this backend is FOR — it comes out of friction,
+                # mass and load transfer, and hoverbot.sdf's wheel mu is the
+                # knob. Silently ignoring a slip_factor here would let a test
+                # think it had configured slip when the number went nowhere.
+                raise ValueError(
+                    "slip_factor is a KinematicWorld knob and does nothing "
+                    "under the gazebo backend, where slip comes from the wheel "
+                    "friction in hoverbot.sdf"
+                )
+            # ⚠️ The obstacles go to GAZEBO, from the same tuple the map is
+            # drawn from. This used to raise instead: the backend could not
+            # honour the parameter, and warning-and-carrying-on would have
+            # published a map of obstacles the physics drove straight through —
+            # the phantom-obstacle bug with a warning in front of it that
+            # nobody reads. Rendering both from one list (gazebo_obstacles.py)
+            # is what finally makes the map and the physics unable to disagree,
+            # which is what the refusal was standing in for.
             self._world = GazeboBackend(
                 self,
                 wheel_radius=p("wheel_radius").value,
                 wheel_separation=p("wheel_separation").value,
                 board_units_per_rpm=p("board_units_per_rpm").value,
+                # Both kinds are physically there; only the map tells them
+                # apart. Same split as the kinematic world below.
+                obstacles=self._obstacles + self._unsurveyed,
+                world=p("gazebo_world").value,
             )
             self.get_logger().info("Gazebo fizik backend'i seçildi")
-            if self._obstacles or self._unsurveyed:
-                # ⚠️ REFUSE, do not warn. Gazebo's obstacles live in
-                # hoverbot.sdf; this backend cannot honour a ROS parameter. It
-                # used to log a warning and carry on, which meant publishing a
-                # map of obstacles the physics would happily drive through —
-                # the phantom-obstacle bug with a warning nobody reads in front
-                # of it. Refusing keeps the map and the physics unable to
-                # disagree. Spawning these in Gazebo is A3's own remaining work.
-                raise ValueError(
-                    "obstacle parameters are not supported by the gazebo "
-                    "backend — put obstacles in hoverbot.sdf, or run with "
-                    "backend:=kinematic"
-                )
         else:
             self._world = KinematicWorld(
                 wheel_radius=p("wheel_radius").value,
@@ -296,6 +323,16 @@ class SimNode(Node):
         self._collision_pub.publish(Bool(data=getattr(self._world, "collision", False)))
 
     def _publish_truth(self) -> None:
+        # ⚠️ Say nothing rather than say (0, 0, 0). The gazebo backend's pose is
+        # whatever Gazebo last sent, and before the first message that is the
+        # origin — indistinguishable from a robot that is up and not moving.
+        # An answer key that reads "at the origin, stationary" while the stack
+        # is still connecting is worse than no answer key: every localization
+        # measurement taken against it is measured against a constant. The
+        # kinematic world has no such gap and reports True.
+        if not getattr(self._world, "ground_truth_seen", True):
+            return
+
         stamp = self.get_clock().now().to_msg()
         pose = self._world.pose
 

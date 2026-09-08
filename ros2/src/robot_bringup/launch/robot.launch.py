@@ -59,6 +59,7 @@ def generate_launch_description():
     fake_imu = LaunchConfiguration("fake_imu")
     fake_mag = LaunchConfiguration("fake_mag")
     fake_battery = LaunchConfiguration("fake_battery")
+    use_sim_time = LaunchConfiguration("use_sim_time")
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -103,9 +104,31 @@ def generate_launch_description():
             "esp32_port", default_value="/dev/esp32",
             description="Point at /tmp/fake_esp32 to drive the simulator instead.",
         ),
+        # ⚠️ THE WHOLE STACK OR NONE OF IT. description/localization/nav2 each
+        # declared their own use_sim_time and nothing ever set it, so with
+        # Gazebo running the ROS half timestamped everything off the wall clock
+        # while the physics ran on sim time. Nothing errors: the EKF just
+        # integrates against dt values that belong to a different clock, and
+        # every velocity and acceleration it derives is wrong by the real-time
+        # factor. Declared here and threaded into every node below.
+        #
+        # ⚠️⚠️ NEVER TRUE ON THE ROBOT. With no /clock publisher a node on sim
+        # time sits at t = 0 forever, so hoverboard_bridge's cmd_timeout
+        # (age = now - last_cmd_time) is permanently zero and NEVER trips — it
+        # would keep resending the last /cmd_vel after the publisher died. The
+        # ESP32's own watchdog cannot save that either: the bridge is still
+        # talking. Default false, and it belongs to the Gazebo world only.
+        DeclareLaunchArgument(
+            "use_sim_time", default_value="false",
+            description="Take time from /clock. Required with the Gazebo backend "
+                        "(gazebo.launch.py). NEVER on the real robot: with no "
+                        "/clock the clock never advances and the bridge's "
+                        "cmd_timeout deadman never fires.",
+        ),
 
         IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(os.path.join(launch_dir, "description.launch.py"))
+            PythonLaunchDescriptionSource(os.path.join(launch_dir, "description.launch.py")),
+            launch_arguments={"use_sim_time": use_sim_time}.items(),
         ),
 
         Node(
@@ -113,7 +136,8 @@ def generate_launch_description():
             executable="hoverboard_bridge",
             name="hoverboard_bridge",
             output="screen",
-            parameters=[bridge_params, {"port": esp32_port}],
+            parameters=[bridge_params, {"port": esp32_port,
+                                        "use_sim_time": use_sim_time}],
             remappings=[("battery", "battery_raw")],
             # If the serial port vanishes (ESP32 unplugged, USB brownout) the
             # node dies on purpose. Respawning is right: the ESP32's own watchdog
@@ -127,7 +151,8 @@ def generate_launch_description():
             executable="battery_monitor",
             name="battery_monitor",
             output="screen",
-            parameters=[battery_params, {"use_fake_bus": fake_battery}],
+            parameters=[battery_params, {"use_fake_bus": fake_battery,
+                                         "use_sim_time": use_sim_time}],
             respawn=True,
             respawn_delay=2.0,
         ),
@@ -142,17 +167,20 @@ def generate_launch_description():
                 "use_camera": use_camera,
                 "fake_imu": fake_imu,
                 "fake_mag": fake_mag,
+                "use_sim_time": use_sim_time,
             }.items(),
         ),
 
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(os.path.join(launch_dir, "localization.launch.py")),
             condition=IfCondition(use_localization),
-            launch_arguments={"use_gps": use_gps}.items(),
+            launch_arguments={"use_gps": use_gps,
+                              "use_sim_time": use_sim_time}.items(),
         ),
 
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(os.path.join(launch_dir, "nav2.launch.py")),
             condition=IfCondition(use_nav2),
+            launch_arguments={"use_sim_time": use_sim_time}.items(),
         ),
     ])

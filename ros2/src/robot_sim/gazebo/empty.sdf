@@ -1,9 +1,38 @@
 <?xml version="1.0"?>
+<!--
+  The A3 physics world: flat ground, nothing in it. Obstacles are spawned into
+  it at runtime from sim_node's obstacle parameters (see gazebo_backend.py), so
+  that the map Nav2 reads and the geometry the robot bumps into are rendered
+  from ONE list. Writing them into this file instead would be a second copy of
+  the world, which is how A6 happened.
+-->
 <sdf version="1.9">
   <world name="empty">
+    <!-- ⚠️ STATED, not defaulted. Sim time is the clock the whole ROS stack
+         runs on once use_sim_time is set, so the step size is the resolution of
+         every timestamp in the system and the real-time factor decides whether
+         a 10-second test measures 10 seconds of robot.
+         MEASURED with this element absent: step 1 ms, achieved RTF 1.0000 (from
+         /stats over an idle world) — i.e. the SDF defaults were already these
+         values. An earlier session estimated "RTF 2-3" from one hand-timed run
+         and it was simply wrong; the 14 m it saw in ~10 s came from a free-
+         spinning wheel, not from fast time. Kept at 1.0 rather than raised:
+         the suite is already slow, but a world that runs faster than it can
+         solve silently drops to whatever RTF it can reach, and every timing
+         number measured here would then depend on how busy the machine is. -->
+    <physics name="1ms" type="dart">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+
     <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
     <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
     <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    <!-- Feeds hoverbot.sdf's chassis contact sensor, which is the only honest
+         source for /collision_truth in this world. Without this system the
+         sensor exists in the SDF and silently never publishes. -->
+    <plugin filename="gz-sim-contact-system" name="gz::sim::systems::Contact"/>
+
     <model name="ground_plane">
       <static>true</static>
       <link name="ground">

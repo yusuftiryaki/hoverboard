@@ -146,6 +146,94 @@ Batarya 36V → [30-40A sigorta] → ┬→ [buck 5V/5A] → Pi (+ USB ile ESP32
    rejected the goal" — navigasyon hatası gibi okunur, aslında yarıştır).
    Kabul edilene kadar tekrar denenmeli.
 
+## A3'te bulunan tuzaklar (fizik ilk kez GERÇEKTEN koşunca)
+A3a "yazılmış" görünüyordu: kod, SDF, launch, birim testleri, hepsi yeşil. Fizik
+bir kez bile koşturulmamıştı ve **aşağıdakilerin tamamı sessizce yanlıştı.**
+
+1. ⚠️⚠️ **Gazebo DiffDrive'ın `/odometry`'si GROUND TRUTH DEĞİL.** Tekerlek
+   joint açılarından yaptığı ölü hesap — yani tam olarak hall sensörlerinin
+   muadili. Tekerlekler boşta dönerken de mesafe saymaya devam eder.
+   **Ölçüldü:** eski modelde `/odometry` **5.47 m** derken gerçek poz
+   **3.8e-9 m** idi; robot hiç kımıldamamıştı. Önceki oturumun elle bakıp
+   "model GERÇEKTEN SÜRÜYOR (x: 0 → 14.2 m)" notu **bu yüzden yanlıştı**.
+   Ground truth artık ayrı bir `OdometryPublisher`'dan geliyor. İkisi tek
+   topic'e düşerse `/ground_truth` ile `/odom` **tanım gereği** uyuşur ve bu
+   dünyada ölçülen her lokalizasyon sayısı totolojiye döner.
+2. **`<pose>`'suz bir `<link>` model orijininde durur ve joint'in `<pose>`'u
+   çocuğunu TAŞIMAZ.** İki tekerlek de orijinde, gövde kutusunun içine gömülü,
+   hiçbir şeye değmiyordu; okuyanın "tekerlek yerleşimi" sandığı `<pose>`'lar
+   joint'lerin üzerindeydi. Gazebo yine de onları hız kontrolüyle döndürdü,
+   DiffDrive yine de odometri yayınladı. Yüzeydeki her işaret ("sim koşuyor,
+   model spawn oluyor, odometri artıyor") çalışan bir robota benziyordu.
+3. **`bridge.yaml` ile SDF farklı topic isimleri söylüyordu** ve köprü bunu
+   şikâyet etmez: GZ→ROS tarafı sessiz kalır, ROS→GZ tarafı her komutu yutar.
+   Köprünün tamamı hiçbir şeye bağlı değildi. Artık `test_gazebo_config.py` iki
+   dosyayı birlikte ayrıştırıp karşılaştırıyor — **Gazebo'suz, 0.06 saniyede.**
+4. **`/clock` köprülenmemişti VE `use_sim_time` hiçbir yerde set edilmiyordu.**
+   İkisi aynı anda eksik olduğu için ikisi de görünmedi: `/clock` olmadan sim
+   zamanına ayarlı bir düğüm asılı kalır ve biri fark ederdi. `use_sim_time`
+   argümanı description/localization/nav2'de vardı, **`robot.launch.py` onu hiç
+   tanımlamıyordu**; şimdi köprü ve battery dahil her düğüme geçiyor.
+   ⚠️⚠️ **GERÇEK ROBOTTA ASLA `true` OLMAZ** (varsayılan `false`): `/clock`
+   yayınlayan yoksa saat sonsuza kadar t=0'da kalır, yani `hoverboard_bridge`'in
+   `cmd_timeout` deadman'ı (`age = now - last_cmd_time`) hep sıfır çıkar ve
+   **hiç tetiklenmez** — yayıncı ölse bile son `/cmd_vel` gönderilmeye devam
+   eder. ESP32'nin kendi watchdog'u da kurtarmaz, çünkü köprü hâlâ konuşuyordur.
+5. **"RTF 2-3" iddiası yanlıştı.** `/stats`'tan ölçüldü: `<physics>` elementi
+   hiç yokken bile step **1 ms**, gerçekleşen RTF **1.0000**. `empty.sdf`'e
+   yine de açık `<physics>` konuldu — davranışı değiştirmiyor, sayıyı
+   Gazebo sürüm yükseltmesinin sessizce kaydıramayacağı hale getiriyor.
+6. **gz-sim, contact sensörünün topic'ini KENDİ üretir ve SDF'teki `<topic>`'u
+   yok sayar.** Gerçek isim `/world/<dünya>/model/<model>/link/<link>/sensor/
+   <sensör>/contact`, yani dünya veya model adını değiştirmek
+   `/collision_truth`'u sessizce kör eder. `test_gazebo_config.py` ismi
+   kopyalamak yerine yeniden kuruyor.
+7. **İki `gz` sunucusu hata değil, sessiz felakettir.** İkisi de
+   `/world/empty/...` üzerinde cevap verir: engel bir dünyaya spawn olur, robot
+   ötekinde sürer, köprü hangisini bulduysa ona bağlanır. Bu yaşandı — test
+   "x=4.93'te durdu, 2.15 bekleniyordu" dedi ve bozuk fizik gibi okundu.
+   Fixture artık aynı anda tek dünyaya izin veriyor ve önce kalıntı arıyor.
+8. **`/odom` ile `/ground_truth`'un en yeni mesajları AYNI ANA ait değil.**
+   `/odom` pty gidiş-dönüşünün gecikmesini taşır; 1 m/s'de iki örnek ~10 ms ve
+   ~10 mm ayrı düşüyordu — ölçülmek istenen patinajla aynı büyüklükte ve
+   makul görünen bir işarette. İkisi tek damgaya interpole ediliyor; bu
+   düzeltme patinajsız kontrol koşusunu **−19 mm'den −2 mm'ye** taşıdı.
+   (Bu arada köprüde sistematik bir odometri sapması olduğu şüphesi de böyle
+   çürüdü: sapma benim ölçüm kusurumdu.)
+
+### A3'te ölçülen sayılar (Gazebo, fizik VAR)
+Tam zincir: `/cmd_vel` → `hoverboard_bridge` → pty → `Esp32Sim` →
+`GazeboBackend` → Gazebo → hall → `/odom`, `/ground_truth`'a karşı.
+
+| Ölçüm | Değer |
+|---|---|
+| Durdan **adım** komutla 2.5 m'de patinaj, v=0.25 / 0.5 / 1.0 m/s | **+8.4 / +35.0 / +143.4 mm** |
+| Elle türetilen alt sınır `v²/(2·μ·g)`, μ=0.5 | 6.4 / 25.5 / 102.0 mm |
+| Ölçülenin sınıra oranı | 1.31 / 1.37 / 1.41 (her hızda aynı) |
+| Aynı 2.5 m, aynı 1.0 m/s, ama **rampalı** (karşıt test) | **−2.4 mm** |
+| 3 tekrarın yayılımı | < 2 mm |
+| 8 yönde gerçek rota ile burun yönü farkı | **0.02°** |
+| Engele çarpma noktası (elle: 3.0 − 0.5 − 0.35) | **2.1500 m** |
+| Sıkışmışken 6 sn'de: gerçek / `/odom` | **0.0000 m / +2.97 m** |
+
+> **Patinajın neden alt sınırı elle türetilebiliyor:** DiffDrive joint'leri hızla
+> sürdüğü için adım komutta temas yüzeyi anında `v`'ye fırlar, gövde ise hâlâ
+> durur — patinaj başlar. Sürtünme gövdeyi en fazla `a = μ·g` ile hızlandırabilir
+> (bu, tahrikli tekerleklerin ağırlığın TAMAMINI taşıdığı hal; bizimkiler
+> taşımıyor, hızlanınca yük arka caster'a biner). Patinaj gövde `v`'ye ulaşınca
+> biter: tekerlek `v·t` rapor ederken gövde `v·t/2` gitmiştir, fark `v²/(2a)`.
+> `μ·g` bunu **bir tavan hızlanma** yaptığı için sonuç bir **alt sınır**, uydurma
+> bir eğri uydurması değil. Ölçülenin sınıra oranının her hızda 1.4 çıkması da
+> tam olarak yük transferi açığının imzası.
+>
+> **Karşıt test neden ŞART:** patinaj tek başına "odometri fazla sayıyor"
+> demekten ibaret ve bunu bir tekerlek yarıçapı / birim-başına-rpm ölçek hatası
+> da yapar. Ayıran şey **sabit mesafede** ölçmek: ölçek hatası her hızda AYNI
+> fazlalığı verir, sürtünme patinajı `v²` ile büyür. Ölçülen oranlar 4.17 ve
+> 4.10 (beklenen 4.0); ölçek hatası 1.0 verirdi. İkinci karşıt test rampa: aynı
+> hız, aynı mesafe, sadece lastikten sahip olmadığı kuvvet istenmiyor → patinaj
+> 60 kat küçülüyor ve işareti dönüyor.
+
 ## Yol boyunca yapılan ÖNEMLİ düzeltmeler (tekrarlanmasın)
 1. ⚠️ **Flash sırasında batarya BAĞLI olmalı.** (Önce "bağlama" denmişti, YANLIŞ.)
    Kart self-latch ile besleniyor, MCU gücünü 36V'tan alıyor. **ST-Link'in
@@ -165,7 +253,8 @@ docs/handoff.md             bu dosya
 firmware/esp32_bridge/      platformio.ini + src/main.cpp  (pio run ile derlenir)
 ros2/src/hoverboard_bridge/ ESP32 seri köprü düğümü (Python) + protokol + ESP32 beyni
 ros2/src/mpu6050_driver/    IMU sürücüsü (Jazzy'de yok, kendimiz yazdık) + sahte I2C
-ros2/src/robot_sim/         kinematik dünya + ground truth + sahte IMU/mag/GPS + engel haritası + yığın testleri
+ros2/src/robot_sim/         iki dünya (kinematik + Gazebo fiziği) + ground truth + sahte IMU/mag/GPS + engel haritası + yığın testleri
+ros2/src/robot_sim/gazebo/  empty.sdf (dünya + fizik), hoverbot.sdf (model), bridge.yaml (ROS-GZ eşlemesi)
 ros2/src/qmc5883l_driver/   manyetometre sürücüsü + sahte I2C (mutlak yönün tek kaynağı)
 ros2/src/ina228_driver/     INA228 register seviyesi akım sürücüsü + sahte I2C
 ros2/src/battery_manager/   SoC tahmini + yetkili /battery yayıncısı
@@ -306,8 +395,9 @@ olarak yayınlıyor; montaj yönü **URDF'teki `imu_joint` rpy'ında** tarif edi
     haritası** taşıyor ve Nav2 ondaki engelleri gerçekten dolanıyor (ölçüldü:
     2.00 m sapma). Ama menzil sensörü hâlâ yok, yani **survey edilmemiş** engel
     görünmez: haritaya girilmemiş ağaca hâlâ güvenle sürer. Ayrım kritik.
-- **A3. Gazebo arka ucu** — aynı `fake_esp32`'nin arkasına takılır (mimari kararı
-  aşağıda), fizik + patinaj + engel dünyası. Eski adım 7'nin ön koşulu.
+- ✅ **A3. Gazebo arka ucu — BİTTİ, fizik uçtan uca ölçüldü (2026-09-08).**
+  Aynı `fake_esp32`'nin arkasına takılıyor (mimari kararı aşağıda): fizik,
+  patinaj ve engel dünyası. Detaylar aşağıdaki A3 dilimlerinde.
 - ✅ **A4. Manyetometre sürücüsü** — **yazıldı** (`qmc5883l_driver` + madgwick),
   yaw sorunu çözüldü. Chip hâlâ alınmadı; sahte I2C'ye karşı doğrulandı.
 - ✅ **A6. Aynalı manyetometre hatası** — sim'deki tek eksi işareti; A2'yi ve
@@ -315,22 +405,28 @@ olarak yayınlıyor; montaj yönü **URDF'teki `imu_joint` rpy'ında** tarif edi
 - ✅ **SP1. Batarya izleme yazılımı** — INA228 register sürücüsü, sahte I2C,
   coulomb sayan SoC ve sensör yokken voltaj-yalnız `/battery` modu yazıldı;
   launch'ta köprü `/battery_raw`, `battery_monitor` `/battery` yayınlıyor.
-- ✅ **A3. Gazebo arka uç ilk dilim** — `GazeboBackend` (tekerlek hedefleri → `/cmd_vel_gazebo`,
-  `/odom_gazebo` → ölçülen rpm), `hoverbot.sdf` (2 hub tekerlekli, diff-drive plugin),
-  `bridge.yaml` ROS-GZ mapping, `gazebo.launch.py` ve unit testleri yazıldı.
-  Doğrulanan: sim_node PyType compile ✓, PTY write buffer BlockingIOError fix ✓,
-  backend unit testleri 12/12 ✓. **Sınırlama:** Gazebo DiffDrive sistem plugin'i
-  container'da kurulu değil → physics/odometry testleri spec dışı bırakıldı (B2 ertelendi).
-  Kinematik world regresyonu temiz (10/10 test ✓).
-- ✅ **A3b. Slip modeli** — `KinematicWorld` artık `slip_factor` ile tekerlek
-  hız kaybını modelleyebiliyor; hall ölçümü ile gerçek poz arasındaki fark
-  testle sabitlendi. Varsayılan `0.0`, yüzey parametresi ölçüm gelene kadar
-  tahmin edilmiyor.
+- ✅ **A3a. Gazebo arka uç ilk dilim** — `GazeboBackend`, `hoverbot.sdf`,
+  `bridge.yaml`, `gazebo.launch.py` ve birim testleri yazıldı.
+  ⚠️ Bu dilim **hiç fizik koşturmadan** yazılmıştı ve içindeki her şey
+  sessizce yanlıştı (aşağıdaki A3 tuzakları). Ders: "kod yazıldı" ile "çalışıyor"
+  arasındaki farkı sadece kabul testi kapatır.
+- ✅ **A3b. Slip modeli (kinematik)** — `KinematicWorld` `slip_factor` ile
+  tekerlek hız kaybını modelleyebiliyor; varsayılan `0.0`.
+  ⚠️ Bu **elle verilen bir sayı**, fizikten çıkmıyor: ne kadar patinaj olacağını
+  sen söylüyorsun. Gazebo backend'inde `slip_factor` **reddediliyor** — orada
+  patinaj sürtünme, kütle ve yük transferinden çıkar ve tek düğme
+  `hoverbot.sdf`'teki tekerlek `mu`'su.
 - ✅ ~~Gazebo `gz-sim-diff-drive-system` plugin'i container'da kurulu değil~~ —
   **YANLIŞ, düzeltildi (2026-09-08):** plugin
   `/opt/ros/jazzy/opt/gz_sim_vendor/lib/gz-sim-8/plugins/` altında **kurulu**,
-  `gz sim` 8.11.0 headless koşuyor. Ertelenen physics/odometry kabul testi
-  **artık açık** — A3'ün kalan işi.
+  `gz sim` 8.11.0 headless koşuyor.
+- ✅ **A3d. Fizik kabul testi — BİTTİ (2026-09-08).** `/cmd_vel` → köprü → pty →
+  `Esp32Sim` → Gazebo → `/odom`, ground truth'a karşı ölçüldü. Model geometrisi
+  baştan yazıldı (tekerlekler gerçekten yere değiyor), ground truth ayrı bir
+  `OdometryPublisher`'dan geliyor, `/clock` + `use_sim_time` zinciri kuruldu,
+  engeller Gazebo'ya spawn ediliyor. **`test_gazebo_physics.py` (6 kabul testi,
+  ~2.5 dk) + `test_gazebo_config.py` (8 statik test, 0.06 sn).**
+  Ölçülen sayılar ve bulunan tuzaklar aşağıda ayrı bölümde.
 - ✅ **A3c. Obstacle/collision — BİTTİ, uçtan uca ölçüldü (2026-09-08).**
   `KinematicWorld` dairesel engelde duruyor; `obstacle_map.py` engelleri
   OccupancyGrid'e çeviriyor; `nav2.yaml`'ın her iki costmap'inde `static_layer`
@@ -343,8 +439,10 @@ olarak yayınlıyor; montaj yönü **URDF'teki `imu_joint` rpy'ında** tarif edi
   Karşıt test şart: sapmanın sebebinin engel olduğunu, kontrolcünün kendi
   salınımı olmadığını ayırt eden tek şey o. Bulunan tuzaklar aşağıda ayrı
   bölümde — biri Nav2'yi engelsiz durumda tamamen öldürüyordu.
-  **Gazebo'da engel YOK:** `sim_node` gazebo backend'iyle engel parametresi
-  verilirse hata veriyor (uyarıp devam etmek fantom engel demekti). A3'ün işi.
+  ✅ ~~**Gazebo'da engel YOK**~~ — **A3d'de kapandı:** engeller artık
+  `gazebo_obstacles.py` ile aynı ayrıştırılmış listeden hem OccupancyGrid'e hem
+  Gazebo geometrisine dönüyor, `sim_node` gazebo backend'inde engeli reddetmiyor.
+  Ölçülen: robot elle hesaplanan **2.1500 m**'de duruyor (3.0 − 0.5 − 0.35).
 - **A5. CI** (GitHub Actions: colcon build + testler + `pio run`) — ertelendi
 
 ### İz B — Donanım (sıra atlanmaz)
@@ -366,8 +464,16 @@ sim'in tahminleri anlamlı olur. Sim'i şimdi kurmak = kalibrasyon günü hazır
 ### ⚠️ Simülasyonun kanıtlamadığı şeyler (fazla güvenme)
 Bu projenin kullanıcı profili notu şunu diyor: *"Yazılım tarafı risksiz; riskler
 fizik/elektrik/RF tarafında."* **Simülasyon bu risklerin hiçbirini azaltmaz.**
-Patinaj, belgesiz TXTY kartının kaprisleri, GPS multipath, hub motorlarının
-manyetometreyi bozması, UART gürültüsü — hiçbiri sim'de yok. Sim zaten düşük
+Belgesiz TXTY kartının kaprisleri, GPS multipath, hub motorlarının
+manyetometreyi bozması, UART gürültüsü — hiçbiri sim'de yok.
+
+⚠️ **Patinaj artık Gazebo backend'inde VAR, ama sayı hâlâ tahmin.** A3d
+patinajın *mekanizmasını* getirdi (sürtünme limiti, yük transferi) ve bunu
+yazılımın patinaja nasıl davrandığını sınayacak kadar gerçek kıldı. Ne kadar
+patinaj olacağını belirleyen `hoverbot.sdf`'teki `mu = 0.5` ise `robot_radius`
+gibi **belgelenmiş bir tahmin** — çim/toprak üstünde kauçuk. Gerçek sayı B4'ten
+gelir. Yani: "yığın patinajla başa çıkıyor" denebilir, "bahçede %3 odometri
+hatası olur" denemez. Sim zaten düşük
 riskli olan yazılımı sağlamlaştırır ve kalibrasyon gününü hızlandırır.
 **İz A ne kadar ilerlerse ilerlesin, B1 projenin darboğazı olarak kalır.**
 
@@ -392,9 +498,17 @@ Korunma yolları (A6'dan çıkanlar):
       fake_esp32 (protokol + watchdog + E-stop + çarpma vetosu)
          ╱        ╲
   --backend=kinematic   --backend=gazebo
-   (hızlı, CI, ground    (fizik, patinaj,
-    truth)                engel, kamera)
+   (hızlı, CI, ground    (kütle, sürtünme,
+    truth, patinaj YOK)   PATİNAJ, engel)
 ```
+**A3d'den sonra ikisi de gerçek.** Gazebo tarafında topic ayrımı kritik:
+```
+  DiffDrive       → /model/hoverbot/wheel_odometry   TEKERLEK ne dedi (hall muadili)
+  OdometryPublisher → /model/hoverbot/ground_truth   robot NEREDE (cevap anahtarı)
+  contact sensor  → .../chassis_contact/contact      gövde bir şeye DEĞDİ mi
+```
+İlk ikisi **ayrı eklentiler olmak zorunda**; aradaki fark patinajın ta kendisi.
+Tek kaynağa düşerlerse `/ground_truth` ile `/odom` tanım gereği uyuşur.
 **Gerekçe:** Gazebo'nun kendi diff_drive eklentisini kullansaydık `hoverboard_bridge`,
 seri protokol, watchdog ve çarpma vetosu simülasyonda **hiç çalışmazdı** — yani
 robotta koşacak kodun bir kısmı hiç sınanmazdı. Bu kurguda protokol tek yerde
@@ -432,31 +546,30 @@ kalır ve gerçek yığın her iki dünyada da devrededir.
 ## ŞU AN NEREDEYIZ / SIRADAKİ İŞ
 *(son güncelleme: 2026-09-08)*
 
-Yazılım İz A'da: **A1, A2, A3a–c, A4, A6 (borcu dahil) ve SP1 bitti**; donanım
-B1'de (ST-Link) kilitli. Tam workspace doğrulaması **118 test** geçti
-(robot_sim 38, hoverboard_bridge 23, mpu6050 16, qmc5883l 23, ina228 8,
-battery_manager 10), atlanan yok, **7 paketin tamamı** temiz build ediyor.
-Son kod commit'i: `2b92550`.
+Yazılım İz A'da: **A1, A2, A3 (a–d, tamamı), A4, A6 (borcu dahil) ve SP1 bitti**;
+donanım B1'de (ST-Link) kilitli. Tam workspace doğrulaması **139 test**
+geçti (robot_sim 59, hoverboard_bridge 23, mpu6050 16, qmc5883l 23,
+ina228 8, battery_manager 10), atlanan yok, **7 paketin tamamı** temiz build ediyor.
 
-⚠️ **Suite artık ~7 dakika** — dört Nav2 yığını sırayla kalkıyor. Elle koşma
-alışkanlığı bu süreyle zayıflar; A5'i tek başına gerekçelendirir.
-
-⚠️ **Bu oturumda bir dosya kaybı yakalandı:** `robot_sim/obstacle_map.py` hiç
-commit edilmemişti, kaynağı silinmişti, geriye sadece `__pycache__`'teki `.pyc`
-kalmıştı ve paket import edilemiyordu. Bytecode'dan geri yazıldı. Ders: yarım
-bırakılan dilim commit edilmeden oturum kapatılmamalı.
+⚠️ **Suite artık ~9.5 dakika** — dört Nav2 yığını ve iki Gazebo dünyası
+sırayla kalkıyor. Elle koşma alışkanlığı bu süreyle zayıflar; **A5 (CI) artık
+listedeki en yüksek getirili iş.** Ara adım olarak hızlı süzgeç:
+`pytest src/robot_sim/test -q -k "not gazebo_physics and not nav2"` (saniyeler,
+ve A3'ün asıl hatasını yakalayan `test_gazebo_config.py` bunun içinde).
 
 Sıradaki iş seçenekleri:
-- **A5 (CI)** — en yüksek getirili. A6 da, bu oturumda bulunan "engelsiz Nav2
-  tamamen ölüyordu" regresyonu da tam olarak CI'ın yakalayacağı tür.
-- **A3'ü bitir (Gazebo fizik)** — `gz-sim-diff-drive-system` container'da
-  **kurulu olduğu doğrulandı**, `gz sim` 8.11.0 headless koşuyor. Ertelenen
-  physics/odometry kabul testi artık açık. Gazebo'da engel desteği de burada:
-  `sim_node` şu an gazebo backend'iyle engel parametresi verilirse **hata
-  veriyor**, çünkü uyarıp devam etmek fantom engel demekti.
-- **Sıkışma tespiti** — A3c tuzak 3. Yazılımla çözülebilir kısmı yok gibi:
-  ikinci görüş GPS, INA228 akımı ya da tampon; **üçü de donanıma bağlı.**
-  Bu, İz B'nin İz A'yı ilk kez gerçekten bloke ettiği yer.
+- **A5 (CI)** — en yüksek getirili. A6, "engelsiz Nav2 tamamen ölüyordu"
+  regresyonu ve A3'ün "köprü hiçbir şeye bağlı değil"i — üçü de tam olarak
+  CI'ın yakalayacağı tür.
+- **Sıkışma tespiti** — A3c tuzak 3, artık **gerçek fizikle de kanıtlı**:
+  engele dayanmış robotta ground truth 6 sn'de 0.0000 m ilerlerken `/odom`
+  +2.97 m saydı. Yazılımla çözülebilir kısmı yok gibi: ikinci görüş GPS,
+  INA228 akımı ya da tampon; **üçü de donanıma bağlı.** Bu, İz B'nin İz A'yı
+  ilk kez gerçekten bloke ettiği yer.
+- **Gazebo'da EKF'i patinaja karşı ölçmek** — A3d zinciri kurdu ama bu soruyu
+  sormadı. Kinematik dünyada ~8 m karede EKF hatası 0.083 m'di ve patinaj
+  YOKTU; aynı kareyi Gazebo'da koşup sayıyı almak artık kısa bir iş ve gerçek
+  odometri hatasının en büyük kaynağına ilk dürüst bakış olur.
 - **SP3 → SP5** — batarya/docking zinciri; SP1'in ölçüm katmanı hazır.
 
 ### ✅ A4 (manyetometre) yazıldı — yaw sorunu ÇÖZÜLDÜ, ölçüldü
@@ -570,13 +683,22 @@ Tamamlananlar:
 ```bash
 cd ros2 && source install/setup.bash
 python3 -m pytest src/hoverboard_bridge/test -q   # 23 (~50 sn)
-python3 -m pytest src/robot_sim/test -q           # 38, 4'ü Nav2 yığını (~315 sn)
+python3 -m pytest src/robot_sim/test -q           # 59; 4'ü Nav2, 6'sı Gazebo (~490 sn)
 python3 -m pytest src/mpu6050_driver/test -q      # 16 (~0.1 sn)
 python3 -m pytest src/qmc5883l_driver/test -q     # 23 (~0.1 sn)
 python3 -m pytest src/ina228_driver/test -q       #  8 (~0.1 sn)
 python3 -m pytest src/battery_manager/test -q     # 10 (~18 sn)
-# hepsi: 118 test, ~7 dk
+# hepsi: 139 test, ~9.5 dk
+
+# Yığın kaldırmayan hızlı süzgeç (saniyeler). test_gazebo_config.py bunun
+# içinde ve A3'ün asıl hatasını — köprünün hiçbir şeye bağlı olmaması — tam
+# olarak o yakalıyor, Gazebo koşturmadan.
+python3 -m pytest src/robot_sim/test -q -k "not gazebo_physics and not nav2"
 ```
+⚠️ **Gazebo testleri `gz` yoksa temizce SKIP eder** (`-rs` ile görürsün) ve
+aynı anda tek `gz` sunucusuna izin verirler; elle bir sim açık bırakırsan
+fixture "a gz server is already running" diye patlar. Bu bilerek: ikinci
+sunucu hata vermez, iki dünyayı tek okunmaz dünyaya karıştırır (A3 tuzak 7).
 **ROS'suz da koşarlar:** protokol ve dünya birim testleri saf Python (bilinçli
 tasarım); entegrasyon testleri `importorskip` ile temizce atlanır. Hook bunu
 her düzenlemede zorluyor.
@@ -585,7 +707,34 @@ her düzenlemede zorluyor.
 "10 passed, 2 skipped" görürsün ve her şey yolunda sanırsın. A6'yı yakalayan
 testler tam da atlanan o testler. `-rs` ile atlananları listele.
 
-### Donanımsız tam yığın
+### Gazebo (fizik) dünyası — üç komut
+```bash
+# 1. fizik + model + ROS-GZ köprüsü (headless; ekranı olan makinede gui:=true)
+ros2 launch robot_bringup gazebo.launch.py
+
+# 2. sahte ESP32, fizik arka ucuyla. Engel istersen buraya ekle:
+#    -p obstacle_centers:="[3.0,0.0]" -p obstacle_radii:="[0.5]"
+ros2 run robot_sim sim_node --ros-args \
+    -p backend:=gazebo -p use_sim_time:=true -p link:=/tmp/fake_esp32_gazebo
+
+# 3. gerçek robot yığını, SİM ZAMANINDA
+ros2 launch robot_bringup robot.launch.py \
+    esp32_port:=/tmp/fake_esp32_gazebo use_sim_time:=true \
+    use_localization:=true use_imu:=false use_gps:=false
+```
+⚠️ **`use_sim_time:=true` 2. ve 3. adımda OPSİYONEL DEĞİL.** Gazebo `/clock`
+yayınlar ve onun üzerinde koşar; duvar saatinde kalan bir düğüm her `dt`'yi
+fiziğin ilerlettiğinden başka bir saate göre hesaplar. Hata vermez — sadece
+türettiği bütün hız ve ivmeler yanlış olur.
+
+⚠️ **Aynı anda tek `gz` sunucusu.** İkincisi hata vermez, iki dünyayı tek
+okunmaz dünyaya karıştırır (A3 tuzak 7). Elle koştururken `pgrep -f "^gz sim"`.
+
+Gerçek topic isimlerini görmek için: `gz topic -l`. Ground truth'a doğrudan
+bakmak için `gz topic -e -t /model/hoverbot/ground_truth -n 1` —
+`/model/hoverbot/wheel_odometry` **ground truth değildir** (A3 tuzak 1).
+
+### Donanımsız tam yığın (kinematik dünya)
 ```bash
 ros2 run robot_sim sim_node
 

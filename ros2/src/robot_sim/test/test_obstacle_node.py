@@ -14,7 +14,10 @@ rclpy = pytest.importorskip("rclpy", reason="ROS 2 not sourced")
 from nav_msgs.msg import OccupancyGrid                       # noqa: E402
 from rclpy.qos import DurabilityPolicy, QoSProfile           # noqa: E402
 
-from robot_sim.obstacle_map import DEFAULT_GRID, OCCUPIED    # noqa: E402
+from robot_sim.gazebo_obstacles import (                     # noqa: E402
+    OBSTACLE_HEIGHT_M, obstacle_model_sdf)
+from robot_sim.obstacle_map import (                         # noqa: E402
+    DEFAULT_GRID, FREE, OCCUPIED, build_obstacle_grid, parse_obstacle_params)
 from robot_sim.sim_node import SimNode                       # noqa: E402
 from robot_sim.world import CircularObstacle                 # noqa: E402
 
@@ -146,14 +149,56 @@ def test_unsurveyed_obstacles_collide_but_never_reach_the_map(context, tmp_path)
         node.destroy_node()
 
 
-def test_the_gazebo_backend_refuses_obstacle_parameters(context, tmp_path):
-    """Refuse, do not warn.
+def test_one_obstacle_list_reaches_both_the_map_and_the_gazebo_geometry(tmp_path):
+    """The gazebo backend used to REFUSE obstacles; now it renders them.
 
-    Gazebo's obstacles live in hoverbot.sdf; the backend cannot honour a ROS
-    parameter. It used to log a warning and carry on, which published a map of
-    obstacles the physics would drive straight through — the phantom-obstacle
-    bug with a warning in front of it that nobody reads in a test log.
+    Refusing was the right call while the backend could not put a ROS parameter
+    into Gazebo: warning and carrying on would have published a map of
+    obstacles the physics drove straight through — a phantom obstacle with a
+    warning in front of it that nobody reads in a test log. What replaces the
+    refusal has to be stronger than a promise, so the map and the physics are
+    rendered from THE SAME parsed tuple, and this checks the two renderers
+    against one another without needing Gazebo or ROS at all.
+
+    test_gazebo_physics.py is where a real obstacle is driven into.
     """
-    with pytest.raises(ValueError, match="gazebo backend"):
-        make_sim(tmp_path, backend="gazebo",
-                 obstacle_centers=[1.0, 1.0], obstacle_radii=[0.3])
+    obstacles = parse_obstacle_params([3.0, -1.5, -2.0, 4.0], [0.5, 0.25])
+    sdf = obstacle_model_sdf(obstacles)
+
+    # Every obstacle, with its own radius, at its own place.
+    for obstacle in obstacles:
+        assert f"<radius>{obstacle.radius!r}</radius>" in sdf
+        assert f"<pose>{obstacle.x!r} {obstacle.y!r} " in sdf
+    assert sdf.count("<link ") == len(obstacles)
+
+    # The bare obstacle in both, with no safety margin baked into either: the
+    # robot radius is the costmap inflation layer's job and it is applied in
+    # exactly one place (nav2.yaml). See obstacle_map.py.
+    grid = build_obstacle_grid(obstacles)
+    assert grid[DEFAULT_GRID.index(330, 285)] == OCCUPIED     # (3.0, -1.5)
+    assert grid[DEFAULT_GRID.index(280, 340)] == OCCUPIED     # (-2.0, 4.0)
+    # 0.4 m east of the SMALL one is outside its 0.25 m radius but would be
+    # inside the big one's — so this also catches the radii being swapped.
+    assert grid[DEFAULT_GRID.index(284, 340)] == FREE
+
+
+def test_an_obstacle_is_tall_enough_for_the_chassis_to_hit():
+    """The grid is 2-D and Gazebo is not, so the height is invented here.
+
+    hoverbot.sdf's chassis box sits between 0.09 m and 0.27 m above the ground
+    (9 cm of clearance for the casters). An obstacle shorter than that would be
+    drawn on the map, planned around by Nav2, and driven straight over.
+    """
+    assert OBSTACLE_HEIGHT_M > 0.27
+
+
+def test_the_gazebo_backend_refuses_a_slip_factor(context, tmp_path):
+    """slip_factor is a KinematicWorld knob and it is not silently ignored.
+
+    Slip in this world comes out of wheel friction, mass and load transfer —
+    hoverbot.sdf's mu is the knob, and test_gazebo_physics.py measures what it
+    implies. Accepting the parameter and dropping it would let a test believe
+    it had configured slip while the number went nowhere.
+    """
+    with pytest.raises(ValueError, match="slip_factor"):
+        make_sim(tmp_path, backend="gazebo", slip_factor=0.1)

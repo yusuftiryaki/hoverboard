@@ -27,9 +27,11 @@ def generate_launch_description():
     gps_port = LaunchConfiguration("gps_port")
     fake_imu = LaunchConfiguration("fake_imu")
     fake_mag = LaunchConfiguration("fake_mag")
+    use_sim_time = LaunchConfiguration("use_sim_time")
 
     return LaunchDescription([
         DeclareLaunchArgument("use_gps", default_value="false"),
+        DeclareLaunchArgument("use_sim_time", default_value="false"),
         DeclareLaunchArgument("use_imu", default_value="false"),
         DeclareLaunchArgument("use_mag", default_value="false"),
         DeclareLaunchArgument(
@@ -58,7 +60,8 @@ def generate_launch_description():
             name="mpu6050",
             output="screen",
             condition=IfCondition(use_imu),
-            parameters=[imu_params, {"use_fake_bus": fake_imu}],
+            parameters=[imu_params, {"use_fake_bus": fake_imu,
+                                     "use_sim_time": use_sim_time}],
             # I2C on a vibrating robot throws transient errors; the node already
             # rides those out. Respawn covers the harder failures.
             respawn=True,
@@ -84,6 +87,7 @@ def generate_launch_description():
                 "baud": 9600,          # NEO-6M factory default
                 "frame_id": "gps_link",
                 "useRMC": False,       # GGA carries the fix quality we want
+                "use_sim_time": use_sim_time,
             }],
             remappings=[("fix", "gps/fix")],
         ),
@@ -100,6 +104,7 @@ def generate_launch_description():
                 "width": 640,
                 "height": 480,
                 "frame_id": "camera_optical_link",
+                "use_sim_time": use_sim_time,
             }],
             remappings=[("~/image_raw", "camera/image_raw")],
         ),
@@ -115,7 +120,8 @@ def generate_launch_description():
             name="qmc5883l",
             output="screen",
             condition=IfCondition(use_mag),
-            parameters=[mag_params, {"use_fake_bus": fake_mag}],
+            parameters=[mag_params, {"use_fake_bus": fake_mag,
+                                     "use_sim_time": use_sim_time}],
             respawn=True,
             respawn_delay=2.0,
         ),
@@ -146,6 +152,7 @@ def generate_launch_description():
                 # It would otherwise broadcast imu_link -> base_link and fight
                 # robot_state_publisher for a transform the URDF already owns.
                 "publish_tf": False,
+                "use_sim_time": use_sim_time,
             }],
         ),
     ])
