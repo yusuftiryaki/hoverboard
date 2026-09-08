@@ -66,6 +66,16 @@ riskler fizik/elektrik/RF tarafında. Ek bütçe ~2-3 bin TL.
     aynalı ve doğru alan orada birebir aynı). Yön testleri robotu **tam tur**
     döndürmeli (`test_absolute_yaw_holds_through_a_full_turn`).
 
+12. ⚠️ **Engel haritası `map` frame'inde yayınlanır, `sim_world`'de değil**
+    (2026-09-08). Bu bir etiket seçimi değil, bir **iddia**: engellerin robotun
+    navigasyon yaptığı **aynı datum'da survey edildiğini** söyler. Böylece datum
+    hatası ortak-mod olur — haritayı ve robotun kendi konum tahminini birlikte
+    kaydırır, yani kapanır. Robotun kendi sensörüyle kurduğu harita **değildir**;
+    onun hatası canlı lokalizasyon hatasıdır ve kapanmaz, ayrıca menzil sensörü
+    ister (envanterde yok). Ayrım `nav2.yaml`'ın başlığında da yazılı:
+    **survey edilmiş** engeli dolanır, **survey edilmemiş** engeli göremez ve
+    içine sürer.
+
 ## Güç / E-stop tasarımı
 ```
 Batarya 36V → [30-40A sigorta] → ┬→ [buck 5V/5A] → Pi (+ USB ile ESP32)  [HER ZAMAN AÇIK]
@@ -103,6 +113,39 @@ Batarya 36V → [30-40A sigorta] → ┬→ [buck 5V/5A] → Pi (+ USB ile ESP32
    yayınlıyordu, ama `navsat`'ın `map`'i datum'un GPS hatasıyla çapalı — iki farklı
    origin aynı ismi taşıyordu. Artık **`sim_world`**.
 
+## A3c'de bulunan tuzaklar (costmap'lere ilk kez gerçek engel konunca)
+1. **StaticLayer, harita gelmezse costmap'i hiç hazır etmiyor.** "Engel yoksa
+   harita yayınlama" kararı engelsiz her koşuda Nav2'yi tamamen öldürdü — her
+   hedef `status 6` ile abort. Boş harita **her zaman** yayınlanmalı: sessizlik
+   "engel yok" demek değil, "planlayıcı hiç başlamadı" demek. Bunu yakalayan
+   şey **karşıt testti**; kabul testi tek başına yemyeşildi.
+2. **Inflation hiç engelle sınanmamıştı.** `inflation_radius: 0.55`
+   (robot_radius + 0.15) NavFn için yeterli ama RPP için değil: 1.5 m lookahead
+   ile viraj kesiyor ve planlanan yolun **içinden** geçiyor. Ölçülen: robot
+   duvar ucuna tam 0.70 m temas mesafesinde sıkıştı. Marj robotun gövdesini
+   değil **kontrolcünün viraj kesmesini** de kapatmalı → `1.0` /
+   `cost_scaling_factor 2.0`.
+3. ⚠️⚠️ **SIKIŞAN ROBOT İÇİN NAV2 "SUCCEEDED" DİYOR.** Çarpışmada tekerlekler
+   dönmeye devam ediyor → hall sensörleri komut hızını bildiriyor → odometri
+   entegre ediyor → EKF inanıyor (yaw gyro'dan geliyor ama **vx tekerlekten** ve
+   onu yalanlayan hiçbir şey yok) → goal checker vardığını görüyor. Sadece
+   ground truth hareket etmediğini biliyor. **Gerçek robot da aynen böyle
+   davranacak** — kayaya dayanmış hub motorlar sağlıklı 0.5 m/s bildirir.
+   `test_an_unsurveyed_obstacle_jams_the_robot_and_nav2_claims_success` bunu
+   kalıcı belgeliyor; **düzeltildiği gün test patlar, amacı bu.**
+   Çözüm "robot gerçekten hareket ediyor mu" sorusuna ikinci bir görüş ister ve
+   adayların hepsi donanıma bağlı: GPS (yaw sorunu bu yığında `ekf_global`'ı
+   dışarıda tutuyor), INA228 akımı (SP1 yazılımı hazır, sensör alınmadı),
+   tampon (sadece temas, bu duvara dik giriliyor).
+4. **`use_collision_detection: false`'ın gerekçesi çürüdü.** Kapalı olma sebebi
+   "costmap boş, kontrol her zaman geçer" idi — ve geçmeyen bir kontrol,
+   olmayandan **kötüdür**, çünkü kontrol gibi okunur. Costmap dolunca açıldı.
+5. **`wait_for_server` bir hazır olma kontrolü DEĞİL.** Nav2 action server'ını
+   CONFIGURE'da açıyor ama ACTIVATE'e kadar hedefi reddediyor; ikisi client'tan
+   ayırt edilemiyor. Sabit uykuyla kurulan test yükte kararsızlaştı ("Nav2
+   rejected the goal" — navigasyon hatası gibi okunur, aslında yarıştır).
+   Kabul edilene kadar tekrar denenmeli.
+
 ## Yol boyunca yapılan ÖNEMLİ düzeltmeler (tekrarlanmasın)
 1. ⚠️ **Flash sırasında batarya BAĞLI olmalı.** (Önce "bağlama" denmişti, YANLIŞ.)
    Kart self-latch ile besleniyor, MCU gücünü 36V'tan alıyor. **ST-Link'in
@@ -122,7 +165,7 @@ docs/handoff.md             bu dosya
 firmware/esp32_bridge/      platformio.ini + src/main.cpp  (pio run ile derlenir)
 ros2/src/hoverboard_bridge/ ESP32 seri köprü düğümü (Python) + protokol + ESP32 beyni
 ros2/src/mpu6050_driver/    IMU sürücüsü (Jazzy'de yok, kendimiz yazdık) + sahte I2C
-ros2/src/robot_sim/         kinematik dünya + ground truth + sahte IMU/mag/GPS + yığın testleri
+ros2/src/robot_sim/         kinematik dünya + ground truth + sahte IMU/mag/GPS + engel haritası + yığın testleri
 ros2/src/qmc5883l_driver/   manyetometre sürücüsü + sahte I2C (mutlak yönün tek kaynağı)
 ros2/src/ina228_driver/     INA228 register seviyesi akım sürücüsü + sahte I2C
 ros2/src/battery_manager/   SoC tahmini + yetkili /battery yayıncısı
@@ -178,14 +221,17 @@ ros2_control `SystemInterface`'i onun üstüne sarılır, düğüm teleop aracı
 | `hoverboard_bridge/esp32_sim.py` | **ESP32'nin beyni**, tekerleksiz: protokol + watchdog + E-stop + çarpma vetosu + mixer. Arka uç takılabilir (`Backend` protokolü). ROS'suz. |
 | `hoverboard_bridge/fake_esp32.py` | ince CLI: `esp32_sim` + `LagBackend`. Dünyası/pozu yok — "çerçeveler ve güvenlik doğru mu" sorusunu cevaplar. `ros2 run hoverboard_bridge fake_esp32` |
 | `robot_sim/world.py` | ROS'suz kinematik dünya: tekerlek komutu → ölçülen rpm + **ground truth poz**. Arc entegrasyonu (Euler değil). Fizik YOK. |
-| `robot_sim/sim_node.py` | dünyayı koşturur; `/ground_truth` (frame **`sim_world`**), sahte `/imu/data_raw`, `/imu/mag`, `/gps/fix` yayınlar. GPS hatası Ornstein-Uhlenbeck (beyaz değil — beyaz gürültü EKF'te fazla güzel ortalanırdı). `ros2 run robot_sim sim_node` |
+| `robot_sim/sim_node.py` | dünyayı koşturur; `/ground_truth` (frame **`sim_world`**), sahte `/imu/data_raw`, `/imu/mag`, `/gps/fix`, latch'li `/obstacle_map` (frame **`map`** — karar 12) ve `/collision_truth` yayınlar. GPS hatası Ornstein-Uhlenbeck (beyaz değil — beyaz gürültü EKF'te fazla güzel ortalanırdı). `ros2 run robot_sim sim_node` |
+| `robot_sim/obstacle_map.py` | `GridSpec` + `build_obstacle_grid` + `parse_obstacle_params`. Grid geometrisinin **tek kaynağı**. Harita **çıplak** engeli işaretler; robot yarıçapını costmap inflation ekler, iki kez şişirilmez. |
 | `mpu6050_driver/mpu6050.py` | register seviyesi MPU6050 (ROS'suz, I2C bus enjekte edilir) |
 | `mpu6050_driver/imu_node.py` | **`/imu/data_raw`** + `/imu/temperature` + `/diagnostics`; açılışta gyro bias kalibrasyonu. ⚠️ `data_raw`, `data` değil: ROS geleneğinde `/imu/data` orientation taşır, bu düğüm taşımıyor (`orientation_covariance[0] = -1`). |
 | `mpu6050_driver/fake_bus.py` | **sahte I2C chip** — register seviyesinde, config register'larını geri çözüp ölçekliyor |
 | `qmc5883l_driver/qmc5883l.py` | register seviyesi QMC5883L. ⚠️ **little-endian** — aynı bus'taki MPU6050 big-endian. Karıştırmak hata vermez, sadece yönü döndürür; testle çivili. |
 | `qmc5883l_driver/mag_node.py` | `/imu/mag`; hard/soft iron uygular, OVL örneklerini düşürür, kalibrasyonsuzken bağırır. **Yön HESAPLAMAZ** — çıplak pusula okuması sadece robot düzken yöndür; eğim telafisi madgwick'in işi. |
-| `qmc5883l_driver/fake_bus.py` | sahte I2C chip; hard iron + 12-bit kuantizasyon modeller. ⚠️ Dünya alanı modeli `sim_node.py` ile **tekrarlı** — A6'nın kalan borcu. |
+| `qmc5883l_driver/fake_bus.py` | sahte I2C chip; hard iron + 12-bit kuantizasyon modeller. Dünya alanını **hesaplamaz**, `earth_field`'dan alır. |
+| `qmc5883l_driver/earth_field.py` | Simüle dünya alanının **tek tanımı** (`field_in_body_frame`). A6'nın kalan borcu buydu; `sim_node` ve `fake_bus` ikisi de kendi kopyasını taşıyordu. Sürücü paketinde duruyor çünkü sürücü sim'siz de deploy edilebilmeli. |
 | `robot_bringup/config/ekf.yaml` | çift-EKF + navsat_transform, gerekçeleri yorumda |
+| `robot_bringup/config/nav2.yaml` | RPP + rotation shim + NavFn; **static_layer** `/obstacle_map`'i okur. Başlıkta survey edilmiş / edilmemiş engel ayrımı. |
 | `robot_bringup/config/hoverboard_bridge.yaml` | düğüm parametreleri, **CALIBRATE** işaretleriyle |
 | `robot_bringup/urdf/robot.urdf.xacro` | 2 tahrik + 2 caster + sensör frame'leri (direkte mag/GPS) |
 | `robot_bringup/launch/` | `robot` (üst), `teleop`, `localization`, `sensors`, `description` |
@@ -255,8 +301,11 @@ olarak yayınlıyor; montaj yönü **URDF'teki `imu_joint` rpy'ında** tarif edi
   - **GPS waypoint ölçüldü:** L rotası (6 m doğu + 4 m kuzey) → `status 4
     SUCCEEDED, missed=0, gerçek hata 0.73 m`. Uzun süre "bloke" görünüyordu;
     sebep Nav2 değil, **simülatörün aynalı manyetometresiydi** (A6).
-  - ⚠️ **Costmap'ler boş** (menzil sensörü yok) → Nav2 burada bir **yol takipçisi**,
-    engelden kaçınıcı değil. Ağaca güvenle sürer. Engel = A3.
+  - ⚠️ ~~**Costmap'ler boş** → Nav2 bir yol takipçisi, engelden kaçınıcı
+    değil~~ — **A3c'de değişti.** Costmap'ler artık bir **a priori survey
+    haritası** taşıyor ve Nav2 ondaki engelleri gerçekten dolanıyor (ölçüldü:
+    2.00 m sapma). Ama menzil sensörü hâlâ yok, yani **survey edilmemiş** engel
+    görünmez: haritaya girilmemiş ağaca hâlâ güvenle sürer. Ayrım kritik.
 - **A3. Gazebo arka ucu** — aynı `fake_esp32`'nin arkasına takılır (mimari kararı
   aşağıda), fizik + patinaj + engel dünyası. Eski adım 7'nin ön koşulu.
 - ✅ **A4. Manyetometre sürücüsü** — **yazıldı** (`qmc5883l_driver` + madgwick),
@@ -277,15 +326,25 @@ olarak yayınlıyor; montaj yönü **URDF'teki `imu_joint` rpy'ında** tarif edi
   hız kaybını modelleyebiliyor; hall ölçümü ile gerçek poz arasındaki fark
   testle sabitlendi. Varsayılan `0.0`, yüzey parametresi ölçüm gelene kadar
   tahmin edilmiyor.
-- ⚠️ Gazebo `gz-sim-diff-drive-system` plugin'i mevcut container'da kurulu
-  değil; model spawn ve bridge başlangıcı doğrulandı, physics odom kabul testi
-  plugin kurulumu sonrasına bırakıldı.
-- 🟡 **A3c. Obstacle/collision:** costmap katmanında zemin engelleri; Nav2
-  bunlara göre yol planlasın. Test: çizgi engel, robot saptırsın ve geçsin;
-  engel geometrisi tüm kritik noktalarda doğrulansın.
-- ✅ **A3c ilk dilim:** `KinematicWorld` dairesel engel + robot yarıçapı ile
-  collision sınırında duruyor; kabul testi eklendi. Bu henüz Nav2 costmap veya
-  rota değiştirme değildir; yalnızca ground-truth fizik sınırını doğrular.
+- ✅ ~~Gazebo `gz-sim-diff-drive-system` plugin'i container'da kurulu değil~~ —
+  **YANLIŞ, düzeltildi (2026-09-08):** plugin
+  `/opt/ros/jazzy/opt/gz_sim_vendor/lib/gz-sim-8/plugins/` altında **kurulu**,
+  `gz sim` 8.11.0 headless koşuyor. Ertelenen physics/odometry kabul testi
+  **artık açık** — A3'ün kalan işi.
+- ✅ **A3c. Obstacle/collision — BİTTİ, uçtan uca ölçüldü (2026-09-08).**
+  `KinematicWorld` dairesel engelde duruyor; `obstacle_map.py` engelleri
+  OccupancyGrid'e çeviriyor; `nav2.yaml`'ın her iki costmap'inde `static_layer`
+  `/obstacle_map`'i okuyor; NavFn duvarı dolanıyor.
+  **Ölçülen (ground truth):**
+  | senaryo | sapma | en yakın geçiş | hedef hatası |
+  |---|---|---|---|
+  | survey edilmiş duvar | **2.00 m** | **1.06 m** (temas 0.70) | 0.69 m |
+  | engelsiz (karşıt test) | **0.29 m** | — | — |
+  Karşıt test şart: sapmanın sebebinin engel olduğunu, kontrolcünün kendi
+  salınımı olmadığını ayırt eden tek şey o. Bulunan tuzaklar aşağıda ayrı
+  bölümde — biri Nav2'yi engelsiz durumda tamamen öldürüyordu.
+  **Gazebo'da engel YOK:** `sim_node` gazebo backend'iyle engel parametresi
+  verilirse hata veriyor (uyarıp devam etmek fantom engel demekti). A3'ün işi.
 - **A5. CI** (GitHub Actions: colcon build + testler + `pio run`) — ertelendi
 
 ### İz B — Donanım (sıra atlanmaz)
@@ -371,23 +430,34 @@ kalır ve gerçek yığın her iki dünyada da devrededir.
 > `test_yaw_drifts_without_a_magnetometer` bunu kalıcı olarak belgeliyor.
 
 ## ŞU AN NEREDEYIZ / SIRADAKİ İŞ
-*(son güncelleme: 2026-09-06)*
+*(son güncelleme: 2026-09-08)*
 
-Yazılım İz A'da: **A1, A2, A3 ilk dilimleri, A4, A6 ve SP1 bitti** (A2 uçtan uca GPS waypoint
-ile doğrulandı); donanım B1'de (ST-Link) kilitli. SP1 kapsamı **18 test geçti**;
-tam workspace doğrulaması **90 test** ve seçili workspace build'i temiz geçti.
-Son commit: `4f1246a`; bu oturumdaki SP1 değişiklikleri henüz commit edilmedi.
+Yazılım İz A'da: **A1, A2, A3a–c, A4, A6 (borcu dahil) ve SP1 bitti**; donanım
+B1'de (ST-Link) kilitli. Tam workspace doğrulaması **118 test** geçti
+(robot_sim 38, hoverboard_bridge 23, mpu6050 16, qmc5883l 23, ina228 8,
+battery_manager 10), atlanan yok, **7 paketin tamamı** temiz build ediyor.
+Son kod commit'i: `2b92550`.
 
-Kullanıcıya soruldu, **cevap bekliyor** — sıradaki iş seçenekleri:
-- **A3** (Gazebo arka ucu — fizik/patinaj/engel). Sim'in en büyük yalanı
-  patinajın yokluğu; ilk backend/world dilimi hazır, sırada slip ve engel
-  senaryoları var.
-- **A5** (CI) — A6 tam olarak CI'ın yakalayacağı türden bir regresyondu.
-- **SP3 → SP5** — batarya davranışı ve docking zincirinin tasarım dokümanındaki
-  sonraki alt projeleri; SP1'in ölçüm katmanı hazır.
-- **A6'nın kalan borcu**: dünya alanı modeli `sim_node.py` + `fake_bus.py`'de
-  tekrarlı. Tek yere indirmek `robot_sim`'i `qmc5883l_driver`'a bağımlı kılar —
-  **mimari karar olduğu için sorulmadan yapılmadı.**
+⚠️ **Suite artık ~7 dakika** — dört Nav2 yığını sırayla kalkıyor. Elle koşma
+alışkanlığı bu süreyle zayıflar; A5'i tek başına gerekçelendirir.
+
+⚠️ **Bu oturumda bir dosya kaybı yakalandı:** `robot_sim/obstacle_map.py` hiç
+commit edilmemişti, kaynağı silinmişti, geriye sadece `__pycache__`'teki `.pyc`
+kalmıştı ve paket import edilemiyordu. Bytecode'dan geri yazıldı. Ders: yarım
+bırakılan dilim commit edilmeden oturum kapatılmamalı.
+
+Sıradaki iş seçenekleri:
+- **A5 (CI)** — en yüksek getirili. A6 da, bu oturumda bulunan "engelsiz Nav2
+  tamamen ölüyordu" regresyonu da tam olarak CI'ın yakalayacağı tür.
+- **A3'ü bitir (Gazebo fizik)** — `gz-sim-diff-drive-system` container'da
+  **kurulu olduğu doğrulandı**, `gz sim` 8.11.0 headless koşuyor. Ertelenen
+  physics/odometry kabul testi artık açık. Gazebo'da engel desteği de burada:
+  `sim_node` şu an gazebo backend'iyle engel parametresi verilirse **hata
+  veriyor**, çünkü uyarıp devam etmek fantom engel demekti.
+- **Sıkışma tespiti** — A3c tuzak 3. Yazılımla çözülebilir kısmı yok gibi:
+  ikinci görüş GPS, INA228 akımı ya da tampon; **üçü de donanıma bağlı.**
+  Bu, İz B'nin İz A'yı ilk kez gerçekten bloke ettiği yer.
+- **SP3 → SP5** — batarya/docking zinciri; SP1'in ölçüm katmanı hazır.
 
 ### ✅ A4 (manyetometre) yazıldı — yaw sorunu ÇÖZÜLDÜ, ölçüldü
 `qmc5883l_driver` + `imu_filter_madgwick` devrede. Zincir:
@@ -456,10 +526,15 @@ karşı ölçer. Bozuk işaretle koşulup **53.8° ile patladığı doğrulandı
 `status 4 SUCCEEDED, missed=0, gerçek hata 0.73 m` — 27 sn'de. Yani **A2 artık
 gerçekten bitti**.
 
-⚠️ **Kalan borç:** dünya alanı modeli hâlâ **iki yerde** (`sim_node.py` ve
-`fake_bus.py`) — bu hatanın ta kendisi. İkisi de Python; protokolün C++/Python
-mecburiyeti burada yok, yani paylaşılabilir. Yeni test sapmayı 37 sn'de yakalar,
-o yüzden acil değil ama yapılmalı.
+✅ ~~**Kalan borç:** dünya alanı modeli hâlâ iki yerde~~ — **KAPATILDI
+(2026-09-08).** `qmc5883l_driver/earth_field.py` tek tanım;
+`sim_node` ve `fake_bus` ikisi de oradan alıyor, hiçbiri yeniden türetmiyor.
+Yön kararı: `robot_sim` → `qmc5883l_driver`, tersi değil — sürücünün
+simülatörsüz de deploy edilebilmesi gerekiyor.
+`test_earth_field.py` modeli **elle pusula muhakemesiyle** çiviliyor (kuzeye
+bakınca alan ÖNDE, +x), tam tur süpürüyor, ve aynalı modelin **yaw=0'da doğru
+modelle birebir aynı** olduğunu ayrıca test ediyor — yani tek noktada test
+etmenin neden hiçbir şey kanıtlamadığını dosyanın içine yazıyor.
 
 ### (tarihçe) A2 sırasında GPS'in bloke olma sebebi — çözüldü
 `navsat_transform`, robotun **mutlak yönünü** `/imu/data`'nın orientation
@@ -494,11 +569,13 @@ Tamamlananlar:
 ### Testleri koşmak
 ```bash
 cd ros2 && source install/setup.bash
-python3 -m pytest src/hoverboard_bridge/test -q   # 20 birim + 3 entegrasyon (~50 sn)
-python3 -m pytest src/robot_sim/test -q           # 10 birim + 5 yığın (~175 sn)
-python3 -m pytest src/mpu6050_driver/test -q      # 16 birim (~0.1 sn)
-python3 -m pytest src/qmc5883l_driver/test -q     # 18 birim (~0.1 sn)
-# hepsi: 72 test, ~230 sn
+python3 -m pytest src/hoverboard_bridge/test -q   # 23 (~50 sn)
+python3 -m pytest src/robot_sim/test -q           # 38, 4'ü Nav2 yığını (~315 sn)
+python3 -m pytest src/mpu6050_driver/test -q      # 16 (~0.1 sn)
+python3 -m pytest src/qmc5883l_driver/test -q     # 23 (~0.1 sn)
+python3 -m pytest src/ina228_driver/test -q       #  8 (~0.1 sn)
+python3 -m pytest src/battery_manager/test -q     # 10 (~18 sn)
+# hepsi: 118 test, ~7 dk
 ```
 **ROS'suz da koşarlar:** protokol ve dünya birim testleri saf Python (bilinçli
 tasarım); entegrasyon testleri `importorskip` ile temizce atlanır. Hook bunu
@@ -511,6 +588,13 @@ testler tam da atlanan o testler. `-rs` ile atlananları listele.
 ### Donanımsız tam yığın
 ```bash
 ros2 run robot_sim sim_node
+
+# engelli dünya — survey edilmiş (haritada VAR, Nav2 dolanır) ve
+# survey edilmemiş (haritada YOK, Nav2 içine sürer) ayrı parametreler.
+# Değerler mutlaka ondalıklı: `3` int gider ve DOUBLE_ARRAY reddeder.
+ros2 run robot_sim sim_node --ros-args \
+    -p obstacle_centers:="[3.0,0.0]" -p obstacle_radii:="[0.5]" \
+    -p unsurveyed_obstacle_centers:="[5.0,1.0]" -p unsurveyed_obstacle_radii:="[0.3]"
 
 # yerel yarı (odom->base_link): sadece tekerlek + gyro
 ros2 launch robot_bringup robot.launch.py esp32_port:=/tmp/fake_esp32 \
