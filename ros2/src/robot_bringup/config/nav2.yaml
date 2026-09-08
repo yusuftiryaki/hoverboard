@@ -148,18 +148,49 @@ local_costmap:
       # footprint: the chassis does not exist yet (B3), so a precise outline
       # would be false precision.
       robot_radius: 0.4
-      # ⚠️ `plugins: []` is not expressible: an empty YAML list loses its type
-      # and rclcpp aborts with "No parameter value set". So the list carries the
-      # one layer that is harmless without sensors — inflation has nothing to
-      # inflate, and the costmap stays free space either way. When A3 brings a
-      # camera or ultrasonics, an obstacle/voxel layer goes in front of this and
-      # the inflation is already wired up correctly.
-      plugins: ["inflation_layer"]
+      # A3c: the static layer carries the a priori obstacle map, inflation
+      # grows it by the robot radius. Order matters — inflation reads whatever
+      # the layers before it wrote.
+      # ⚠️ This costmap's global_frame is `odom` while the map arrives in `map`,
+      # so the layer transforms it every update and needs map->odom to exist.
+      # ekf_global publishes it on the real stack; the Nav2 tests pin it to
+      # identity. With neither, the layer stays empty rather than erroring.
+      # (A note kept from before A3c: `plugins: []` is not expressible — an
+      # empty YAML list loses its type and rclcpp aborts with "No parameter
+      # value set". Still true, so the list must never shrink to nothing.)
+      plugins: ["static_layer", "inflation_layer"]
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        # sim_node's a priori obstacle map (frame `map`, surveyed in the navsat
+        # datum — see sim_node._publish_obstacle_map). NOT /map: nothing here
+        # runs a SLAM or map_server, and pointing at /map would leave the layer
+        # waiting for a publisher that never appears, silently, forever.
+        map_topic: /obstacle_map
+        # ⚠️ The map is latched once at startup and never republished. Without
+        # transient_local durability a costmap that configures later never
+        # receives it and plans through the obstacle — green logs, no error.
+        map_subscribe_transient_local: true
+        # No incremental map updates: obstacles do not move in this world.
+        subscribe_to_updates: false
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.0
-        # robot_radius + ~0.15 m of margin.
-        inflation_radius: 0.55
+        # ⚠️ Retuned in A3c, the first time these costmaps ever held an
+        # obstacle. It was 0.55 (robot_radius + 0.15) with a scaling of 3.0,
+        # and that is not enough clearance for THIS controller: RPP with a
+        # 1.5 m lookahead deliberately cuts corners (see its own note below),
+        # so it drives inside the planned path on a turn. Measured with the old
+        # values: NavFn routed around a wall, RPP cut the corner, and the robot
+        # jammed against the wall tip at exactly the 0.70 m contact distance —
+        # while Nav2 reported SUCCEEDED, because a stuck robot's wheels keep
+        # spinning and odometry keeps advancing.
+        # So the margin has to cover the controller's cutting, not just the
+        # robot's body. 1.0 m of inflation with a gentler gradient (2.0 spreads
+        # the cost further out than 3.0, which decays almost to nothing within
+        # half a metre) pushes the planned path wide enough that the cut still
+        # clears. This is tuned against a simulated world; recheck it on the
+        # real robot at B7.
+        cost_scaling_factor: 2.0
+        inflation_radius: 1.0
 
 global_costmap:
   global_costmap:
@@ -183,13 +214,30 @@ global_costmap:
       # to hold a straight line. 0.05 would quadruple the cells for nothing.
       resolution: 0.1
       robot_radius: 0.4
-      # Same story as the local costmap: an empty plugin list is not a thing
-      # rclcpp can parse. Nothing observes obstacles, so nothing gets inflated.
-      plugins: ["inflation_layer"]
+      # A3c: this is the layer NavFn actually plans around. The rolling window
+      # is 60 x 60 m and sim_node's map is the same 60 x 60 m fixed at the
+      # origin, so they coincide at startup and the window slides off the map's
+      # edge only past ~30 m from origin — beyond which cells read as free,
+      # not as obstacles. Long routes need intermediate waypoints anyway.
+      plugins: ["static_layer", "inflation_layer"]
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        # sim_node's a priori obstacle map (frame `map`, surveyed in the navsat
+        # datum — see sim_node._publish_obstacle_map). NOT /map: nothing here
+        # runs a SLAM or map_server, and pointing at /map would leave the layer
+        # waiting for a publisher that never appears, silently, forever.
+        map_topic: /obstacle_map
+        # ⚠️ The map is latched once at startup and never republished. Without
+        # transient_local durability a costmap that configures later never
+        # receives it and plans through the obstacle — green logs, no error.
+        map_subscribe_transient_local: true
+        # No incremental map updates: obstacles do not move in this world.
+        subscribe_to_updates: false
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.0
-        inflation_radius: 0.55
+        # Same values as the local costmap, same reason — see the note there.
+        cost_scaling_factor: 2.0
+        inflation_radius: 1.0
 
 planner_server:
   ros__parameters:

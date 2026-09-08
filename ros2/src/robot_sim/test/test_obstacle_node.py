@@ -49,11 +49,15 @@ def test_no_obstacle_params_means_no_obstacles_and_no_map(context, tmp_path):
     try:
         assert node._obstacles == ()
         assert node._world._obstacles == ()
-        # An empty world must latch NOTHING. Publishing an all-free map would
-        # tell a costmap "surveyed, all clear" when the truth is "not surveyed".
-        for _ in range(20):
-            rclpy.spin_once(listener, timeout_sec=0.05)
-        assert received == []
+        # ⚠️ An empty world must still latch an ALL-FREE map, not silence.
+        # Nav2's StaticLayer blocks its costmap until a map arrives, so staying
+        # quiet aborts every goal rather than meaning "nothing in the way" —
+        # measured as status 6 on a wall-free run before this was unconditional.
+        deadline = node.get_clock().now().nanoseconds + 5_000_000_000
+        while not received and node.get_clock().now().nanoseconds < deadline:
+            rclpy.spin_once(listener, timeout_sec=0.1)
+        assert received, "obstacle-free world latched no map at all"
+        assert set(received[0].data) == {0}
     finally:
         listener.destroy_node()
         node.destroy_node()
@@ -79,9 +83,9 @@ def test_obstacle_params_reach_both_the_world_and_a_latched_map(context, tmp_pat
         assert received, "latched obstacle_map hiç gelmedi"
 
         message = received[0]
-        # ⚠️ sim_world, not map: these are ground truth coordinates, and `map`
-        # is anchored to the navsat datum with GPS error in it.
-        assert message.header.frame_id == "sim_world"
+        # `map`, so Nav2's global costmap can consume it: the obstacles are
+        # declared to be surveyed in the navsat datum. See _publish_obstacle_map.
+        assert message.header.frame_id == "map"
         assert message.info.width == DEFAULT_GRID.width
         assert message.info.height == DEFAULT_GRID.height
         assert message.info.resolution == pytest.approx(DEFAULT_GRID.resolution)

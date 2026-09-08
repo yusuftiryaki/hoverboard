@@ -92,6 +92,8 @@ class SimNode(Node):
         # is what every pre-A3c test expects.
         self.declare_parameter("obstacle_centers", Parameter.Type.DOUBLE_ARRAY)
         self.declare_parameter("obstacle_radii", Parameter.Type.DOUBLE_ARRAY)
+        # Keep in step with nav2.yaml's costmap robot_radius — see world.py.
+        self.declare_parameter("robot_radius", 0.4)
 
         # ---- Fake IMU --------------------------------------------------------
         # This publishes what mpu6050_driver WOULD PUBLISH, not what the chip
@@ -170,6 +172,7 @@ class SimNode(Node):
                 board_units_per_rpm=p("board_units_per_rpm").value,
                 slip_factor=p("slip_factor").value,
                 obstacles=self._obstacles,
+                robot_radius=p("robot_radius").value,
             )
         self._link = PtyLink(p("link").value)
         self._esp = Esp32Sim(
@@ -208,8 +211,14 @@ class SimNode(Node):
         self._obstacle_map_pub = self.create_publisher(OccupancyGrid, "obstacle_map", map_qos)
         self._tf = TransformBroadcaster(self)
 
-        if self._obstacles:
-            self._publish_obstacle_map()
+        # ⚠️ ALWAYS, even with no obstacles. Nav2's StaticLayer waits for a map
+        # before it will let its costmap become usable, so a simulator that
+        # stays quiet does not mean "no obstacles" — it means the planner never
+        # starts and every goal aborts. Measured: status 6 on every goal until
+        # this became unconditional. An empty grid is the honest a priori map
+        # of a field with nothing surveyed in it, which is what the costmaps
+        # already assumed before A3c.
+        self._publish_obstacle_map()
 
         self._last_tick = None
         self.create_timer(TX_PERIOD_S, self._tick)
@@ -230,20 +239,27 @@ class SimNode(Node):
             return []
 
     def _publish_obstacle_map(self) -> None:
-        """Latch the world's obstacles as an OccupancyGrid.
+        """Latch the world's obstacles as an OccupancyGrid for Nav2's costmaps.
 
-        ⚠️ frame_id is `sim_world`, NOT `map`. These obstacles sit at ground
-        truth coordinates, while `map` is anchored to the navsat datum with the
-        GPS error baked in — the same two-origins-under-one-name trap that made
-        /ground_truth `sim_world` in the first place. Feeding this to Nav2's
-        global costmap (global_frame: map) is therefore a separate decision and
-        not a relabel: on the real robot the costmap's picture of the world IS
-        offset from the world by the localization error, and that offset is
-        worth simulating honestly rather than defining away.
+        ⚠️ frame_id is `map`, and that is a DECISION rather than a relabel. The
+        coordinates here are ground truth, which lives in `sim_world`; `map` is
+        anchored to the navsat datum and carries its GPS error. Publishing them
+        as `map` asserts that these obstacles were SURVEYED IN THE SAME DATUM
+        the robot navigates in — a field's known rocks, entered in the same
+        coordinates the GPS reports. That is how a prior map is actually made,
+        and it makes the datum error common-mode: it shifts the map and the
+        robot's estimate of itself together, so it cancels rather than showing
+        up as survey error.
+
+        What this does NOT model is a map the robot builds from its own
+        sensors, where the error is the live localization error and does NOT
+        cancel. That needs a simulated range sensor, and the inventory has none
+        (wiring-map section 6). So Nav2 gets an a priori map — which is what
+        the A3c slice asks for, and no more.
         """
         spec = DEFAULT_GRID
         message = OccupancyGrid()
-        message.header.frame_id = "sim_world"
+        message.header.frame_id = "map"
         message.header.stamp = self.get_clock().now().to_msg()
         message.info.resolution = spec.resolution
         message.info.width = spec.width

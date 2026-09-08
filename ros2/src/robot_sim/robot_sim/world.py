@@ -56,7 +56,12 @@ class KinematicWorld:
         # Realistically 0.05-0.15 on varied terrain; 0.0 here means "ideal road".
         slip_factor: float = 0.0,
         obstacles: Tuple[CircularObstacle, ...] = (),
-        robot_radius: float = 0.35,
+        # ⚠️ Must match nav2.yaml's costmap robot_radius. There is one robot
+        # and it has one radius; two numbers for it would let Nav2 plan a gap
+        # the physics refuses (or worse, the reverse). Both are guesses until
+        # the chassis exists (roadmap B3) — guessed once, in two places that
+        # agree, rather than twice.
+        robot_radius: float = 0.4,
     ) -> None:
         self.wheel_radius = wheel_radius
         self.wheel_separation = wheel_separation
