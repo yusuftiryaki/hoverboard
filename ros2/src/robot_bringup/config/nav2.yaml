@@ -1,16 +1,23 @@
 # Nav2 — GPS waypoint following in open ground (roadmap A2 / old step 6).
 #
-# ⚠️⚠️ READ THIS FIRST: THE COSTMAPS ARE EMPTY, BY CONSTRUCTION.
+# ⚠️⚠️ READ THIS FIRST: THE COSTMAPS ONLY KNOW WHAT THEY WERE TOLD.
 #
 # This robot has NO range sensor. No LIDAR (handoff decision 3: cheap 2D lidar is
 # useless in sunlight), no ultrasonics (not bought, not decided), no depth
-# camera. Nothing populates an obstacle layer, so both costmaps are permanently
-# free space and every plan is a straight line.
+# camera. Nothing OBSERVES an obstacle, so nothing ever appears in a costmap at
+# runtime.
 #
-# That means Nav2 here is a PATH FOLLOWER, not an obstacle avoider. It will drive
-# through a tree with total confidence. The only thing between the robot and an
-# obstacle today is the ESP32's bumper reflex — contact, not avoidance.
-# Obstacle avoidance is A3 (Gazebo + camera/ultrasonics -> costmap layers).
+# What the costmaps DO hold, since A3c, is an A PRIORI map: a static_layer fed
+# from /obstacle_map, carrying obstacles someone surveyed in advance in the same
+# datum the GPS reports. Nav2 plans around those, and that avoidance is real —
+# measured against ground truth in test_nav2.py: a 2.00 m detour around a wall,
+# where the same goal with no wall deviates 0.29 m.
+#
+# But an UNSURVEYED obstacle is still invisible. Nav2 will drive through a tree
+# nobody entered into the map, with total confidence. The only thing between the
+# robot and a surprise is the ESP32's bumper reflex — contact, not avoidance.
+# Seeing obstacles rather than remembering them needs a sensor: A3 (Gazebo +
+# camera/ultrasonics -> costmap layers), inventory note in wiring-map section 6.
 #
 # This is coherent with the mission the hardware actually supports (decision 5):
 # open field, wide corridors, 2.5-5 m GPS. It is NOT "drive to the shop".
@@ -86,9 +93,12 @@ controller_server:
     FollowPath:
       # Rotation shim + Regulated Pure Pursuit.
       #
-      # Why not DWB/MPPI: those exist to dodge obstacles in clutter by scoring
-      # trajectories against a costmap. Our costmap is empty — there is nothing
-      # to score. They would burn CPU choosing between equally free paths.
+      # Why not DWB/MPPI: those exist to dodge obstacles in clutter, by scoring
+      # trajectories against a costmap that sensors keep changing. Ours holds a
+      # surveyed map and nothing else — nothing new appears at runtime, so the
+      # global plan already routes around everything that is known and the
+      # controller's only job is to hold that plan. They would burn CPU choosing
+      # between paths that differ by nothing.
       #
       # RPP just follows the line, which is the whole job here.
       #
@@ -123,10 +133,14 @@ controller_server:
       allow_reversing: false               # casters do not steer backwards well
       use_rotate_to_heading: true
       max_allowed_time_to_collision_up_to_carrot: 1.0
-      # No sensor feeds the costmap, so collision detection here would check the
-      # robot against empty space and always pass. Off, honestly, rather than on
-      # and meaningless.
-      use_collision_detection: false
+      # ⚠️ ON since A3c. It was off while the costmap was permanently empty:
+      # checking the robot against free space passes every time, and a check
+      # that cannot fail is worse than no check, because it reads like one.
+      # The static layer now carries a real map, so this becomes a genuine last
+      # line of defence — if the path ahead would drive into a surveyed
+      # obstacle, RPP stops and lets the BT replan instead of grinding into it.
+      # It still sees NOTHING unsurveyed.
+      use_collision_detection: true
       use_regulated_linear_velocity_scaling: true
       use_cost_regulated_linear_velocity_scaling: false
       regulated_linear_scaling_min_radius: 0.9
@@ -245,9 +259,10 @@ planner_server:
     planner_plugins: ["GridBased"]
     costmap_update_timeout: 1.0
     GridBased:
-      # In an empty costmap NavFn returns a straight line, which is exactly the
-      # right plan. Smac/Hybrid-A* would buy kinematic feasibility we do not need
-      # from a differential drive that can turn in place.
+      # NavFn over a costmap that is free space except for the surveyed map:
+      # straight lines where nothing is known, a route around what is. Both are
+      # the right plan. Smac/Hybrid-A* would buy kinematic feasibility we do not
+      # need from a differential drive that can turn in place.
       plugin: "nav2_navfn_planner::NavfnPlanner"
       # Loose, to match the goal checker and the GPS's real accuracy.
       tolerance: 1.0
@@ -270,9 +285,10 @@ behavior_server:
       plugin: "nav2_behaviors::DriveOnHeading"
     wait:
       plugin: "nav2_behaviors::Wait"
-    # ⚠️ These recoveries move the robot BLIND: they exist to shake loose from
-    # obstacles the costmap can see, and ours sees nothing. Backing up on contact
-    # is the ESP32 bumper's job, not this. Kept for the BT's sake, kept slow.
+    # ⚠️ These recoveries move the robot nearly BLIND: they shake loose from
+    # what the costmap knows, and it knows only the surveyed map — never the
+    # thing the robot actually bumped into. Backing up on contact is the ESP32
+    # bumper's job, not this. Kept for the BT's sake, kept slow.
     max_rotational_vel: 0.6
     min_rotational_vel: 0.2
     rotational_acc_lim: 1.0
