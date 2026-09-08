@@ -145,6 +145,16 @@ Batarya 36V → [30-40A sigorta] → ┬→ [buck 5V/5A] → Pi (+ USB ile ESP32
    ayırt edilemiyor. Sabit uykuyla kurulan test yükte kararsızlaştı ("Nav2
    rejected the goal" — navigasyon hatası gibi okunur, aslında yarıştır).
    Kabul edilene kadar tekrar denenmeli.
+   ⚠️ **Devamı (A3e, 2026-09-08): tekrar denemek de yetmedi.** 20 sn uyku +
+   45 sn hedef tekrarı, suite A3e ile uzayıp Nav2'den önce **iki Gazebo dünyası**
+   kalkmaya başlayınca çöktü: tam suite'te 4 Nav2 testinden **2'si patladı**,
+   aynı dosya **tek başına 4/4 geçerken**. Ayırt edici deney buydu; yoksa
+   "navigasyon bozuldu" diye okunuyordu.
+   **Gerçek çözüm:** `lifecycle_manager_navigation/is_active` — tahmin değil,
+   cevap. Ölçüldü: servis manager başlar başlamaz görünüyor (yani **varlığı
+   bir şey ifade etmiyor**), çağrı ise geçişler bitene kadar **bloke ediyor**
+   (boş makinede 4.3 sn) ve sonra `True` dönüyor. `Nav2Stack` artık uyumuyor,
+   bunu bekliyor; hedef tekrarı sadece yedek olarak duruyor.
 
 ## A3'te bulunan tuzaklar (fizik ilk kez GERÇEKTEN koşunca)
 A3a "yazılmış" görünüyordu: kod, SDF, launch, birim testleri, hepsi yeşil. Fizik
@@ -226,6 +236,10 @@ Tam zincir: `/cmd_vel` → `hoverboard_bridge` → pty → `Esp32Sim` →
 | 8 yönde gerçek rota ile burun yönü farkı | **0.02°** |
 | Engele çarpma noktası (elle: 3.0 − 0.5 − 0.35) | **2.1500 m** |
 | Sıkışmışken 6 sn'de: gerçek / `/odom` | **0.0000 m / +2.97 m** |
+| ~8 m karede ham `/odom` poz hatası (patinajın asıl bozduğu şey) | **0.077 m** (kararlı: 0.074–0.082) |
+| Aynı karede EKF poz hatası (boş makine, 4 koşu) | **0.095 m** (kinematik: 0.083 m) — ⚠️ kararsız, aşağı bak |
+| Aynı karede EKF yaw hatası | **3.9°** (kinematik: 4.3°) |
+| Patinaj: pencere seyirde biterse / duruşu içerirse | **+0.1367 m / +0.0126 m** |
 
 > **Patinajın neden alt sınırı elle türetilebiliyor:** DiffDrive joint'leri hızla
 > sürdüğü için adım komutta temas yüzeyi anında `v`'ye fırlar, gövde ise hâlâ
@@ -244,6 +258,35 @@ Tam zincir: `/cmd_vel` → `hoverboard_bridge` → pty → `Esp32Sim` →
 > 4.10 (beklenen 4.0); ölçek hatası 1.0 verirdi. İkinci karşıt test rampa: aynı
 > hız, aynı mesafe, sadece lastikten sahip olmadığı kuvvet istenmiyor → patinaj
 > 60 kat küçülüyor ve işareti dönüyor.
+>
+> ⚠️ **PATİNAJ EKF'E NEDEN NEREDEYSE HİÇ MAL OLMUYOR — ve bu neden bir
+> rahatlama DEĞİL.** Kalkışta tekerlek fazla sayar; duruşta, tekerlek sıfıra
+> komut edilirken gövde hâlâ hareket ettiği için **aynı mekanizma ters yönde**
+> çalışır ve az sayar. Ölçüldü (aynı sürüş, tek fark ölçüm penceresi):
+> seyirde biten pencerede **+136.7 mm**, duruşu da içeren pencerede
+> **+12.6 mm** — frenleme **%91'ini geri veriyor**. Başlayıp duran her
+> manevrada büyük ölçüde götürür, bu yüzden 8 m karede EKF hatası 0.083 → 0.095
+> m'ye çıkmakla kalıyor ve hâlâ **jiro bias'ı baskın** (yaw hatası 3.9° ≈
+> 0.1 dps × 35 sn), patinaj değil.
+> **Götürmeyen tek yönlü patinaj:** boşta dönen tekerlek, yokuşta patinaj,
+> ya da engele dayanmış robot. Sonuncusu ölçüldü: 6 sn'de `/odom` **+2.97 m**
+> hayali yol saydı. Yığında bunu görebilen hiçbir şey yok (A3c tuzak 3).
+>
+> ⚠️ **AÇIK SORU — `ekf_local`'in bu karedeki hatası TEKRARLANABİLİR DEĞİL.**
+> Boş makinede 4 koşu: 0.081 / 0.103 / 0.082 / 0.100 m. Aynı kod, aynı komutlar,
+> ama tam bir pytest oturumunun içinde: **0.487 / 1.368 / 1.522 m** — ve o
+> koşularda **altındaki tekerlek odometrisi 0.080 m**'de kalmış, **RTF 1.00**,
+> `truth`/`odom`/`imu` hepsi nominal hızda. Yani sebep fizik değil, yük değil,
+> mesaj kaybı da değil. **Bilinmiyor.** Aynı sıralamayla koşulan bir tekrar
+> hiç patlamadı, yani deterministik de değil.
+> Bu yüzden `test_gazebo_localization.py` **sıkı iddiayı tekerlek
+> odometrisine** koyuyor (milimetre kararlılığında ve patinajın bozduğu şey o);
+> EKF'e sadece bir **ıraksama** sınırı (2.5 m) ve dürüst bir yorum düşüyor.
+> Eşiği geçecek kadar gevşetip "yeşil" demek, A3c tuzak 4'ün ta kendisi olurdu:
+> geçmeyen bir kontrol, olmayandan kötüdür.
+> **Şüpheli:** mutlak heading'i gözleyen hiçbir şey yok, o yüzden `ekf_local`'in
+> yaw'ı serbest bir durum; kapalı karede küçük bir heading farkı net yer
+> değiştirmeyi büyütüyor. Doğrulanmadı.
 
 ## Yol boyunca yapılan ÖNEMLİ düzeltmeler (tekrarlanmasın)
 1. ⚠️ **Flash sırasında batarya BAĞLI olmalı.** (Önce "bağlama" denmişti, YANLIŞ.)
@@ -408,7 +451,7 @@ olarak yayınlıyor; montaj yönü **URDF'teki `imu_joint` rpy'ında** tarif edi
     görünmez: haritaya girilmemiş ağaca hâlâ güvenle sürer. Ayrım kritik.
 - ✅ **A3. Gazebo arka ucu — BİTTİ, fizik uçtan uca ölçüldü (2026-09-08).**
   Aynı `fake_esp32`'nin arkasına takılıyor (mimari kararı aşağıda): fizik,
-  patinaj ve engel dünyası. Detaylar aşağıdaki A3 dilimlerinde.
+  patinaj ve engel dünyası. Detaylar aşağıdaki A3 dilimlerinde (a–e).
 - ✅ **A4. Manyetometre sürücüsü** — **yazıldı** (`qmc5883l_driver` + madgwick),
   yaw sorunu çözüldü. Chip hâlâ alınmadı; sahte I2C'ye karşı doğrulandı.
 - ✅ **A6. Aynalı manyetometre hatası** — sim'deki tek eksi işareti; A2'yi ve
@@ -438,6 +481,21 @@ olarak yayınlıyor; montaj yönü **URDF'teki `imu_joint` rpy'ında** tarif edi
   engeller Gazebo'ya spawn ediliyor. **`test_gazebo_physics.py` (6 kabul testi,
   ~2.5 dk) + `test_gazebo_config.py` (8 statik test, 0.06 sn).**
   Ölçülen sayılar ve bulunan tuzaklar aşağıda ayrı bölümde.
+- ✅ **A3e. EKF'in patinaja karşı hatası — BİTTİ, ölçüldü (2026-09-08).**
+  `test_gazebo_localization.py` kinematik testin **birebir aynı** karesini fizik
+  dünyasında sürüyor (3 taze yığın): EKF **0.095 m / 3.9°**, kinematik dünyada
+  **0.083 m / 4.3°**. Yani patinaj 8 metrede ~1 cm'e mal oluyor ve tahmin
+  bilesin diye: **hata hâlâ jiro bias'ından, patinajdan değil.**
+  Bu rahatlatıcı sonucun sebebi ayrı bir testle izole edildi
+  (`test_slip_from_speeding_up_is_given_back_when_slowing_down`): aynı sürüş,
+  tek fark ölçüm penceresi → seyirde biten pencere **+136.7 mm**, duruşu içeren
+  pencere **+12.6 mm**. **Frenleme %91'ini geri veriyor.**
+  ⚠️ Bu bir "patinaj önemsizmiş" sonucu DEĞİL: götürmeyen tek yönlü patinaj
+  (boşta dönen tekerlek, yokuş, sıkışma) kapsam dışı ve yığın onu göremiyor.
+  ⚠️ Kendi Gazebo dünyasını alır (modül kapsamlı fixture). Sebep ölçüldü:
+  dakikalarca sürülmüş paylaşılan bir yığında aynı kare bir koşuda 18°, sonraki
+  koşuda 3.3° yaw hatası verdi — EKF'in biriken yaw sapması sonraki her yer
+  değiştirmeyi döndürüyor.
 - ✅ **A3c. Obstacle/collision — BİTTİ, uçtan uca ölçüldü (2026-09-08).**
   `KinematicWorld` dairesel engelde duruyor; `obstacle_map.py` engelleri
   OccupancyGrid'e çeviriyor; `nav2.yaml`'ın her iki costmap'inde `static_layer`
@@ -557,13 +615,13 @@ kalır ve gerçek yığın her iki dünyada da devrededir.
 ## ŞU AN NEREDEYIZ / SIRADAKİ İŞ
 *(son güncelleme: 2026-09-08)*
 
-Yazılım İz A'da: **A1, A2, A3 (a–d, tamamı), A4, A6 (borcu dahil) ve SP1 bitti**;
-donanım B1'de (ST-Link) kilitli. Tam workspace doğrulaması **140 test**
-geçti (robot_sim 59, hoverboard_bridge 24, mpu6050 16, qmc5883l 23,
+Yazılım İz A'da: **A1, A2, A3 (a–e, tamamı), A4, A6 (borcu dahil) ve SP1 bitti**;
+donanım B1'de (ST-Link) kilitli. Tam workspace doğrulaması **142 test**
+geçti (robot_sim 61, hoverboard_bridge 24, mpu6050 16, qmc5883l 23,
 ina228 8, battery_manager 10), atlanan yok, **7 paketin tamamı** temiz build ediyor.
-Ölçülen süre: **9 dk 15 sn**.
+Ölçülen süre: **10 dk 35 sn**.
 
-⚠️ **Suite artık ~9.5 dakika** — dört Nav2 yığını ve iki Gazebo dünyası
+⚠️ **Suite artık ~10.5 dakika** — dört Nav2 yığını ve iki Gazebo dünyası
 sırayla kalkıyor. Elle koşma alışkanlığı bu süreyle zayıflar; **A5 (CI) artık
 listedeki en yüksek getirili iş.** Ara adım olarak hızlı süzgeç:
 `pytest src/robot_sim/test -q -k "not gazebo_physics and not nav2"` (saniyeler,
@@ -578,10 +636,16 @@ Sıradaki iş seçenekleri:
   +2.97 m saydı. Yazılımla çözülebilir kısmı yok gibi: ikinci görüş GPS,
   INA228 akımı ya da tampon; **üçü de donanıma bağlı.** Bu, İz B'nin İz A'yı
   ilk kez gerçekten bloke ettiği yer.
-- **Gazebo'da EKF'i patinaja karşı ölçmek** — A3d zinciri kurdu ama bu soruyu
-  sormadı. Kinematik dünyada ~8 m karede EKF hatası 0.083 m'di ve patinaj
-  YOKTU; aynı kareyi Gazebo'da koşup sayıyı almak artık kısa bir iş ve gerçek
-  odometri hatasının en büyük kaynağına ilk dürüst bakış olur.
+- ~~**Gazebo'da EKF'i patinaja karşı ölçmek**~~ — **A3e'de yapıldı:** patinajın
+  asıl bozduğu şey olan ham tekerlek odometrisi 8 metrede **0.077 m** ve
+  kararlı; EKF boş makinede **0.095 m** (kinematik 0.083 m). Sebebi de ölçüldü:
+  frenleme kalkış patinajının %91'ini geri veriyor.
+- **`ekf_local`'in kare hatasının kararsızlığı** — A3e'nin açtığı YENİ açık
+  soru. Aynı koşu 0.08 m de veriyor 1.52 m de, altındaki tekerlek odometrisi
+  0.080 m'de sabitken. Fizik/yük/mesaj kaybı elendi (ölçüldü). Bir sonraki
+  adım: `ekf_local`'in yaw'ını kare boyunca ground truth'a karşı **kaydedip**
+  sapmanın ne zaman başladığını görmek — mutlak heading gözlenmediği için
+  serbest kalan durumun bu olduğundan şüpheleniliyor ama doğrulanmadı.
 - **SP3 → SP5** — batarya/docking zinciri; SP1'in ölçüm katmanı hazır.
 
 ### ✅ A4 (manyetometre) yazıldı — yaw sorunu ÇÖZÜLDÜ, ölçüldü
@@ -695,17 +759,17 @@ Tamamlananlar:
 ```bash
 cd ros2 && source install/setup.bash
 python3 -m pytest src/hoverboard_bridge/test -q   # 24 (~54 sn)
-python3 -m pytest src/robot_sim/test -q           # 59; 4'ü Nav2, 6'sı Gazebo (~490 sn)
+python3 -m pytest src/robot_sim/test -q           # 61; 4'ü Nav2, 8'i Gazebo (~640 sn)
 python3 -m pytest src/mpu6050_driver/test -q      # 16 (~0.1 sn)
 python3 -m pytest src/qmc5883l_driver/test -q     # 23 (~0.1 sn)
 python3 -m pytest src/ina228_driver/test -q       #  8 (~0.1 sn)
 python3 -m pytest src/battery_manager/test -q     # 10 (~18 sn)
-# hepsi: 140 test, ~9.3 dk
+# hepsi: 142 test, ~10.6 dk
 
 # Yığın kaldırmayan hızlı süzgeç (saniyeler). test_gazebo_config.py bunun
 # içinde ve A3'ün asıl hatasını — köprünün hiçbir şeye bağlı olmaması — tam
 # olarak o yakalıyor, Gazebo koşturmadan.
-python3 -m pytest src/robot_sim/test -q -k "not gazebo_physics and not nav2"
+python3 -m pytest src/robot_sim/test -q -k "not gazebo_physics and not localization and not nav2"
 ```
 ⚠️ **Gazebo testleri `gz` yoksa temizce SKIP eder** (`-rs` ile görürsün) ve
 aynı anda tek `gz` sunucusuna izin verirler; elle bir sim açık bırakırsan

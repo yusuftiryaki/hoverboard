@@ -12,11 +12,15 @@ mpu6050_driver calibrates it out), and the estimate drifted 100 degrees.
 ⚠️ Passing this does NOT mean the robot will localize well outdoors. The world
 here is pure kinematics: no wheel slip, which is the single largest source of
 real odometry error. This proves the maths is wired up correctly and nothing
-more. Slip lives in test_gazebo_physics.py, where the same stack runs on real
-physics; the truth needs dirt.
+more; the truth needs dirt.
 
-⚠️ And nobody has yet run THIS measurement in that world. The numbers below are
-the EKF's error with slip switched off, which is the easy case.
+The same square HAS since been driven on real physics, in
+test_gazebo_localization.py: 0.095 m of error against the 0.083 m below, and
+the same ~4 deg of yaw. So slip costs about a centimetre over eight metres and
+this file's numbers are not the flattering ones they look like — but only
+because braking hands back 91% of the slip that speeding up creates. Slip that
+only goes one way (a spinning wheel, a jammed robot) is not covered by either
+file's numbers, and nothing in this stack can see it.
 
 Spawns processes, ~60 s. SKIPs without ROS.
 """

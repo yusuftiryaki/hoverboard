@@ -18,17 +18,12 @@ keeps counting while the wheels spin on the spot. Ground truth is a separate
 OdometryPublisher differentiating the model's real pose. Sourcing both from
 DiffDrive would make every number below zero by construction.
 
-⚠️ SAMPLE BOTH AT THE SAME INSTANT. The first version of these measurements read
-the newest message on each topic, which are not the same moment: /odom carries
-the pty round-trip's latency, so at 1 m/s the two samples were ~10 ms and ~10 mm
-apart. That artefact was the same size as the slip being measured and it had a
-plausible-looking sign. Track interpolates both to one stamp; doing so moved the
-no-slip control case from -19 mm to -2 mm.
+⚠️ SAMPLE BOTH AT THE SAME INSTANT, never "the newest message on each topic".
+conftest's PoseTrack does the interpolation and explains what it costs to skip.
 
 Spawns Gazebo and the full stack, ~3 min for the file. SKIPs without ROS or gz.
 """
 
-import bisect
 import math
 import time
 
@@ -40,6 +35,10 @@ import rclpy                                             # noqa: E402
 from geometry_msgs.msg import Twist                      # noqa: E402
 from nav_msgs.msg import OccupancyGrid, Odometry         # noqa: E402
 from rclpy.node import Node                              # noqa: E402
+
+# How much slower than real time the sim may run before drive() calls it
+# dead. Gazebo is configured for RTF 1.0; this is slack for a busy box.
+SIM_TIME_STALL_FACTOR = 6.0
 from rclpy.qos import DurabilityPolicy, QoSProfile       # noqa: E402
 from std_msgs.msg import Bool                            # noqa: E402
 
@@ -79,45 +78,6 @@ def slip_floor(speed):
     return speed ** 2 / (2.0 * WHEEL_MU * STANDARD_GRAVITY)
 
 
-class Track:
-    """Timestamped pose history, so two topics can be read at ONE instant."""
-
-    def __init__(self):
-        self.stamps = []
-        self.poses = []
-
-    def add(self, message):
-        stamp = message.header.stamp
-        seconds = stamp.sec + stamp.nanosec * 1e-9
-        # Sim time can repeat a stamp when /clock has not advanced between two
-        # publications; a non-increasing key would break the bisect below.
-        if self.stamps and seconds <= self.stamps[-1]:
-            return
-        pose = message.pose.pose
-        quaternion = pose.orientation
-        self.stamps.append(seconds)
-        self.poses.append((
-            pose.position.x,
-            pose.position.y,
-            math.atan2(2.0 * (quaternion.w * quaternion.z + quaternion.x * quaternion.y),
-                       1.0 - 2.0 * (quaternion.y ** 2 + quaternion.z ** 2)),
-        ))
-
-    def at(self, seconds):
-        """Linearly interpolated pose, or None outside the recorded span."""
-        index = bisect.bisect_left(self.stamps, seconds)
-        if index == 0 or index >= len(self.stamps):
-            return None
-        before, after = self.stamps[index - 1], self.stamps[index]
-        ratio = (seconds - before) / (after - before)
-        first, second = self.poses[index - 1], self.poses[index]
-        return tuple(a + ratio * (b - a) for a, b in zip(first, second))
-
-    @property
-    def newest(self):
-        return self.stamps[-1] if self.stamps else None
-
-
 def distance(a, b):
     return math.hypot(a[0] - b[0], a[1] - b[1])
 
@@ -129,14 +89,16 @@ def angle_diff(a, b):
 class Probe(Node):
     """Drives /cmd_vel and reads the two odometries at matched stamps."""
 
-    def __init__(self):
-        super().__init__("gazebo_physics_probe")
-        # ⚠️ Sim time here too. The stamps this node compares are Gazebo's, and
-        # its own clock has to be the same one or `sim_now` means nothing.
-        self.set_parameters([rclpy.parameter.Parameter("use_sim_time", value=True)])
+    def __init__(self, new_track):
+        # ⚠️ Sim time, and set at construction rather than afterwards. The
+        # stamps this node compares are Gazebo's and drive() now counts in
+        # Gazebo's seconds, so the node's clock has to BE that clock from its
+        # first tick — not from whenever a later set_parameters takes effect.
+        super().__init__("gazebo_physics_probe", parameter_overrides=[
+            rclpy.parameter.Parameter("use_sim_time", value=True)])
         self._publisher = self.create_publisher(Twist, "/cmd_vel", 10)
-        self.odom = Track()
-        self.truth = Track()
+        self.odom = new_track()
+        self.truth = new_track()
         self.collisions = []
         self.obstacle_map = None
         self.command = (0.0, 0.0)
@@ -161,10 +123,28 @@ class Probe(Node):
 
     # ---- Driving ------------------------------------------------------------
     def drive(self, v, w, seconds):
+        """Hold a command for `seconds` of SIM time, not wall time.
+
+        ⚠️ The difference is not pedantry. The robot moves on Gazebo's clock,
+        so a leg timed by the wall clock is a different manoeuvre on a loaded
+        machine than on an idle one — and the whole suite runs Gazebo, Nav2 and
+        a full ROS stack on eight cores. Timed by the wall clock, this test's
+        square measured 0.095 m of EKF error alone and 0.505 m inside the full
+        suite: five times the effect being measured, coming from nothing but
+        how busy the box was.
+
+        The wall-clock cap is a deadlock guard, not the timer: if /clock stops
+        (Gazebo died) sim time freezes and this would otherwise never return.
+        """
         self.command = (float(v), float(w))
-        end = time.monotonic() + seconds
-        while time.monotonic() < end:
+        start = self.get_clock().now()
+        wall_cap = time.monotonic() + seconds * SIM_TIME_STALL_FACTOR + 10.0
+        while (self.get_clock().now() - start).nanoseconds * 1e-9 < seconds:
             rclpy.spin_once(self, timeout_sec=0.01)
+            assert time.monotonic() < wall_cap, (
+                f"sim time advanced less than {seconds} s in "
+                f"{seconds * SIM_TIME_STALL_FACTOR + 10.0:.0f} s of wall time — "
+                "Gazebo has stopped publishing /clock")
 
     def settle(self, seconds=2.0, timeout_s=30.0):
         """Wait for both odometries to arrive, THEN sit still.
@@ -249,8 +229,8 @@ class Probe(Node):
 
 
 @pytest.fixture
-def probe(ros):
-    node = Probe()
+def probe(ros, pose_track):
+    node = Probe(pose_track)
     yield node
     node.command = (0.0, 0.0)
     node.destroy_node()

@@ -165,6 +165,14 @@ class Navigator(Node):
 
         Retrying is the honest wait: a genuinely broken Nav2 still fails, just
         ready_timeout later and with a message that says which failure it is.
+
+        ⚠️ This is now a BACKSTOP, not the primary wait. conftest's Nav2Stack
+        blocks on the lifecycle manager's own `is_active` before any test runs,
+        which is a readiness answer rather than a guess. The retry stayed
+        because it costs nothing when Nav2 is up and it still covers the gap
+        between "the manager says active" and "this particular action server
+        has processed that" — but if it ever fires again, the fixture is the
+        thing to look at, not the timeout here.
         """
         deadline = time.monotonic() + ready_timeout
         while True:
