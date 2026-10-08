@@ -20,7 +20,7 @@ Tasarımın temel prensibi — **iki hız katmanı:**
                          └───────────────┬─────────────────────────┘
                                     [+]  │  [-]───────── ORTAK GND ──────────┐
                                          │                                   │
-                                  [30–40A SİGORTA]                           │
+                                  [20A/60V SİGORTA]                          │
                                          │                                   │
                           ┌──────────────┴───────────────┐                   │
                           │                               │                  │
@@ -37,8 +37,7 @@ Tasarımın temel prensibi — **iki hız katmanı:**
                     │        └────► [ESP32] ◄── UART ───────┘ (3.3V, GND/TX/RX)│
                     │                  │  ▲                                   │
                     │  USB seri        │  │ E-stop sense (GPIO25)             │
-                    └──────────────────┘  ├─ çarpma sensörü (refleks)         │
-                                          └─ ultrasonik ×4 (refleks, opsiyon) │
+                    └──────────────────┘  └─ çarpma sensörü (refleks)         │
                                                                               │
    ┌── Pi çevre birimleri (I2C / UART / CSI) ──┐                             │
    │  IMU (MPU6050, I2C)  ── direkte, motordan uzak                          │
@@ -56,10 +55,10 @@ Tasarımın temel prensibi — **iki hız katmanı:**
 
 | Kaynak | → Hedef | Gerilim/Akım | Not |
 |--------|---------|--------------|-----|
-| Batarya [+] | Sigorta | 36V | **30–40A**, bataryanın hemen çıkışında |
+| Batarya [+] | Sigorta | 36V nominal, **42V dolu** | **20A / 60V**, yuvalı (elde var), bataryanın hemen çıkışında. ⚠️ Sigortanın VOLTAJ dayanımı pakette görülecek en yüksek gerilimin üstünde olmalı — otomobil bıçak sigortalarının çoğu 32V'tur ve 42V'ta arkı kesemeyebilir. |
 | Sigorta | Dal 1: Buck girişi | 36V | Pi+ESP32 **her zaman açık** (E-stop'tan bağımsız) |
 | Sigorta | Dal 2: E-stop kontaktör → MCU | 36V | Sadece **motor gücü** bu dalda |
-| Buck çıkışı | Pi 4 | 5V / ≥5A | Pi tam yükte ~3A; buck'ta cimrilik yapma |
+| Buck çıkışı | Pi 4 | 5V / ≥5A | Pi tam yükte ~3A; buck'ta cimrilik yapma. ⚠️ **Buck GİRİŞİ ≥60V dayanmalı:** dolu 10S paket 42V'tur; yaygın XL4016 (40V), XL4015 (38V) ve LM2596 (35V) modülleri bu yüzden OLMAZ. |
 | Pi USB | ESP32 (5V/VIN) | 5V | Güç + veri tek kabloda (prototip kolaylığı) |
 | Batarya [-] | **Ortak GND** | — | Buck, Pi, ESP32, MCU sinyal GND'si hepsi birleşir |
 
@@ -118,7 +117,7 @@ gücünü 36V girişinden kendisi üretir. Yani MCU'ya ayrı buck çekmiyorsun �
 |--------|-----------|-------|-----|
 | E-stop sense | GPIO25 | ✅ kodda var | NC kontak → GND, INPUT_PULLUP. **Açık devre = HIGH = DUR** (kopuk kablo da durdurur) |
 | Çarpma sensörü | GPIO26 | ✅ kodda var | **NC kontak → GND, INPUT_PULLUP** — E-stop'la aynı fail-safe deseni. Bkz. aşağısı. |
-| Ultrasonik ×4 | trig+echo ×4 (8 pin) | ⏳ envanterde YOK | Alım kararı verilmedi (wiring-map'te "opsiyon"). ⚠️ HC-SR04 echo **5V** → 3.3V'a bölücü gerekir |
+| ~~Ultrasonik ×4~~ | — | ❌ tasarımdan çıkarıldı (2026-10-08) | Alınmayacak. ESP32'nin refleks katmanı E-stop + çarpma ile sınırlı; yakın menzilde **temastan önce** uyaran hiçbir şey yok. |
 
 **⚠️ Çarpma sensörü NC (normally-closed) bağlanmalı — NO değil.**
 E-stop'la aynı mantık: kontak **kapalı = çarpma YOK = pin LOW**. Basılınca
@@ -159,7 +158,12 @@ Amaç: coulomb sayan SoC için paket akımını ölçmek. Pi I2C bus 1, adres 0x
 - Düşük-taraf montajda INA228 VBUS pini şasi civarında kalır ve kullanılmaz;
   paket voltajı köprünün ham `/battery_raw` yayınıdır. VBUS'u boşta bırakma,
   GND'ye bağla.
-- Hedef şönt: 1.5 mΩ / en az 50 A. `shunt_ohms` config'te CALIBRATE edilir.
+- Şönt: eldeki INA228 kartının **üzerindeki** direnç, işareti `R002` = 2 mΩ
+  (2026-10-08'de parçadan okundu). Harici şönt alınmıyor. Sürücünün ±163.84 mV
+  aralığında bu ±81.9 A tam skala; 20 A'de direnç 0.8 W harcar.
+  ⚠️ Kartın kendi yolları ve klemensleri paket akımını taşıyacak — bunların
+  akım dayanımı **doğrulanmadı**. İlk yüklü sürüşte kartın ısısına bak.
+  `shunt_ohms` config'te 0.002; yine de CALIBRATE edilir.
 - `invert_current` ile işareti düzelt: robot bataryadan çalışırken
   `/battery.current` küçük NEGATİF olmalı.
 - INA228 I2C tarafı Pi'ın 3.3 V alanındadır. Tüm GND'ler mevcut tek ortak
@@ -175,7 +179,6 @@ Amaç: coulomb sayan SoC için paket akımını ölçmek. Pi I2C bus 1, adres 0x
 - **Mantık seviyeleri:** Pi, ESP32, STM32 MCU, IMU, manyetometre → hepsi 3.3V,
   doğrudan bağlanır.
 - **İstisnalar (⚠️ seviye uyumu):**
-  - HC-SR04 echo = **5V** → ESP32/Pi için gerilim bölücü (örn. 1kΩ/2kΩ).
   - NEO-6M TX genelde 3.3V ama modülüne göre değişir — **ölç**.
 
 ---
@@ -187,7 +190,6 @@ STM32 MCU  : 36V güç, 2× motor faz, 2× hall  → (hazır bağlı, dokunma)
              UART 3 tel (GND/TX/RX)          → ESP32 GPIO16/17
 ESP32      : USB (güç+veri)                  → Pi
              GPIO25 E-stop, GPIO26 çarpma     → refleks
-             (ultrasonik ×4 → eklenti)
 Pi 4       : 5V buck girişi                  → güç
              I2C (GPIO2/3): IMU + manyetometre
              USB-TTL: GPS
@@ -201,11 +203,12 @@ Güç        : Batarya → sigorta → {buck→Pi/ESP32} + {E-stop→MCU}
 ## 6. Açık uçlar / karar bekleyenler
 - [ ] Kontaktör modeli + E-stop bobin sürüş şekli (akıma göre).
 - [ ] Manyetometre alımı (QMC5883L, ~100 TL) — 6-eksen IMU'nun eksik parçası.
-- [ ] **Ultrasonik alınacak mı?** Katman ESP32'de olacak (karar 8) ama sensörler
-      **envanterde yok ve alım listesinde de değil**. Alınacaksa önce karar:
-      kaç adet, hangi açılara bakacak, echo bölücüsü nasıl. Montaj geometrisi
-      belli olmadan "ön engel" mantığı yazılamaz.
+- [x] ~~Ultrasonik alınacak mı?~~ — **Hayır, tasarımdan çıkarıldı (2026-10-08).**
+      Sonucu: yakın menzil katmanı yok; robot survey edilmemiş bir engeli ancak
+      tampona değince fark eder (`handoff.md` karar 8).
 - [ ] GPS: USB-TTL mü Pi donanım UART'ı mı (USB-TTL daha az dertli).
-- [ ] Buck akım marjı (Pi 3A + ESP32 + sensörler → ≥5A buck).
-- [ ] INA228 modülü + 1.5 mΩ / ≥50 A şönt alımı ve BMS şönt konumunun
-  multimetreyle doğrulanması.
+- [ ] Buck: akım marjı (Pi 3A + ESP32 + sensörler → ≥5A) **ve giriş ≥60V**
+      (dolu paket 42V). Aday: 8–60V girişli ayarlanabilir modül; çıkışı yük
+      bağlamadan 5.1V'a ayarla.
+- [x] ~~INA228 modülü + şönt alımı~~ — kart elde, üzerinde 2 mΩ şönt var.
+- [ ] BMS şönt konumunun multimetreyle doğrulanması (yukarıdaki 3. bölüm).

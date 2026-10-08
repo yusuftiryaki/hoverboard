@@ -70,12 +70,16 @@ class BatteryMonitorNode(Node):
     def _setup_sensor(self) -> None:
         get_parameter = self.get_parameter
         address = int(get_parameter("address").value)
+        shunt_ohms = float(get_parameter("shunt_ohms").value)
         try:
             if bool(get_parameter("use_fake_bus").value):
                 from ina228_driver.fake_bus import FakeINA228Bus
 
                 self.get_logger().warn("SİMÜLE INA228 kullanılıyor")
-                self._bus = FakeINA228Bus(address=address)
+                # The SAME shunt the driver is about to divide by. The fake
+                # used to keep its own 1.5 mOhm default, which agreed with the
+                # parameter's default by coincidence and with nothing else.
+                self._bus = FakeINA228Bus(address=address, rshunt_ohms=shunt_ohms)
                 self._bus.true_current_a = float(get_parameter("fake_current_a").value)
             else:
                 import smbus2
@@ -84,7 +88,7 @@ class BatteryMonitorNode(Node):
             ina = INA228(
                 self._bus,
                 address=address,
-                shunt_ohms=float(get_parameter("shunt_ohms").value),
+                shunt_ohms=shunt_ohms,
             )
             device_id = ina.probe()
             if device_id != DEVICE_ID_VALUE:

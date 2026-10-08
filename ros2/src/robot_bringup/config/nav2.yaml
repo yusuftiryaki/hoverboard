@@ -3,8 +3,8 @@
 # ⚠️⚠️ READ THIS FIRST: THE COSTMAPS ONLY KNOW WHAT THEY WERE TOLD.
 #
 # This robot has NO range sensor. No LIDAR (handoff decision 3: cheap 2D lidar is
-# useless in sunlight), no ultrasonics (not bought, not decided), no depth
-# camera. Nothing OBSERVES an obstacle, so nothing ever appears in a costmap at
+# useless in sunlight), no ultrasonics (dropped from the design on 2026-10-08,
+# handoff decision 8), no depth camera. Nothing OBSERVES an obstacle, so nothing ever appears in a costmap at
 # runtime.
 #
 # What the costmaps DO hold, since A3c, is an A PRIORI map: a static_layer fed
@@ -16,8 +16,9 @@
 # But an UNSURVEYED obstacle is still invisible. Nav2 will drive through a tree
 # nobody entered into the map, with total confidence. The only thing between the
 # robot and a surprise is the ESP32's bumper reflex — contact, not avoidance.
-# Seeing obstacles rather than remembering them needs a sensor: A3 (Gazebo +
-# camera/ultrasonics -> costmap layers), inventory note in wiring-map section 6.
+# Seeing obstacles rather than remembering them needs a sensor, and the only
+# one left in the plan is the camera (ground segmentation -> a costmap layer,
+# not written yet). Inventory note in wiring-map section 6.
 #
 # This is coherent with the mission the hardware actually supports (decision 5):
 # open field, wide corridors, 2.5-5 m GPS. It is NOT "drive to the shop".

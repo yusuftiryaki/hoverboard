@@ -38,8 +38,8 @@ riskler fizik/elektrik/RF tarafında. Ek bütçe ~2-3 bin TL.
    gerektirdiği için **arka aks yükseltmesi olarak ertelendi**. Riski ikiye
    katlamamak için. ESP32 katmanı ikinci kartı sonradan eklemeye açık.
 3. **LIDAR yok** — ucuz 2D LIDAR güneşte kötü + bütçe. Katmanlı algı:
-   GPS+IMU (uzak) / kamera (orta, zemin segmentasyonu) / ultrasonik (yakın) /
-   çarpma (temas).
+   GPS+IMU (uzak) / kamera (orta, zemin segmentasyonu) / çarpma (temas).
+   ~~ultrasonik (yakın)~~ katmanı **2026-10-08'de çıkarıldı** (karar 8).
 4. ⚠️ **Magnetometer şart (QMC5883L ~100 TL).** 6-eksen IMU + NEO-6M duruyorken
    **yön (heading) veremiyor** (GPS course-over-ground sadece >1 m/s'de anlamlı).
    Direğe, gövdeden **>30 cm** yukarı, motor kablolarından uzağa monte + hard/soft
@@ -48,10 +48,16 @@ riskler fizik/elektrik/RF tarafında. Ek bütçe ~2-3 bin TL.
 5. **5 m GPS hatası** → sadece **açık alan, geniş koridor** görevleri. "Kaldırımda
    markete git" bu donanımla mümkün değil (RTK gerekir).
 6. **İki hız katmanı:** Pi = yavaş akıllı sensörler (IMU, mag, GPS, kamera →
-   lokalizasyon/algı). ESP32 = hızlı refleks (E-stop, çarpma, ultrasonik).
+   lokalizasyon/algı). ESP32 = hızlı refleks (E-stop, çarpma).
    **Pi asla motorlarla doğrudan konuşmaz.**
 7. **IMU → Pi I2C** (ESP32'ye değil; denge robotu yapmıyoruz, lokalizasyon Pi'da).
-8. **Ultrasonik → ESP32** (refleks katmanı) — firmware eklentisi henüz YAZILMADI.
+8. ~~**Ultrasonik → ESP32** (refleks katmanı)~~ — **TASARIMDAN ÇIKARILDI
+   (2026-10-08, kullanıcı kararı).** Sensör alınmayacak, firmware eklentisi
+   yazılmayacak. ⚠️ **Bedeli:** kamera (orta menzil, henüz yazılmadı) ile tampon
+   (temas) arasında hiçbir şey kalmıyor. Survey edilmemiş bir engeli robot
+   ancak **çarpınca** fark eder — ve çarpma vetosu sadece ileriyi keser,
+   sıkışmayı da yığın göremiyor (A3c tuzak 3). Numara, başka yerlerdeki
+   "karar 8" atıfları bozulmasın diye korundu.
 9. **GPS → USB-TTL**, tercihen **FTDI** (ESP32'nin çipiyle VID:PID çakışmasın).
 10. ⚠️ **Sahte sensörler elle türetilmiş fiziğe çivilenir, kendi matematiğine
     değil** (2026-07-17, A6'dan sonra alındı). Bir fikstürü kendi formülüyle
@@ -78,7 +84,7 @@ riskler fizik/elektrik/RF tarafında. Ek bütçe ~2-3 bin TL.
 
 ## Güç / E-stop tasarımı
 ```
-Batarya 36V → [30-40A sigorta] → ┬→ [buck 5V/5A] → Pi (+ USB ile ESP32)  [HER ZAMAN AÇIK]
+Batarya 36V → [20A/60V sigorta] → ┬→ [buck 5V/5A] → Pi (+ USB ile ESP32)  [HER ZAMAN AÇIK]
                                  └→ [E-stop kontaktör] → anakart 36V (MCU + motorlar)
 ```
 - **MCU'ya ayrı besleme YOK** — anakartın kendi regülatörü 36V'tan üretiyor.
@@ -335,8 +341,8 @@ için Pi'la el sıkışma gerektirir; veto ise Nav2'nin hiçbir şey yapmadan ge
 - ⚠️ `BUMP_BLOCKS_POSITIVE_SPEED` sabiti tezgahta doğrulanmalı — ters çıkarsa
   veto robotu çarptığı şeye bindirir. Detay: `docs/wiring-map.md` 3c.
 
-**Ultrasonik refleksi YAZILMADI** — sensörler envanterde yok, alım kararı da
-verilmedi (`wiring-map.md` 6. bölüm).
+**Ultrasonik refleksi YOK ve olmayacak** — 2026-10-08'de tasarımdan çıkarıldı
+(karar 8). ESP32'nin refleks katmanı E-stop + çarpmadan ibaret.
 
 ### Batarya izleme (SP1)
 `ina228_driver` ve `battery_manager` yazılımı donanımsız tamamlandı. INA228,
@@ -345,8 +351,9 @@ köprünün ham `/battery_raw` voltajını ve Pi I2C akımını birleştirerek t
 (`current` ve `percentage` = NaN, diagnostics WARN). SoC açılışta dinlenim
 voltajından başlar, akımı coulomb sayar ve tam şarj kuyruğunda %100'e sıfırlanır.
 
-Gerçek INA228 ve şönt henüz alınmadı. `shunt_ohms`, `invert_current` ve
-`capacity_ah` gerçek paket üzerinde kalibre edilmelidir; şöntün BMS içindeki
+INA228 kartı **elde** (2026-10-08) ve üzerinde `R002` = 2 mΩ şönt var; harici
+şönt alınmıyor, config `shunt_ohms: 0.002`. Henüz takılmadı. `shunt_ohms`,
+`invert_current` ve `capacity_ah` gerçek paket üzerinde kalibre edilmelidir; şöntün BMS içindeki
 ortak eksi hattı multimetreyle doğrulanmadan bağlanmamalıdır. SP1, motor komut
 yoluna ve ESP32 seri protokolüne dokunmaz.
 
@@ -752,7 +759,7 @@ Tamamlananlar:
 - ✅ ROS 2 workspace iskeleti, sahte ESP32'ye karşı doğrulandı
 - ✅ IMU sürücüsü (`mpu6050_driver`). Kalan: gerçek chip gelince `i2cdetect -y 1`
   ile 0x68'i gör, `imu_joint` rpy'ını gerçek montaj yönüne göre ölç/yaz (B6).
-- ✅ Çarpma refleksi — yönlü veto. Ultrasonik **bilinçli yapılmadı**.
+- ✅ Çarpma refleksi — yönlü veto. Ultrasonik **tasarımdan çıkarıldı** (karar 8).
 - ✅ **A1: kinematik dünya + kalıcı entegrasyon testleri**
 
 ### Testleri koşmak
@@ -840,12 +847,20 @@ kendisi yayınlıyor; gerçek sürücüleri de açmak topic için kavga ettirir.
 Artık repodalar.
 
 ## Bilinen blokerler / bekleyen alımlar
-- **ST-Link V2 klon (~150 TL)** — adım 1 için şart, henüz alınmadı
-- **Magnetometer QMC5883L (~100 TL)** — listedeki en yüksek getirili harcama
-- **INA228 modülü + 1.5 mΩ / ≥50 A şönt (~150-300 TL)** — SP1 yazılımı hazır;
-  gerçek sensör takılınca işaret, şönt değeri ve paket kapasitesi kalibre edilecek
+**Güncel alım listesi ve gerekçeleri: `docs/purchase-list.md`** (2026-10-08).
+- **ST-Link V2 klon** — adım 1 için şart, henüz alınmadı
+- **Magnetometer QMC5883L** — listedeki en yüksek getirili harcama. ⚠️ GY-271
+  kartı HMC5883L ile de satılıyor; sürücümüz 0x0D'deki QMC'yi bekler.
+- **Buck, giriş ≥60V, 5V ≥5A** — dolu paket 42V; 40V'luk modüller olmaz
+- **FT232RL USB-TTL** — GPS için, ESP32'nin çipinden farklı olsun diye
+- ✅ INA228 — **elde**, üzerinde 2 mΩ şönt; harici şönt gerekmiyor
+- ✅ Sigorta — **elde**, 20 A / 60 V, yuvalı (plan 30–40 A diyordu; firmware
+  akım limitleri buna göre ayarlanacak, `bringup-checklist.md` adım 3)
+- ⏸ Kontaktör — **ertelendi** (2026-10-08); yük altında sürüşten (B5) önce
+  bobin beslemesiyle birlikte kararlaştırılacak
+- ❌ Ultrasonik — tasarımdan çıkarıldı (karar 8)
 - Multimetre doğrulaması (UART pinout) — kart elde olunca
-- Caster ×2 (125-150 mm kauçuk), mantar E-stop + kontaktör, sigorta
+- Caster ×2 (125-150 mm kauçuk) — hırdavatçı işi, elektronikçide yok
 - ✅ ~~`ros-jazzy-nmea-navsat-driver` Jazzy apt'de olmayabilir~~ — **VAR**
   (2.0.1-3noble, apt'te doğrulandı). Bloker değil.
 - `camera_ros` apt'te **var** (0.6.0-1noble) ama Dockerfile'a eklenmedi

@@ -13,7 +13,9 @@ Firmware: `EFeru/hoverboard-firmware-hack-FOC` (PlatformIO).
 ## 0. Güvenlik ön koşulu (pazarlıksız)
 
 - [ ] Tekerlekler **yerden kesik** — kartı/motoru mengeneye al ya da robotu sehpaya kaldır.
-- [ ] Batarya çıkışına **30–40 A sigorta** takılı.
+- [ ] Batarya çıkışına **20 A / 60 V sigorta** takılı (elde var, yuvalı).
+      Voltaj dayanımı dolu paketin 42 V'unun üstünde olmalı — 32 V'luk otomobil
+      bıçak sigortası burada yanlış parça.
 - [ ] Fiziksel **E-stop** (mantar buton, NC) güç hattını fiziksel kesiyor.
 - [ ] Yangın söndürücü / kova kum yakında (Li-ion, ilk flash denemesi).
 
@@ -77,6 +79,12 @@ Kullanacağın kabloya göre USART seç (bkz. adım 5):
 // Batarya limitleri — 10S için kontrol et
 #define BAT_CELLS      10
 ```
+- [ ] ⚠️ **Akım limitlerini 20 A'lik sigortaya göre ayarla.** `config.h`'de
+      motor başına `I_MOT_MAX` ve `I_DC_MAX` var; iki motorun toplamı sigortayı
+      aşarsa sert kalkışta ya da sıkışmada sigorta atar. Varsayılan değerler
+      hafızadan 15 A / 17 A (motor başına) — **dosyadan doğrula, bu rakama
+      güvenme.** Plan eskiden 30–40 A sigorta diyordu; eldeki 20 A daha
+      korumacı, bedeli bu ayar.
 - [ ] Diğer varyantları kapat (`VARIANT_ADC`, `VARIANT_PPM`, `VARIANT_HOVERCAR`…).
 - [ ] `pio run` ile derle. Hata yoksa devam.
 

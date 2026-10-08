@@ -1,11 +1,16 @@
-# INA228 is optional until the sensor and shunt are installed.
+# INA228 is optional until the sensor is installed.
 battery_monitor:
   ros__parameters:
     i2c_bus: 1
     address: 0x40
     rate_hz: 10.0
-    # CALIBRATE against the installed shunt.
-    shunt_ohms: 0.0015
+    # The board in hand carries its own shunt, marked R002 = 2 milliohm
+    # (read off the part, 2026-10-08) — no external shunt in this design.
+    # With the driver's +/-163.84 mV range that is +/-81.9 A full scale, and at
+    # the 20 A the fuse allows the resistor dissipates 0.8 W.
+    # Still CALIBRATE: the marking is nominal, and the board's own traces and
+    # terminals have not been checked for carrying pack current.
+    shunt_ohms: 0.002
     # CALIBRATE so discharge is negative per BatteryState convention.
     invert_current: false
     # CALIBRATE by measuring a full discharge cycle.
