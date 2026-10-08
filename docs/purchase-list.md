@@ -11,9 +11,8 @@ tarayıcıda yüklüyor, dışarıdan okunamadı. Sepete eklerken kontrol et.
 | # | Kalem | Aciliyet | Neyi açıyor | Dikkat |
 |---|---|---|---|---|
 | 1 | **ST-Link V2 klon** | 1 | B1: flash — tüm donanım izinin kilidi | Klonlarda kasadaki pin yazısı yanlış olabiliyor; bağlamadan önce doğrula. Sadece GND + SWDIO + SWCLK bağlanır, 3V3 bağlanmaz. |
-| 2 | **Buck: giriş ≥60V, çıkış 5V ≥5A** | 2 | Pi'ın bataryadan çalışması (B3) | Dolu 10S paket **42V**. XL4016 (40V), XL4015 (38V), LM2596 (35V) OLMAZ. Aday: 8–60V 15A ayarlanabilir modül; çıkışı **yüksüzken** 5.1V'a ayarla. Arama özeti bu modülü "stokta yok" gösterdi. |
-| 3 | **QMC5883L (GY-271)** | 3 | Mutlak yön (B6) | ⚠️ Aynı kart **HMC5883L** ile de satılıyor. Sürücümüz 0x0D'deki QMC'yi bekler; HMC (0x1E) gelirse çalışmaz. Gelince `i2cdetect -y 1` ile bak. |
-| 4 | **FT232RL USB-TTL** | 3 | GPS (B6) | ESP32'nin USB çipinden farklı olmalı, yoksa udev ikisini ayıramaz (`deployment.md` adım 4). |
+| 2 | **QMC5883L (GY-271)** | 3 | Mutlak yön (B6) | ⚠️ Aynı kart **HMC5883L** ile de satılıyor. Sürücümüz 0x0D'deki QMC'yi bekler; HMC (0x1E) gelirse çalışmaz. Gelince `i2cdetect -y 1` ile bak. |
+| 3 | **FT232RL USB-TTL modülü** | 3 | GPS (B6) | **Modül** olmalı (USB girişli kart), çıplak entegre değil. ESP32'nin USB çipinden farklı olmalı, yoksa udev ikisini ayıramaz (`deployment.md` adım 4). 3.3V seçilebilir olsun. |
 
 Aciliyet 1 = yokluğu şu an her şeyi durduruyor. Sipariş tek seferde verildiği
 için hepsi aynı sepete girer.
@@ -44,6 +43,7 @@ için hepsi aynı sepete girer.
 |---|---|
 | Ultrasonik ×4 + bölücü dirençler | 2026-10-08'de çıkarıldı (`handoff.md` karar 8). Bedeli: yakın menzil katmanı yok. |
 | Harici şönt | INA228'in kendi şöntü yetiyor. |
+| Buck dönüştürücü | 2026-10-08'de çıkarıldı (`handoff.md` karar 13): Pi **powerbank**'ten beslenir, elektronik ve mekanik ayrı. 42V'a dayanan ≥5A modül pahalıydı. |
 
 ## Elektronikçide olmayanlar (hırdavatçı)
 
@@ -63,8 +63,8 @@ için hepsi aynı sepete girer.
 | DC kontaktör | EVC500 (12V bobin) | Bulunamadı | Bulunamadı |
 | FT232RL | Var | Var | Var |
 
-Belirleyici olan manyetometre ve buck. **Buck stokta yoksa tek tedarikçi planı
-bozulur** — o durumda bu tabloya dönülmeli.
+Belirleyici olan manyetometre: sürücümüz QMC5883L bekliyor ve onu açıkça o
+adla satan tek mağaza bu. (Buck artık listede değil, tablodaki satırı tarihçe.)
 
 - [GY-271 QMC5883L](https://www.motorobit.com/gy-271-qmc5883l-3-axis-compass-sensor)
 - [DC-DC 8-60V 15A](https://www.motorobit.com/dc-dc-8-60v-15a-ayarlanabilir-voltaj-dusurucu-modul)

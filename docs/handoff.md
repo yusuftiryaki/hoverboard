@@ -82,11 +82,19 @@ riskler fizik/elektrik/RF tarafında. Ek bütçe ~2-3 bin TL.
     **survey edilmiş** engeli dolanır, **survey edilmemiş** engeli göremez ve
     içine sürer.
 
+13. **Elektronik ve mekanik ayrı beslenir** (2026-10-08, kullanıcı kararı).
+    Pi + ESP32 bir **powerbank**'ten, motorlar 36V paketten. Sebep: 42V'a
+    dayanan ≥5A buck pahalı ve motor gürültüsü Pi'ın beslemesine hiç girmesin.
+    Bedeli: powerbank ayrı şarj edilir ve bitince Pi **uyarısız** kapanır;
+    eksiler yine tek ortak GND'de birleşmek zorunda (UART + INA228).
+
 ## Güç / E-stop tasarımı
 ```
-Batarya 36V → [20A/60V sigorta] → ┬→ [buck 5V/5A] → Pi (+ USB ile ESP32)  [HER ZAMAN AÇIK]
-                                 └→ [E-stop kontaktör] → anakart 36V (MCU + motorlar)
+Powerbank 5V/≥3A ────────────────→ Pi (+ USB ile ESP32)   [ELEKTRONİK, her zaman açık]
+Batarya 36V → [20A/60V sigorta] → [E-stop] → anakart 36V  [MEKANİK: MCU + motorlar]
+        eksiler tek ortak GND'de birleşir
 ```
+- **Elektronik ile mekaniğin beslemesi AYRI** (karar 13). Buck yok.
 - **MCU'ya ayrı besleme YOK** — anakartın kendi regülatörü 36V'tan üretiyor.
 - E-stop → MCU de söner → motorlar **coast** ile durur (aktif fren yok) →
   geri dönüşte **hoverboard güç butonuna basmak gerekir** (self-latch).
@@ -851,7 +859,8 @@ Artık repodalar.
 - **ST-Link V2 klon** — adım 1 için şart, henüz alınmadı
 - **Magnetometer QMC5883L** — listedeki en yüksek getirili harcama. ⚠️ GY-271
   kartı HMC5883L ile de satılıyor; sürücümüz 0x0D'deki QMC'yi bekler.
-- **Buck, giriş ≥60V, 5V ≥5A** — dolu paket 42V; 40V'luk modüller olmaz
+- ❌ Buck — tasarımdan çıktı (karar 13); Pi powerbank'ten beslenir.
+  Powerbank (5V ≥3A) elde yoksa alınacak.
 - **FT232RL USB-TTL** — GPS için, ESP32'nin çipinden farklı olsun diye
 - ✅ INA228 — **elde**, üzerinde 2 mΩ şönt; harici şönt gerekmiyor
 - ✅ Sigorta — **elde**, 20 A / 60 V, yuvalı (plan 30–40 A diyordu; firmware

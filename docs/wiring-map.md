@@ -14,30 +14,27 @@ Tasarımın temel prensibi — **iki hız katmanı:**
 ## 1. Üst düzey blok şema
 
 ```
-                         ┌─────────────────────────────────────────┐
-                         │          36V 10S Li-ion BATARYA          │
-                         │              (hoverboard #1)             │
-                         └───────────────┬─────────────────────────┘
-                                    [+]  │  [-]───────── ORTAK GND ──────────┐
-                                         │                                   │
-                                  [20A/60V SİGORTA]                          │
-                                         │                                   │
-                          ┌──────────────┴───────────────┐                   │
-                          │                               │                  │
-              (her zaman açık)                      [E-STOP kontaktör]        │
-                          │                          NC mantar buton         │
-                    [BUCK 36V→5V/5A]                       │                  │
-                          │                        (basınca motor gücü keser)│
-                     5V RAYI                               │                  │
-                    │        │                     [Hoverboard STM32 MCU]     │
-                 [Pi 4]      │                       │  36V motor gücü        │
-                    │        │                       ├── 2× hub motor (faz)   │
-                (USB kablo:  │                       └── 2× hall sensör       │
-                 güç+veri)   │                             │                  │
-                    │        └────► [ESP32] ◄── UART ───────┘ (3.3V, GND/TX/RX)│
-                    │                  │  ▲                                   │
-                    │  USB seri        │  │ E-stop sense (GPIO25)             │
-                    └──────────────────┘  └─ çarpma sensörü (refleks)         │
+   ELEKTRONİK BESLEMESİ                 MEKANİK BESLEMESİ
+   ┌──────────────────────┐             ┌─────────────────────────────────────┐
+   │  POWERBANK 5V / ≥3A  │             │       36V 10S Li-ion BATARYA        │
+   │   (her zaman açık)   │             │   (hoverboard #1, dolu 42V)         │
+   └───────┬──────────────┘             └──────────────┬──────────────────────┘
+       [+] │  [-]── ORTAK GND ──┐                 [+]  │  [-]── ORTAK GND ────┐
+           │                    │                      │                      │
+           │                    │              [20A/60V SİGORTA]              │
+           │                    │                      │                      │
+           │                    │               [E-STOP anahtarı]             │
+           │                    │              (motor gücünü keser)           │
+           │                    │                      │                      │
+        [Pi 4]                  │            [Hoverboard STM32 MCU]           │
+           │                    │              │  36V motor gücü              │
+       (USB kablo:              │              ├── 2× hub motor (faz)         │
+        güç+veri)               │              └── 2× hall sensör             │
+           │                    │                      │                      │
+           └────────► [ESP32] ◄── UART ────────────────┘ (3.3V, GND/TX/RX)    │
+                         │  ▲                                                 │
+                         │  ├─ E-stop sense (GPIO25)                          │
+                         │  └─ çarpma sensörü (GPIO26, refleks)               │
                                                                               │
    ┌── Pi çevre birimleri (I2C / UART / CSI) ──┐                             │
    │  IMU (MPU6050, I2C)  ── direkte, motordan uzak                          │
@@ -56,11 +53,18 @@ Tasarımın temel prensibi — **iki hız katmanı:**
 | Kaynak | → Hedef | Gerilim/Akım | Not |
 |--------|---------|--------------|-----|
 | Batarya [+] | Sigorta | 36V nominal, **42V dolu** | **20A / 60V**, yuvalı (elde var), bataryanın hemen çıkışında. ⚠️ Sigortanın VOLTAJ dayanımı pakette görülecek en yüksek gerilimin üstünde olmalı — otomobil bıçak sigortalarının çoğu 32V'tur ve 42V'ta arkı kesemeyebilir. |
-| Sigorta | Dal 1: Buck girişi | 36V | Pi+ESP32 **her zaman açık** (E-stop'tan bağımsız) |
-| Sigorta | Dal 2: E-stop kontaktör → MCU | 36V | Sadece **motor gücü** bu dalda |
-| Buck çıkışı | Pi 4 | 5V / ≥5A | Pi tam yükte ~3A; buck'ta cimrilik yapma. ⚠️ **Buck GİRİŞİ ≥60V dayanmalı:** dolu 10S paket 42V'tur; yaygın XL4016 (40V), XL4015 (38V) ve LM2596 (35V) modülleri bu yüzden OLMAZ. |
+| Sigorta | E-stop → MCU | 36V | Bataryadan **sadece motor gücü** çıkar; başka dal yok |
+| **Powerbank** | Pi 4 (USB-C) | 5V / **≥3A** | Elektronik motor bataryasından **ayrı** beslenir (karar 13, 2026-10-08). Buck yok. |
 | Pi USB | ESP32 (5V/VIN) | 5V | Güç + veri tek kabloda (prototip kolaylığı) |
-| Batarya [-] | **Ortak GND** | — | Buck, Pi, ESP32, MCU sinyal GND'si hepsi birleşir |
+| Batarya [-] + Powerbank [-] | **Ortak GND** | — | ⚠️ İki kaynak ayrı ama **eksileri birleşmek zorunda**: ESP32↔MCU UART'ı ve INA228 buna bağlı. Powerbank'in eksisi Pi'ın GND pininden ortak noktaya gelir. |
+
+**Powerbank'in bedelleri (bilerek kabul edildi):**
+- Ayrı şarj edilir; bittiğinde Pi **uyarısız** kapanır → SD kart bozulma riski.
+  Pi powerbank'in doluluğunu göremez (`/battery` sadece motor paketini izler).
+- Bazı powerbank'ler şarj olurken çıkış vermez ya da yük değişiminde anlık
+  keser. Seçilen modelle Pi'ı tam yükte (kamera + USB cihazları) dene.
+- Kazancı: motorların çektiği akım ve gürültü Pi'ın beslemesine hiç ulaşmaz,
+  42V'a dayanıklı pahalı bir buck gerekmez.
 
 **E-stop neden sadece motoru kesiyor, her şeyi değil?**
 Basınca Pi'ı da keserse SD kart bozulur ve ESP32 durumu raporlayamaz.
@@ -173,7 +177,7 @@ Amaç: coulomb sayan SoC için paket akımını ölçmek. Pi I2C bus 1, adres 0x
 
 ## 4. Topraklama ve mantık seviyeleri (atlanırsa hiçbir şey çalışmaz)
 
-- **Tek ortak GND:** batarya eksi, buck GND, Pi GND, ESP32 GND, MCU sinyal
+- **Tek ortak GND:** batarya eksi, powerbank eksi (Pi GND üzerinden), ESP32 GND, MCU sinyal
   GND'si hepsi tek noktada. UART'ın çalışması buna bağlı — ayrı GND'ler
   "veri geliyor ama saçma" olarak görünür, saatlerce aratır.
 - **Mantık seviyeleri:** Pi, ESP32, STM32 MCU, IMU, manyetometre → hepsi 3.3V,
@@ -190,12 +194,12 @@ STM32 MCU  : 36V güç, 2× motor faz, 2× hall  → (hazır bağlı, dokunma)
              UART 3 tel (GND/TX/RX)          → ESP32 GPIO16/17
 ESP32      : USB (güç+veri)                  → Pi
              GPIO25 E-stop, GPIO26 çarpma     → refleks
-Pi 4       : 5V buck girişi                  → güç
+Pi 4       : powerbank (USB-C)               → güç
              I2C (GPIO2/3): IMU + manyetometre
              USB-TTL: GPS
              CSI: kamera
              USB: ESP32
-Güç        : Batarya → sigorta → {buck→Pi/ESP32} + {E-stop→MCU}
+Güç        : Powerbank → Pi/ESP32   |   Batarya → sigorta → E-stop → MCU
 ```
 
 ---
@@ -207,8 +211,9 @@ Güç        : Batarya → sigorta → {buck→Pi/ESP32} + {E-stop→MCU}
       Sonucu: yakın menzil katmanı yok; robot survey edilmemiş bir engeli ancak
       tampona değince fark eder (`handoff.md` karar 8).
 - [ ] GPS: USB-TTL mü Pi donanım UART'ı mı (USB-TTL daha az dertli).
-- [ ] Buck: akım marjı (Pi 3A + ESP32 + sensörler → ≥5A) **ve giriş ≥60V**
-      (dolu paket 42V). Aday: 8–60V girişli ayarlanabilir modül; çıkışı yük
-      bağlamadan 5.1V'a ayarla.
+- [x] ~~Buck~~ — **tasarımdan çıktı (2026-10-08):** Pi powerbank'ten beslenir.
+      (Not: buck'a dönülürse girişi ≥60V olmalı; dolu paket 42V ve yaygın
+      XL4016/XL4015/LM2596 modülleri buna dayanmaz.)
+- [ ] Powerbank seçimi: 5V ≥3A çıkış, Pi tam yükte denenecek.
 - [x] ~~INA228 modülü + şönt alımı~~ — kart elde, üzerinde 2 mΩ şönt var.
 - [ ] BMS şönt konumunun multimetreyle doğrulanması (yukarıdaki 3. bölüm).
