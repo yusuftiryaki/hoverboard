@@ -19,6 +19,30 @@
 # two_d_mode: true — a four-point static platform on the ground. Pinning
 # z/roll/pitch to zero throws away states the sensors cannot observe anyway and
 # stops the 6-axis IMU's drift from leaking into the horizontal estimate.
+#
+# ⚠️⚠️ NEITHER FILTER FUSES THE ACCELEROMETER (ax/ay/az all false), and it must
+# stay that way on robot_localization 3.8.3 — the Jazzy apt release, on the Pi
+# too. That release never initialises RosFilter::angular_acceleration_,
+# last_state_twist_rot_ or last_diff_time_, and prepareAcceleration adds
+#     imu_origin x angular_acceleration_
+# to every accel measurement. Our IMU sits ABOVE base_link (urdf imu_joint), so
+# that cross product is not zero: whatever the heap happened to hold goes
+# straight into ax. Measured in CI: ekf_local at 1e148 m/s within 33 ms of
+# startup, covariance 1e291, Nav2 aborting every goal (planner: "worldToMap
+# failed: -2147483648"). Silent — no warning, no log line.
+# It depends on heap contents, so it never showed on the dev box and vanished
+# under robot_localization's own debug output. valgrind memcheck on ekf_local
+# finds it every run (ekf.cpp:82, origin: the node allocation) and finds
+# NOTHING with ax off. ekf_global was not run under valgrind; it runs the same
+# code, and the 3.8.3 source has no other path to those members while no input
+# fuses ax/ay/az and publish_acceleration stays false.
+# Fixed upstream in a8318cc3 "Fixing angular acceleration initialisation"
+# (#945), which no Jazzy release carries yet — and 3.9.0-3.9.4 / 3.10.0 are
+# NEWER numbers that still have the bug. test_ekf_config.py fails if any of
+# this comes back on a version not listed as checked-and-fixed.
+# Cost of leaving it off: not measured, expected negligible — vx comes from the
+# wheels, and nothing here used ax to contradict them (docs/handoff.md, A3c
+# trap 3). Every EKF accuracy figure in the handoff was measured with ax ON.
 
 ekf_local:
   ros__parameters:
@@ -46,10 +70,11 @@ ekf_local:
     odom0_differential: false
     odom0_relative: false
 
-    # ⚠️ imu/data_raw — the UNFUSED IMU, on purpose. ekf_local takes yaw RATE and
-    # ax, never absolute yaw, so that a bad heading can never yank base_link
-    # around. Everything downstream of odom->base_link (the controller, the local
-    # costmap) needs smooth and continuous far more than it needs true.
+    # ⚠️ imu/data_raw — the UNFUSED IMU, on purpose. ekf_local takes yaw RATE
+    # only (no ax: see the header), never absolute yaw, so that a bad heading
+    # can never yank base_link around. Everything downstream of odom->base_link
+    # (the controller, the local costmap) needs smooth and continuous far more
+    # than it needs true.
     # The magnetometer's heading goes to ekf_global instead, where a jump lands
     # in map->odom and nothing driving the robot feels it.
     imu0: imu/data_raw
@@ -57,7 +82,7 @@ ekf_local:
                   false, false, false,
                   false, false, false,
                   false, false, true,
-                  true,  false, false]
+                  false, false, false]   # ax OFF — robot_localization 3.8.3, see header
     imu0_queue_size: 20
     imu0_differential: false
     imu0_relative: false
@@ -113,7 +138,7 @@ ekf_global:
                   false, false, true,
                   false, false, false,
                   false, false, true,
-                  true,  false, false]
+                  false, false, false]   # ax OFF — robot_localization 3.8.3, see header
     imu0_queue_size: 20
     # false = treat yaw as an absolute measurement, which is exactly what it now
     # is. Setting this true would differentiate it back into a rate and throw
