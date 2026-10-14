@@ -10,7 +10,7 @@ set -uo pipefail
 REPO=/workspaces/hoverboard
 WS=$REPO/ros2
 OUT=$WS/log/ci/exp
-TRIALS=${TRIALS:-6}
+TRIALS=${TRIALS:-3}
 mkdir -p "$OUT"
 cd "$WS"
 set +u; source /opt/ros/jazzy/setup.bash; colcon build --symlink-install > "$OUT/build.log" 2>&1; source install/setup.bash; set -u
@@ -48,20 +48,17 @@ print(("DIVERGED" if (mx > 10 or not math.isfinite(mx)) else "ok"), f"max|x|={mx
 PY
 }
 
-for name in P A B C D; do
-  if [[ $name == D ]]; then export FASTDDS_BUILTIN_TRANSPORTS=UDPv4; else unset FASTDDS_BUILTIN_TRANSPORTS; fi
+# Round 2: the harness above never diverged on the runner (0/30) while the
+# test suite's stacks did every time. So run the REAL failing test.
+SQUARE=src/robot_sim/test/test_localization.py::test_ekf_tracks_the_truth_around_a_square
+for name in P A; do
   for i in $(seq "$TRIALS"); do
     variant "$name" "$i"
-    setsid ros2 run robot_sim sim_node > "$OUT/sim_${name}${i}.log" 2>&1 & SIM=$!
-    sleep 3
-    setsid ros2 launch robot_bringup robot.launch.py esp32_port:=/tmp/fake_esp32 \
-      use_localization:=true use_imu:=false use_gps:=false > "$OUT/launch_${name}${i}.log" 2>&1 & STK=$!
-    sleep 6
-    echo "$name$i $(measure) shm=$(df --output=pcent /dev/shm | tail -1 | tr -d " ")"
-    kill -KILL -- -"$STK" -"$SIM" 2>/dev/null
-    wait "$STK" "$SIM" 2>/dev/null
-    for _ in $(seq 40); do pgrep -f "ekf_nod[e]|robot_sim/sim_nod[e]|hoverboard_bridge/hoverboard_bridg[e]" >/dev/null || break; sleep 0.25; done
+    r=$(python3 -m pytest "$SQUARE" -q -p no:cacheprovider 2>&1 | grep -E "passed|failed|AssertionError: EKF" | tr '\n' ' ' | cut -c1-200)
+    echo "$name$i $( [[ $r == *failed* ]] && echo DIVERGED || echo ok ) $r"
+    # the divergence is in the first seconds; keep the artifact small
+    [[ -f "$OUT/ekf_debug_A$i.txt" ]] && truncate -s '<40M' "$OUT/ekf_debug_A$i.txt"
   done
 done | tee "$OUT/results.txt"
 cp "$OUT/ekf.orig.yaml" "$CFG"
-echo "== summary"; for name in P A B C D; do echo "$name: $(grep -c "^$name[0-9]* DIVERGED" "$OUT/results.txt")/$TRIALS diverged"; done | tee -a "$OUT/results.txt"
+echo "== summary"; for name in P A; do echo "$name: $(grep -c "^$name[0-9]* DIVERGED" "$OUT/results.txt")/$TRIALS diverged"; done | tee -a "$OUT/results.txt"
