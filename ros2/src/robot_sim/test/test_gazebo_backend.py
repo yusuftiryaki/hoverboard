@@ -12,9 +12,14 @@ import threading
 
 import pytest
 
-from nav_msgs.msg import Odometry
+# No ROS graph, but the message TYPES are still ROS: without this the import
+# below is a collection error, which takes the ROS-free world tests in this
+# directory down with it instead of skipping.
+pytest.importorskip("rclpy", reason="ROS 2 not sourced")
 
-from robot_sim.gazebo_backend import GazeboBackend
+from nav_msgs.msg import Odometry                    # noqa: E402
+
+from robot_sim.gazebo_backend import GazeboBackend   # noqa: E402
 
 
 def make_backend():

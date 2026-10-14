@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# Everything CI runs, in one place. GitHub Actions calls this script and does
+# nothing else, so the same command gives the same answer in the dev container.
+#
+# Usage:   ./scripts/ci.sh <stage>...
+#
+#   unit      every package's tests with NO ROS on the path        (seconds)
+#   firmware  pio run                                              (~1 min)
+#   stack     colcon build + every test except the two below       (~4 min)
+#   nav2      colcon build + the Nav2 stacks                       (~4 min)
+#   gazebo    colcon build + the Gazebo physics worlds             (~5 min)
+#   all       the lot, in that order
+#
+# stack + nav2 + gazebo together are the whole suite: `stack` is defined as
+# "everything that is not in HEAVY", so a new test file lands there by default
+# and cannot fall between the jobs.
+
+set -euo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+WS="${REPO}/ros2"
+REPORTS="${WS}/log/ci"          # ros2/log/ is already gitignored
+
+NAV2_TESTS=(src/robot_sim/test/test_nav2.py)
+GAZEBO_TESTS=(src/robot_sim/test/test_gazebo_physics.py
+              src/robot_sim/test/test_gazebo_localization.py)
+HEAVY=("${NAV2_TESTS[@]}" "${GAZEBO_TESTS[@]}")
+
+packages_with_tests() {
+  local dir
+  for dir in "${WS}"/src/*/test; do
+    basename "$(dirname "${dir}")"
+  done
+}
+
+# --- unit: the ROS-free claim ------------------------------------------------
+# protocol.py, world.py and the register-level drivers are ROS-free on purpose,
+# and their tests are meant to pass with the ROS ones skipping cleanly. A
+# module-level ROS import in a test file breaks that as a COLLECTION ERROR for
+# the whole directory, and nothing notices on a machine where ROS is always
+# sourced. So ROS is taken off the path here rather than assumed absent.
+# Skips are expected in this stage — they are the ROS tests.
+stage_unit() {
+  local pkg
+  for pkg in $(packages_with_tests); do
+    echo ">> unit: ${pkg}"
+    (cd "${WS}/src/${pkg}" &&
+       env -u PYTHONPATH -u AMENT_PREFIX_PATH \
+         python3 -m pytest test -q -rs -p no:cacheprovider)
+  done
+}
+
+stage_firmware() {
+  echo ">> firmware: pio run"
+  (cd "${REPO}/firmware/esp32_bridge" && pio run)
+}
+
+# --- the ROS stages ----------------------------------------------------------
+BUILT=0
+build_workspace() {
+  [[ "${BUILT}" == 1 ]] && return
+  echo ">> colcon build"
+  cd "${WS}"
+  # The ROS setup scripts read variables they never set.
+  set +u
+  source /opt/ros/jazzy/setup.bash
+  colcon build --symlink-install
+  source install/setup.bash
+  set -u
+  mkdir -p "${REPORTS}"
+  BUILT=1
+}
+
+# run_tests <report name> <pytest args...>
+#
+# ⚠️ A SKIP FAILS THE STAGE. The stack tests skip when the workspace is not
+# sourced and the Gazebo ones skip when `gz` is missing — which is the right
+# thing at a desk and exactly wrong here: "10 passed, 2 skipped" is green, and
+# the two that skipped are the ones that would have caught the bug. In CI the
+# environment is supposed to be complete, so a skip means it is not.
+run_tests() {
+  local report="${REPORTS}/$1.xml"
+  shift
+  python3 -m pytest "$@" -q -rs -p no:cacheprovider --junitxml="${report}"
+  python3 - "${report}" <<'EOF'
+import sys
+import xml.etree.ElementTree as ET
+
+suite = ET.parse(sys.argv[1]).getroot().find("testsuite")
+tests, skipped = int(suite.get("tests")), int(suite.get("skipped"))
+if skipped or not tests:
+    sys.exit(f"!! {skipped} of {tests} tests skipped in {sys.argv[1]} — in CI a "
+             "skip is a hole in the environment, not a pass. See the SKIPPED "
+             "lines above.")
+EOF
+}
+
+stage_stack() {
+  build_workspace
+  local pkg heavy ignores
+  for pkg in $(packages_with_tests); do
+    ignores=()
+    for heavy in "${HEAVY[@]}"; do
+      [[ "${heavy}" == "src/${pkg}/"* ]] && ignores+=("--ignore=${heavy}")
+    done
+    echo ">> stack: ${pkg}"
+    run_tests "stack-${pkg}" "src/${pkg}/test" "${ignores[@]}"
+  done
+}
+
+stage_nav2() {
+  build_workspace
+  echo ">> nav2"
+  run_tests nav2 "${NAV2_TESTS[@]}"
+}
+
+stage_gazebo() {
+  build_workspace
+  echo ">> gazebo"
+  run_tests gazebo "${GAZEBO_TESTS[@]}"
+}
+
+[[ $# -gt 0 ]] || { sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2; }
+
+for stage in "$@"; do
+  case "${stage}" in
+    unit|firmware|stack|nav2|gazebo) "stage_${stage}" ;;
+    all) stage_unit; stage_firmware; stage_stack; stage_nav2; stage_gazebo ;;
+    *) echo "unknown stage: ${stage}" >&2; exit 2 ;;
+  esac
+done
+
+echo ">> ok: $*"

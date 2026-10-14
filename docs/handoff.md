@@ -329,6 +329,8 @@ ros2/src/battery_manager/   SoC tahmini + yetkili /battery yayıncısı
 ros2/src/robot_bringup/     launch + ekf.yaml + urdf
 .devcontainer/              Dockerfile + devcontainer.json
 scripts/deploy.sh           push → Pi'da pull + colcon build
+scripts/ci.sh               CI'ın koştuğu her şey (unit / firmware / stack / nav2 / gazebo)
+.github/workflows/ci.yml    sadece ci.sh'ı çağırır; ROS işleri devcontainer imajının içinde
 ```
 ESP32 köprüsü (`src/main.cpp`) hazır: watchdog (Pi 200ms susarsa dur), fail-safe
 E-stop latch, **çarpma refleksi**, hoverboard 0xABCD protokolü, Pi'a feedback
@@ -527,7 +529,9 @@ olarak yayınlıyor; montaj yönü **URDF'teki `imu_joint` rpy'ında** tarif edi
   `gazebo_obstacles.py` ile aynı ayrıştırılmış listeden hem OccupancyGrid'e hem
   Gazebo geometrisine dönüyor, `sim_node` gazebo backend'inde engeli reddetmiyor.
   Ölçülen: robot elle hesaplanan **2.1500 m**'de duruyor (3.0 − 0.5 − 0.35).
-- **A5. CI** (GitHub Actions: colcon build + testler + `pio run`) — ertelendi
+- 🟡 **A5. CI — YAZILDI, GitHub'da HENÜZ KOŞMADI (2026-10-09).** Detay ve
+  yerelde ölçülenler aşağıda, "ŞU AN NEREDEYIZ" altında. İlk push'ta yeşil
+  dönene kadar bitmiş sayma.
 
 ### İz B — Donanım (sıra atlanmaz)
 1. **ST-Link al → anakartı flash'la** (STM32, EFeru FOC) — **tüm izin kilidi**, en riskli adım
@@ -628,12 +632,58 @@ kalır ve gerçek yığın her iki dünyada da devrededir.
 > `test_yaw_drifts_without_a_magnetometer` bunu kalıcı olarak belgeliyor.
 
 ## ŞU AN NEREDEYIZ / SIRADAKİ İŞ
-*(son güncelleme: 2026-09-08)*
+*(son güncelleme: 2026-10-09 — A5 eklendi; altındaki sayılar 2026-09-08'den)*
+
+### 🟡 A5 (CI) yazıldı — GitHub'da henüz koşmadı
+`scripts/ci.sh` her şeyi koşturur, `.github/workflows/ci.yml` sadece onu
+çağırır; yani CI'ın yaptığı şey dev container'da aynı komutla tekrarlanır.
+
+| aşama | nerede | ne | yerelde ölçülen |
+|---|---|---|---|
+| `unit` | çıplak runner | her paketin testi, ROS path'ten **çıkarılmış** | 3.5 sn (106 geçti, 8 atlandı) |
+| `firmware` | çıplak runner | `pio run` | ilk koşu 8 dk 52 sn, neredeyse tamamı 1.6 GB araç zinciri indirmesi (CI'da önbellekli) |
+| `stack` | devcontainer imajı | build + ağır ikili hariç her test | 225 sn, 131 test |
+| `nav2` | devcontainer imajı | build + `test_nav2.py` | 215 sn, 4 test |
+| `gazebo` | devcontainer imajı | build + iki Gazebo dosyası | 272 sn, 8 test |
+
+Son üçü **4 çekirdeğe kısıtlanarak** (`taskset -c 0-3`) ölçüldü — GitHub
+runner'ı 4 vCPU, bu kutu 8. Üçü de geçti: **143 test, atlanan yok.**
+
+Bilinçli kararlar:
+- **ROS işleri `.devcontainer/Dockerfile`'dan build edilen imajda koşar**,
+  workflow'da tekrarlanan bir paket listesinde değil. Container'a elle
+  `apt install` edilip Dockerfile'a yazılmamış paket CI'da patlar.
+- **ROS aşamalarında SKIP = HATA** (`run_tests`, junit'ten sayar). Yığın
+  testleri overlay source edilmeyince, Gazebo testleri `gz` yokken atlanır;
+  masada doğru, CI'da tam tersine yanlış. Kontrolün gerçekten patladığı
+  doğrulandı (1 skip → exit 1).
+- **`stack` = "HEAVY listesinde olmayan her şey"**, pozitif bir liste değil.
+  Yeni test dosyası varsayılan olarak oraya düşer, işler arasına kaçamaz.
+- `docs/**` ve `*.md` değişiklikleri CI'ı tetiklemez.
+
+⚠️ **A5'in yolda bulduğu:** "ROS'suz da koşarlar" iddiası `robot_sim` için
+**yanlıştı.** `test_gazebo_backend.py` modül seviyesinde `nav_msgs` import
+ediyordu → ROS'suz ortamda atlama değil **collection hatası**, dizindeki
+saf Python dünya testlerini de beraberinde götürüyordu. ROS her zaman
+source edilmiş bir kutuda bunu kimse göremez. Düzeltildi; `unit` aşaması
+artık bunu zorluyor.
+
+⚠️ **Kanıtlanmayanlar:** workflow'un kendisi hiç koşmadı (bu kutuda docker
+yok). İmaj build'i, Actions cache'i, runner'daki dosya izinleri ve
+zamanlamaya duyarlı testlerin gerçek runner'daki davranışı ilk push'ta
+görülecek. `actionlint` temiz — bu sözdizimi, davranış değil.
+
+⚠️ **Hook'un kör noktası:** `.claude/hooks/run_pkg_tests.py` testleri
+`/opt/ros` source edilmiş ama overlay edilmemiş ortamda koşuyor;
+`robot_sim`'de `hoverboard_bridge` bulunamadığı için **her düzenlemede**
+collection hatası veriyor. Düzeltilmedi.
+
+### A5'ten önceki durum
 
 Yazılım İz A'da: **A1, A2, A3 (a–e, tamamı), A4, A6 (borcu dahil) ve SP1 bitti**;
-donanım B1'de (ST-Link) kilitli. Tam workspace doğrulaması **142 test**
+donanım B1'de (ST-Link) kilitli. Tam workspace doğrulaması **143 test**
 geçti (robot_sim 61, hoverboard_bridge 24, mpu6050 16, qmc5883l 23,
-ina228 8, battery_manager 10), atlanan yok, **7 paketin tamamı** temiz build ediyor.
+ina228 8, battery_manager 11), atlanan yok, **7 paketin tamamı** temiz build ediyor.
 Ölçülen süre: **10 dk 35 sn**.
 
 ⚠️ **Suite artık ~10.5 dakika** — dört Nav2 yığını ve iki Gazebo dünyası
@@ -643,9 +693,8 @@ listedeki en yüksek getirili iş.** Ara adım olarak hızlı süzgeç:
 ve A3'ün asıl hatasını yakalayan `test_gazebo_config.py` bunun içinde).
 
 Sıradaki iş seçenekleri:
-- **A5 (CI)** — en yüksek getirili. A6, "engelsiz Nav2 tamamen ölüyordu"
-  regresyonu ve A3'ün "köprü hiçbir şeye bağlı değil"i — üçü de tam olarak
-  CI'ın yakalayacağı tür.
+- **A5'i bitirmek** — commit + push, ilk koşuyu yeşile getirmek. Yazıldı,
+  koşmadı (yukarıda).
 - **Sıkışma tespiti** — A3c tuzak 3, artık **gerçek fizikle de kanıtlı**:
   engele dayanmış robotta ground truth 6 sn'de 0.0000 m ilerlerken `/odom`
   +2.97 m saydı. Yazılımla çözülebilir kısmı yok gibi: ikinci görüş GPS,
@@ -778,8 +827,11 @@ python3 -m pytest src/robot_sim/test -q           # 61; 4'ü Nav2, 8'i Gazebo (~
 python3 -m pytest src/mpu6050_driver/test -q      # 16 (~0.1 sn)
 python3 -m pytest src/qmc5883l_driver/test -q     # 23 (~0.1 sn)
 python3 -m pytest src/ina228_driver/test -q       #  8 (~0.1 sn)
-python3 -m pytest src/battery_manager/test -q     # 10 (~18 sn)
-# hepsi: 142 test, ~10.6 dk
+python3 -m pytest src/battery_manager/test -q     # 11 (~27 sn)
+# hepsi: 143 test, ~10.6 dk
+
+# ya da CI'ın koştuğu haliyle (build + overlay source + skip'i hata sayar):
+../scripts/ci.sh stack nav2 gazebo
 
 # Yığın kaldırmayan hızlı süzgeç (saniyeler). test_gazebo_config.py bunun
 # içinde ve A3'ün asıl hatasını — köprünün hiçbir şeye bağlı olmaması — tam
@@ -791,8 +843,9 @@ aynı anda tek `gz` sunucusuna izin verirler; elle bir sim açık bırakırsan
 fixture "a gz server is already running" diye patlar. Bu bilerek: ikinci
 sunucu hata vermez, iki dünyayı tek okunmaz dünyaya karıştırır (A3 tuzak 7).
 **ROS'suz da koşarlar:** protokol ve dünya birim testleri saf Python (bilinçli
-tasarım); entegrasyon testleri `importorskip` ile temizce atlanır. Hook bunu
-her düzenlemede zorluyor.
+tasarım); entegrasyon testleri `importorskip` ile temizce atlanır. Bunu
+zorlayan şey `./scripts/ci.sh unit` — hook DEĞİL (hook ROS'lu ortamda koşar,
+yukarıda A5 notuna bak).
 
 ⚠️ **`source install/setup.bash` YAPMAZSAN yığın testleri sessizce ATLANIR** —
 "10 passed, 2 skipped" görürsün ve her şey yolunda sanırsın. A6'yı yakalayan
