@@ -71,6 +71,45 @@ build_workspace() {
   BUILT=1
 }
 
+# --- flight recorder (CI_BAG=1) ----------------------------------------------
+# The stacks run with stdout discarded, and an EKF that diverges says nothing in
+# its log: the first CI run lost ekf_local to 8.6e147 m and left only "Failed
+# to meet update rate" behind. So in CI every ROS stage records what the filter
+# was fed and what it said, and the workflow uploads it when the stage fails.
+RECORDED_TOPICS=(/odom /imu/data_raw /imu/data /odometry/filtered/local
+                 /odometry/filtered/global /ground_truth /gazebo/ground_truth
+                 /cmd_vel /diagnostics /tf /tf_static /bumper /collision_truth)
+RECORDER_PID=
+start_recorder() {
+  [[ -n "${CI_BAG:-}" ]] || return 0
+  stop_recorder
+  local out="${REPORTS}/bag-$1"
+  rm -rf "${out}"
+  # Its own session, so stopping it cannot signal the stacks, and its command
+  # line matches none of the conftest's stray-node patterns.
+  setsid ros2 bag record -s mcap -o "${out}" \
+    --topics "${RECORDED_TOPICS[@]}" > "${out}.log" 2>&1 &
+  RECORDER_PID=$!
+  trap stop_recorder EXIT
+}
+stop_recorder() {
+  [[ -n "${RECORDER_PID}" ]] || return 0
+  # ⚠️ SIGTERM, NOT SIGINT. A job started with `&` from a non-interactive
+  # shell has SIGINT IGNORED, and Python keeps an inherited ignore — so the
+  # recorder never saw the INT and `wait` hung the whole stage after its tests
+  # had passed. TERM finalises the bag just as cleanly; KILL is the backstop so
+  # a diagnostic can never be what hangs CI.
+  kill -TERM -- "-${RECORDER_PID}" 2>/dev/null || true
+  local tries
+  for tries in $(seq 30); do
+    kill -0 "${RECORDER_PID}" 2>/dev/null || break
+    sleep 0.5
+  done
+  kill -KILL -- "-${RECORDER_PID}" 2>/dev/null || true
+  wait "${RECORDER_PID}" 2>/dev/null || true
+  RECORDER_PID=
+}
+
 # run_tests <report name> <pytest args...>
 #
 # ⚠️ A SKIP FAILS THE STAGE. The stack tests skip when the workspace is not
@@ -97,6 +136,7 @@ EOF
 
 stage_stack() {
   build_workspace
+  start_recorder stack
   local pkg heavy ignores
   for pkg in $(packages_with_tests); do
     ignores=()
@@ -110,12 +150,14 @@ stage_stack() {
 
 stage_nav2() {
   build_workspace
+  start_recorder nav2
   echo ">> nav2"
   run_tests nav2 "${NAV2_TESTS[@]}"
 }
 
 stage_gazebo() {
   build_workspace
+  start_recorder gazebo
   echo ">> gazebo"
   run_tests gazebo "${GAZEBO_TESTS[@]}"
 }

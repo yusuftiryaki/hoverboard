@@ -26,6 +26,11 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  # build-push-action otherwise attaches a build-record artifact to every
+  # run, which buries the logs that matter.
+  DOCKER_BUILD_RECORD_UPLOAD: false
+
 jobs:
   unit:
     runs-on: ubuntu-24.04
@@ -92,12 +97,15 @@ jobs:
           docker run --rm --network=host
           -v "$PWD:/workspaces/hoverboard" -w /workspaces/hoverboard
           -e ROS_LOG_DIR=/workspaces/hoverboard/ros2/log/ci/ros
+          -e CI_BAG=1
           hoverboard-dev:ci ./scripts/ci.sh ${{ matrix.stage }}
       # The stacks run with stdout discarded, so on a failure the launch and
-      # node logs are the only account of what the processes actually did.
+      # node logs and the recorded bag (ci.sh, CI_BAG) are the only account of
+      # what the processes actually did.
       - if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: logs-${{ matrix.stage }}
           path: ros2/log/ci
           if-no-files-found: ignore
+          retention-days: 14
