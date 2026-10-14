@@ -529,9 +529,9 @@ olarak yayınlıyor; montaj yönü **URDF'teki `imu_joint` rpy'ında** tarif edi
   `gazebo_obstacles.py` ile aynı ayrıştırılmış listeden hem OccupancyGrid'e hem
   Gazebo geometrisine dönüyor, `sim_node` gazebo backend'inde engeli reddetmiyor.
   Ölçülen: robot elle hesaplanan **2.1500 m**'de duruyor (3.0 − 0.5 − 0.35).
-- 🟡 **A5. CI — YAZILDI, GitHub'da HENÜZ KOŞMADI (2026-10-09).** Detay ve
-  yerelde ölçülenler aşağıda, "ŞU AN NEREDEYIZ" altında. İlk push'ta yeşil
-  dönene kadar bitmiş sayma.
+- ✅ **A5. CI — ÇALIŞIYOR (2026-10-14).** İlk koşuda robot_localization
+  3.8.3'ün başlatılmamış bellek hatasını yakaladı (EKF 1e148'e ıraksıyordu).
+  Detay "ŞU AN NEREDEYIZ" altında.
 
 ### İz B — Donanım (sıra atlanmaz)
 1. **ST-Link al → anakartı flash'la** (STM32, EFeru FOC) — **tüm izin kilidi**, en riskli adım
@@ -632,51 +632,91 @@ kalır ve gerçek yığın her iki dünyada da devrededir.
 > `test_yaw_drifts_without_a_magnetometer` bunu kalıcı olarak belgeliyor.
 
 ## ŞU AN NEREDEYIZ / SIRADAKİ İŞ
-*(son güncelleme: 2026-10-09 — A5 eklendi; altındaki sayılar 2026-09-08'den)*
+*(son güncelleme: 2026-10-14 — A5 koştu ve gerçek bir hata buldu; altındaki
+"A5'ten önceki durum" sayıları 2026-09-08'den)*
 
-### 🟡 A5 (CI) yazıldı — GitHub'da henüz koşmadı
+### A5 (CI) — çalışıyor, ve ilk koşuda gerçek bir hata yakaladı
 `scripts/ci.sh` her şeyi koşturur, `.github/workflows/ci.yml` sadece onu
-çağırır; yani CI'ın yaptığı şey dev container'da aynı komutla tekrarlanır.
+çağırır; CI'ın yaptığı şey dev container'da aynı komutla tekrarlanır.
+PR #1 (A5) birleşti; PR #2 aşağıdaki düzeltmeleri taşıyor; düzeltmeden sonraki ilk CI koşusu 6/6 yeşil (önceki üç koşunun hepsinde EKF en az bir yığında ıraksamıştı).
 
-| aşama | nerede | ne | yerelde ölçülen |
+| aşama | nerede | ne | süre (CI) |
 |---|---|---|---|
-| `unit` | çıplak runner | her paketin testi, ROS path'ten **çıkarılmış** | 3.5 sn (106 geçti, 8 atlandı) |
-| `firmware` | çıplak runner | `pio run` | ilk koşu 8 dk 52 sn, neredeyse tamamı 1.6 GB araç zinciri indirmesi (CI'da önbellekli) |
-| `stack` | devcontainer imajı | build + ağır ikili hariç her test | 225 sn, 131 test |
-| `nav2` | devcontainer imajı | build + `test_nav2.py` | 215 sn, 4 test |
-| `gazebo` | devcontainer imajı | build + iki Gazebo dosyası | 272 sn, 8 test |
-
-Son üçü **4 çekirdeğe kısıtlanarak** (`taskset -c 0-3`) ölçüldü — GitHub
-runner'ı 4 vCPU, bu kutu 8. Üçü de geçti: **143 test, atlanan yok.**
+| `unit` | çıplak runner | her paketin testi, ROS path'ten **çıkarılmış** | ~30 sn |
+| `firmware` | çıplak runner | `pio run` (~/.platformio önbellekli) | ~1 dk |
+| `image` | buildx + Actions cache | `.devcontainer/Dockerfile` | ilk sefer ~8 dk, sonra ~1 dk |
+| `stack` | devcontainer imajı | build + ağır dosyalar hariç her test | ~4 dk |
+| `nav2` | devcontainer imajı | build + `test_nav2.py` | ~4 dk |
+| `gazebo` | devcontainer imajı | build + iki Gazebo dosyası | ~5 dk |
 
 Bilinçli kararlar:
-- **ROS işleri `.devcontainer/Dockerfile`'dan build edilen imajda koşar**,
-  workflow'da tekrarlanan bir paket listesinde değil. Container'a elle
-  `apt install` edilip Dockerfile'a yazılmamış paket CI'da patlar.
-- **ROS aşamalarında SKIP = HATA** (`run_tests`, junit'ten sayar). Yığın
-  testleri overlay source edilmeyince, Gazebo testleri `gz` yokken atlanır;
-  masada doğru, CI'da tam tersine yanlış. Kontrolün gerçekten patladığı
-  doğrulandı (1 skip → exit 1).
-- **`stack` = "HEAVY listesinde olmayan her şey"**, pozitif bir liste değil.
-  Yeni test dosyası varsayılan olarak oraya düşer, işler arasına kaçamaz.
+- **ROS işleri Dockerfile'dan build edilen imajda koşar**, workflow'da
+  tekrarlanan bir paket listesinde değil.
+- **ROS aşamalarında SKIP = HATA** (junit'ten sayılır; patladığı doğrulandı).
+- **`stack` = "HEAVY listesinde olmayan her test dosyası"**, glob ile tek tek
+  listelenir — `--ignore` ile DEĞİL (aşağıda launch_testing).
+- **Uçuş kaydedici** (`CI_BAG=1`): her ROS aşaması EKF girdi/çıktısını mcap'e
+  kaydeder; iş kırmızıysa `logs-<aşama>` artifact'inde gelir.
 - `docs/**` ve `*.md` değişiklikleri CI'ı tetiklemez.
+- GitHub erişimi: token `~/.claude/hoverboard-github-token`'da, repo-yerel git
+  credential helper onu kullanır (VS Code'un ilettiği hesap `yusuf-tiryaki`,
+  repoya yazamıyor). PR'ları ve CI loglarını Claude REST ile açar/okur.
 
-⚠️ **A5'in yolda bulduğu:** "ROS'suz da koşarlar" iddiası `robot_sim` için
-**yanlıştı.** `test_gazebo_backend.py` modül seviyesinde `nav_msgs` import
-ediyordu → ROS'suz ortamda atlama değil **collection hatası**, dizindeki
-saf Python dünya testlerini de beraberinde götürüyordu. ROS her zaman
-source edilmiş bir kutuda bunu kimse göremez. Düzeltildi; `unit` aşaması
-artık bunu zorluyor.
+### ⚠️⚠️ A5'in bulduğu: robot_localization 3.8.3 başlatılmamış bellek okuyor
+İlk CI koşusunda `ekf_local` açılışın **ilk 33 ms**'inde **10¹⁴⁸**'e ıraksadı
+(vx 1e148, konum kovaryansı 1e281–1e297) ve Nav2 her hedefi bıraktı (planner:
+`worldToMap failed: -2147483648`). Hiçbir uyarı/log yok.
+- **Sebep:** Jazzy'nin apt sürümü 3.8.3 (Pi'da da bu kurulacak)
+  `angular_acceleration_`, `last_state_twist_rot_`, `last_diff_time_`'ı hiç
+  başlatmıyor; `prepareAcceleration` her ivme ölçümüne
+  `imu_konumu × angular_acceleration_` ekliyor. IMU `base_link`'in üstünde →
+  heap'te ne varsa `ax`'e giriyor. Upstream'de a8318cc3 (#945) ile düzeltilmiş;
+  **hiçbir Jazzy sürümünde yok**; 3.9.0–3.9.4 ve 3.10.0 da hâlâ hatalı.
+- **Kanıt:** valgrind memcheck (ros-jazzy-robot-localization-dbgsym ile)
+  `ekf_local`'da her koşuda `ekf.cpp:82`'de başlatılmamış değer buluyor;
+  `ax` kapalıyken **0 hata**. Dört bağımsız çürütme denemesinden geçti.
+- **Düzeltme:** `ekf.yaml`'da iki filtrede de `ax` KAPALI (gerekçe dosya
+  başlığında). `test_ekf_config.py` tuzak: ivmeölçer füzyonu ya da
+  `publish_acceleration` geri gelirse ve kurulu sürüm `KNOWN_FIXED`'de (bugün
+  boş) değilse patlar. ROS'suz da koşar.
+- **Bedeli ölçülmedi** (beklenen: ihmal edilebilir, vx tekerlekten). Bu
+  dosyadaki **tüm EKF doğruluk sayıları `ax` AÇIKKEN ölçüldü.**
+- **Neden aylarca görünmedi — ders:** heap içeriğine bağlı. Geliştirme
+  makinesinde 52 açılışta 0, CI'da açılışların çoğunda. robot_localization'ın
+  kendi `debug` çıktısı açılınca KAYBOLDU (heisenbug). Başlatılmamış belleği
+  zamanlamadan bağımsız bulan araç valgrind; "yerelde tekrarlanmıyor" bir
+  sonuç değil, bir ipucudur.
+- ⚠️ **Pi:** `ros-jazzy-robot-localization` düzeltmeli sürüm gelene kadar
+  sabitlenmeli (`apt-mark hold`) — tuzak testi yalnızca CI'da koşar.
 
-⚠️ **Kanıtlanmayanlar:** workflow'un kendisi hiç koşmadı (bu kutuda docker
-yok). İmaj build'i, Actions cache'i, runner'daki dosya izinleri ve
-zamanlamaya duyarlı testlerin gerçek runner'daki davranışı ilk push'ta
-görülecek. `actionlint` temiz — bu sözdizimi, davranış değil.
+### A5'in yolda bulduğu diğer şeyler
+- **launch_testing 3.4.12 pytest'in `--ignore`'unu bozuyor:**
+  `pytest_ignore_collect`'ten (tryfirst, firstresult) `None` yerine `False`
+  döndürüyor. Ağır testler `stack`'te de koştu, hiçbir şey patlamadı, aşama
+  130 yerine 566 sn sürdü. CI imajında temel imajdan gelen 3.4.11 var; temel
+  imaj güncellendiği gün CI'da da olurdu. `ci.sh` artık dosyaları listeliyor.
+- **"ROS'suz da koşarlar" `robot_sim` için yanlıştı:** `test_gazebo_backend.py`
+  modül seviyesinde `nav_msgs` import ediyordu → collection hatası. Düzeltildi;
+  `unit` aşaması zorluyor.
+- **Hook** ROS path'ten çıkarılarak koşuyor (önceden `robot_sim`'de her
+  düzenlemede collection hatası veriyordu ve 90 sn zaman aşımı yığınları yetim
+  bırakabiliyordu).
+- **`/dev/shm` dolması:** SIGKILL ile öldürülen her yığın ~2.7 MB Fast DDS
+  segmenti sızdırıyor; container'ın 64 MB'ı dolunca her şey sessizce UDP'ye
+  düşüyor. Temizlik: `fastdds shm clean`.
+- **Dev container paketleri 2026-10-14'te yükseltildi** (gz-sim 8.15.0,
+  Nav2 1.3.13, robot_localization 3.8.3 rebuild). Bir sonraki rebuild zaten
+  bunu getirecekti.
 
-⚠️ **Hook'un kör noktası:** `.claude/hooks/run_pkg_tests.py` testleri
-`/opt/ros` source edilmiş ama overlay edilmemiş ortamda koşuyor;
-`robot_sim`'de `hoverboard_bridge` bulunamadığı için **her düzenlemede**
-collection hatası veriyor. Düzeltilmedi.
+### A3e açık sorusu (`ekf_local` kare hatası 0.5–1.5 m) — güçlü aday, DOĞRULANMADI
+gz-sim **8.11.0**'da `OdometryPublisher`'ın kuaterniyon işaret dönmesi açısal
+hızda **~627 rad/s**'lik tek örnekli sıçramalar üretiyor (upstream #3834,
+**8.15.0**'da düzeltildi). `sim_node` jiroskobu doğrudan bundan türetiyor, EKF
+yaw'ı neredeyse tamamen jiroskoptan alıyor → kalıcı yön hatası, `/odom`
+(tekerlek) etkilenmiyor. A3e koşuları dpkg kaydına göre 8.11.0'daydı; artık
+8.15.0 kurulu. Nedensellik için sıçramayı kasıtlı enjekte eden deney gerekli.
+Not: conftest'teki "1.52 m'yi yetim düğümler yaptı" cümlesi bir hipotezdi,
+ölçüm değil (o oturumun transkriptinden doğrulandı) — düzeltilmeli.
 
 ### A5'ten önceki durum
 
@@ -692,24 +732,20 @@ listedeki en yüksek getirili iş.** Ara adım olarak hızlı süzgeç:
 `pytest src/robot_sim/test -q -k "not gazebo_physics and not nav2"` (saniyeler,
 ve A3'ün asıl hatasını yakalayan `test_gazebo_config.py` bunun içinde).
 
-Sıradaki iş seçenekleri:
-- **A5'i bitirmek** — commit + push, ilk koşuyu yeşile getirmek. Yazıldı,
-  koşmadı (yukarıda).
-- **Sıkışma tespiti** — A3c tuzak 3, artık **gerçek fizikle de kanıtlı**:
-  engele dayanmış robotta ground truth 6 sn'de 0.0000 m ilerlerken `/odom`
-  +2.97 m saydı. Yazılımla çözülebilir kısmı yok gibi: ikinci görüş GPS,
-  INA228 akımı ya da tampon; **üçü de donanıma bağlı.** Bu, İz B'nin İz A'yı
-  ilk kez gerçekten bloke ettiği yer.
-- ~~**Gazebo'da EKF'i patinaja karşı ölçmek**~~ — **A3e'de yapıldı:** patinajın
-  asıl bozduğu şey olan ham tekerlek odometrisi 8 metrede **0.077 m** ve
-  kararlı; EKF boş makinede **0.095 m** (kinematik 0.083 m). Sebebi de ölçüldü:
-  frenleme kalkış patinajının %91'ini geri veriyor.
-- **`ekf_local`'in kare hatasının kararsızlığı** — A3e'nin açtığı YENİ açık
-  soru. Aynı koşu 0.08 m de veriyor 1.52 m de, altındaki tekerlek odometrisi
-  0.080 m'de sabitken. Fizik/yük/mesaj kaybı elendi (ölçüldü). Bir sonraki
-  adım: `ekf_local`'in yaw'ını kare boyunca ground truth'a karşı **kaydedip**
-  sapmanın ne zaman başladığını görmek — mutlak heading gözlenmediği için
-  serbest kalan durumun bu olduğundan şüpheleniliyor ama doğrulanmadı.
+Sıradaki iş seçenekleri (2026-10-14 itibarıyla):
+- ⚠️ **Motor komut yolu güvenliği** — köprünün `speed_limit` parametresi
+  okunuyor ama HİÇ kullanılmıyor (gerçek sınır `protocol.py`'deki sabit 300 +
+  firmware); `/cmd_vel`'de NaN köprüyü çökertir, motorlar yalnızca ESP32'nin
+  200 ms watchdog'u sayesinde durur. EKF sağlığına bakan bir kapı da yok:
+  bu sefer Nav2 1e148'de tesadüfen durdu (worldToMap taşması), makul görünen
+  sonlu çöp yakalanmazdı. isfinite koruması + SI biriminde sınır + yerelleştirme
+  sağlık kapısı önerilir. CLAUDE.md güvenlik kuralı kapsamında.
+- **A3e'yi kapatmak** — gz sıçrama enjeksiyonu ile nedenselliği doğrula; sonra
+  `test_gazebo_localization`'daki 2.5 m ıraksama sınırını sıkılaştır ve
+  conftest'teki yanlış "1.52 m" cümlesini düzelt.
+- **`ax` kapatmanın bedelini ölçmek** — A1/A3e karelerini yeniden ölç,
+  tablolar `ax açık` olarak etiketlensin ya da güncellensin.
+- **Sıkışma tespiti** — A3c tuzak 3; donanıma bağlı (GPS, INA228, tampon).
 - **SP3 → SP5** — batarya/docking zinciri; SP1'in ölçüm katmanı hazır.
 
 ### ✅ A4 (manyetometre) yazıldı — yaw sorunu ÇÖZÜLDÜ, ölçüldü
