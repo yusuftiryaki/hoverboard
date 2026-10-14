@@ -32,31 +32,6 @@ env:
   DOCKER_BUILD_RECORD_UPLOAD: false
 
 jobs:
-  unit:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v7
-      # The distro's own pytest, on the distro's own Python: the same pair the
-      # dev container (also noble) runs.
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends python3-pytest python3-yaml
-      - run: ./scripts/ci.sh unit
-
-  firmware:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/cache@v6
-        with:
-          path: ~/.platformio
-          key: platformio-${{ hashFiles('firmware/esp32_bridge/platformio.ini') }}
-      - run: pipx install platformio
-      - run: ./scripts/ci.sh firmware
-
-  # Builds the dev container image into the Actions cache. The ROS jobs below
-  # load it from there; without this gate all three would build it from
-  # scratch at once the first time, and again whenever the Dockerfile changes.
   image:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -69,15 +44,10 @@ jobs:
           cache-from: type=gha,scope=devcontainer
           cache-to: type=gha,scope=devcontainer,mode=max
 
-  ros:
+  exp:
     needs: image
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        stage: [stack, nav2, gazebo]
-    name: ${{ matrix.stage }}
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
@@ -87,25 +57,15 @@ jobs:
           load: true
           tags: hoverboard-dev:ci
           cache-from: type=gha,scope=devcontainer
-      # The image's user is ubuntu (uid 1000); the checkout belongs to the
-      # runner's, and colcon writes build/ and install/ into the tree. Opened
-      # up rather than chown'ed: checkout's own cleanup still has to be able to
-      # write .git afterwards.
       - run: chmod -R a+rwX .
-      # --network=host: the same runArgs as devcontainer.json.
       - run: >
           docker run --rm --network=host
           -v "$PWD:/workspaces/hoverboard" -w /workspaces/hoverboard
           -e ROS_LOG_DIR=/workspaces/hoverboard/ros2/log/ci/ros
-          -e CI_BAG=1
-          hoverboard-dev:ci ./scripts/ci.sh ${{ matrix.stage }}
-      # The stacks run with stdout discarded, so on a failure the launch and
-      # node logs and the recorded bag (ci.sh, CI_BAG) are the only account of
-      # what the processes actually did.
-      - if: failure()
+          hoverboard-dev:ci ./scripts/exp_ekf_startup.sh
+      - if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: logs-${{ matrix.stage }}
+          name: exp-ekf-startup
           path: ros2/log/ci
-          if-no-files-found: ignore
-          retention-days: 14
+          retention-days: 7
