@@ -1,0 +1,103 @@
+# Every job is one call to scripts/ci.sh — the logic lives there, so it can be
+# run in the dev container. This file only decides WHERE each stage runs.
+#
+#   unit, firmware   bare runner. Neither needs ROS, and `unit` exists to prove
+#                    exactly that.
+#   stack/nav2/gazebo  inside the image built from .devcontainer/Dockerfile —
+#                    not a package list repeated here. A package that was
+#                    apt-installed by hand in someone's container and never made
+#                    it into the Dockerfile fails here instead of passing
+#                    everywhere except after the next rebuild.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["docs/**", "**.md"]
+  pull_request:
+    paths-ignore: ["docs/**", "**.md"]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      # The distro's own pytest, on the distro's own Python: the same pair the
+      # dev container (also noble) runs.
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends python3-pytest python3-yaml
+      - run: ./scripts/ci.sh unit
+
+  firmware:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/cache@v6
+        with:
+          path: ~/.platformio
+          key: platformio-${{ hashFiles('firmware/esp32_bridge/platformio.ini') }}
+      - run: pipx install platformio
+      - run: ./scripts/ci.sh firmware
+
+  # Builds the dev container image into the Actions cache. The ROS jobs below
+  # load it from there; without this gate all three would build it from
+  # scratch at once the first time, and again whenever the Dockerfile changes.
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: .devcontainer
+          cache-from: type=gha,scope=devcontainer
+          cache-to: type=gha,scope=devcontainer,mode=max
+
+  ros:
+    needs: image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        stage: [stack, nav2, gazebo]
+    name: ${{ matrix.stage }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: .devcontainer
+          load: true
+          tags: hoverboard-dev:ci
+          cache-from: type=gha,scope=devcontainer
+      # The image's user is ubuntu (uid 1000); the checkout belongs to the
+      # runner's, and colcon writes build/ and install/ into the tree. Opened
+      # up rather than chown'ed: checkout's own cleanup still has to be able to
+      # write .git afterwards.
+      - run: chmod -R a+rwX .
+      # --network=host: the same runArgs as devcontainer.json.
+      - run: >
+          docker run --rm --network=host
+          -v "$PWD:/workspaces/hoverboard" -w /workspaces/hoverboard
+          -e ROS_LOG_DIR=/workspaces/hoverboard/ros2/log/ci/ros
+          hoverboard-dev:ci ./scripts/ci.sh ${{ matrix.stage }}
+      # The stacks run with stdout discarded, so on a failure the launch and
+      # node logs are the only account of what the processes actually did.
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: logs-${{ matrix.stage }}
+          path: ros2/log/ci
+          if-no-files-found: ignore

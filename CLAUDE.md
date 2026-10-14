@@ -26,6 +26,11 @@ cd ros2/src/mpu6050_driver   && python3 -m pytest test -q
 # ESP32 firmware derleme (donanım gerekmez)
 cd firmware/esp32_bridge && pio run
 
+# CI'ın koştuğu şeyin aynısı (.github/workflows/ci.yml sadece bunu çağırır)
+./scripts/ci.sh unit              # ROS'suz saf Python testleri, saniyeler
+./scripts/ci.sh stack nav2 gazebo # build + tam suite (~11 dk); skip = hata
+./scripts/ci.sh all               # yukarıdakiler + firmware
+
 # Pi'a deploy (repo remote'a bağlı olmalı)
 PI_HOST=enes@robot.local ./scripts/deploy.sh
 ```
