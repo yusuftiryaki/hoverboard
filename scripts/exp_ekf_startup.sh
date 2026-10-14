@@ -48,17 +48,23 @@ print(("DIVERGED" if (mx > 10 or not math.isfinite(mx)) else "ok"), f"max|x|={mx
 PY
 }
 
-# Round 2: the harness above never diverged on the runner (0/30) while the
-# test suite's stacks did every time. So run the REAL failing test.
-SQUARE=src/robot_sim/test/test_localization.py::test_ekf_tracks_the_truth_around_a_square
-for name in P A; do
-  for i in $(seq "$TRIALS"); do
-    variant "$name" "$i"
-    r=$(python3 -m pytest "$SQUARE" -q -p no:cacheprovider 2>&1 | grep -E "passed|failed|AssertionError: EKF" | tr '\n' ' ' | cut -c1-200)
-    echo "$name$i $( [[ $r == *failed* ]] && echo DIVERGED || echo ok ) $r"
-    # the divergence is in the first seconds; keep the artifact small
-    [[ -f "$OUT/ekf_debug_A$i.txt" ]] && truncate -s '<40M' "$OUT/ekf_debug_A$i.txt"
-  done
-done | tee "$OUT/results.txt"
+# Round 3: in CI the FIRST stack of a pytest session was healthy and the 2nd-4th
+# diverged at startup; single-stack sessions never did. So run the whole file
+# (4 stacks in one session) and read every stack's startup from a bag.
+FILE=src/robot_sim/test/test_localization.py
+run_file() {  # run_file <label>
+  local bag="$OUT/bag-$1"
+  setsid ros2 bag record -s mcap -o "$bag" --topics /odometry/filtered/local /odom /imu/data_raw /tf_static > "$bag.log" 2>&1 & local rec=$!
+  sleep 2
+  local r; r=$(python3 -m pytest "$FILE" -q -p no:cacheprovider 2>&1 | grep -E "passed|failed" | tail -1)
+  kill -TERM -- -"$rec" 2>/dev/null; wait "$rec" 2>/dev/null
+  local starts; starts=$(python3 "$REPO/scripts/exp_bag_startup.py" "$bag" 2>&1 | awk '/########/{n=0; next} /EKF/{n++; if(n==2) print ($0 ~ /e\+1[0-9][0-9]|e\+2[0-9][0-9]/ ? "X" : ".")}' | tr -d '\n')
+  echo "$1 stacks[$starts] (X = diverged at startup) | pytest: $r"
+}
+{
+  variant P 1; unset FASTDDS_BUILTIN_TRANSPORTS; run_file P1
+  variant A 1; run_file A1; truncate -s "<40M" "$OUT/ekf_debug_A1.txt"
+  variant A 2; run_file A2; truncate -s "<40M" "$OUT/ekf_debug_A2.txt"
+  variant P 2; export FASTDDS_BUILTIN_TRANSPORTS=UDPv4; run_file D1; unset FASTDDS_BUILTIN_TRANSPORTS
+} | tee "$OUT/results.txt"
 cp "$OUT/ekf.orig.yaml" "$CFG"
-echo "== summary"; for name in P A; do echo "$name: $(grep -c "^$name[0-9]* DIVERGED" "$OUT/results.txt")/$TRIALS diverged"; done | tee -a "$OUT/results.txt"
