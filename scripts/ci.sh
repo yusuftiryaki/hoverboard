@@ -137,14 +137,20 @@ EOF
 stage_stack() {
   build_workspace
   start_recorder stack
-  local pkg heavy ignores
+  # ⚠️ The test FILES are listed, not the directory with --ignore. launch_testing
+  # 3.4.12 (a pytest plugin every ROS install loads) adds a tryfirst
+  # pytest_ignore_collect that returns False instead of None for every path —
+  # and that hook is firstresult, so pytest's own --ignore never runs. The
+  # heavy files then ran twice, inside this stage too, and nothing failed: the
+  # stage just took 566 s instead of 130.
+  local pkg file files
   for pkg in $(packages_with_tests); do
-    ignores=()
-    for heavy in "${HEAVY[@]}"; do
-      [[ "${heavy}" == "src/${pkg}/"* ]] && ignores+=("--ignore=${heavy}")
+    files=()
+    for file in "src/${pkg}/test/"test_*.py; do
+      [[ " ${HEAVY[*]} " == *" ${file} "* ]] || files+=("${file}")
     done
     echo ">> stack: ${pkg}"
-    run_tests "stack-${pkg}" "src/${pkg}/test" "${ignores[@]}"
+    run_tests "stack-${pkg}" "${files[@]}"
   done
 }
 
