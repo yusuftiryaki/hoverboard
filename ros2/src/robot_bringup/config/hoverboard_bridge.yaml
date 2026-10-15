@@ -37,9 +37,16 @@ hoverboard_bridge:
     invert_left: false
     invert_right: true
 
-    # Mirrors SPEED_LIMIT in the firmware. Raise both together, and only once
-    # the robot has proven it stops when told to.
+    # Raw board units, per WHEEL (command_limits.py). Capped at the firmware's
+    # SPEED_LIMIT=300 — raise both together, and only once the robot has proven
+    # it stops when told to.
     speed_limit: 300
+    # SI ceilings on ANY /cmd_vel — Nav2, teleop, a test, a bug. Exceeding
+    # either scales v and omega together: same arc, slower. Nav2 asks for at
+    # most 0.5 m/s / 0.6 rad/s (nav2.yaml). 1 m/s is ~116 raw on the wheel.
+    # A NaN/inf command is treated as STOP and reported in /diagnostics.
+    max_linear_vel: 1.0
+    max_angular_vel: 1.5
 
     # EFeru's feedback scaling. CALIBRATE battery_scale against a multimeter on
     # first power-up; a wrong scale means the low-battery warning lies.

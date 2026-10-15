@@ -139,6 +139,8 @@ STACK_PATTERNS = (
     "lib/robot_sim/sim_node",
     "lib/hoverboard_bridge/hoverboard_bridge",
     "lib/hoverboard_bridge/fake_esp32",
+    # publishes /cmd_vel: an orphan would drive the next stack's robot
+    "lib/hoverboard_bridge/nav_cmd_gate",
     "robot_localization/ekf_node",
     "robot_localization/navsat_transform_node",
 )

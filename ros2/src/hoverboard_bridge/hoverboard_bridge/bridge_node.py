@@ -35,7 +35,9 @@ from std_msgs.msg import Bool
 from std_srvs.srv import Trigger
 from tf2_ros import TransformBroadcaster
 
-from hoverboard_bridge.protocol import FeedbackParser, pack_pi_command
+from hoverboard_bridge.command_limits import (
+    DriveGeometry, is_finite_command, limit_twist, wheel_commands)
+from hoverboard_bridge.protocol import SPEED_LIMIT, FeedbackParser, pack_pi_command
 
 RPM_TO_RAD_S = 2.0 * math.pi / 60.0
 
@@ -81,9 +83,16 @@ class HoverboardBridge(Node):
         self.declare_parameter("invert_left", False)
         self.declare_parameter("invert_right", True)
 
-        # Firmware clamps to SPEED_LIMIT=300 anyway; clamp here so /odom's
-        # expectations match what the motors will actually be asked to do.
-        self.declare_parameter("speed_limit", 300)
+        # Raw board units per WHEEL. The firmware clamps speed and steer to
+        # SPEED_LIMIT=300 separately, which bends the arc; command_limits keeps
+        # each wheel under this instead, so the firmware clamp never acts.
+        # Above the firmware's limit it means nothing, so it is capped there.
+        self.declare_parameter("speed_limit", SPEED_LIMIT)
+        # SI limits on what any /cmd_vel can ask for. Exceeding either SCALES
+        # v and omega together (same arc, slower) — never clips one axis.
+        # Nav2 asks for 0.5 m/s and 0.6 rad/s (nav2.yaml).
+        self.declare_parameter("max_linear_vel", 1.0)    # m/s
+        self.declare_parameter("max_angular_vel", 1.5)   # rad/s
 
         # EspFeedback raw -> SI. EFeru: batVoltage in 0.01 V, boardTemp in 0.1 C.
         # TODO: sanity check against a multimeter once the board is flashed.
@@ -110,6 +119,19 @@ class HoverboardBridge(Node):
         self._left_sign = -1.0 if p("invert_left").value else 1.0
         self._right_sign = -1.0 if p("invert_right").value else 1.0
         self._speed_limit = int(p("speed_limit").value)
+        if self._speed_limit > SPEED_LIMIT:
+            self.get_logger().warn(
+                f"speed_limit {self._speed_limit} is above the firmware's "
+                f"SPEED_LIMIT={SPEED_LIMIT}; capping it there")
+            self._speed_limit = SPEED_LIMIT
+        self._max_v = float(p("max_linear_vel").value)
+        self._max_w = float(p("max_angular_vel").value)
+        self._geometry = DriveGeometry(
+            wheel_radius=self._wheel_radius,
+            wheel_separation=self._wheel_separation,
+            cmd_per_rpm=self._cmd_per_rpm,
+            steer_sign=self._steer_sign,
+        )
         self._cmd_timeout = p("cmd_timeout").value
         self._battery_scale = p("battery_scale").value
         self._temp_scale = p("temp_scale").value
@@ -142,6 +164,8 @@ class HoverboardBridge(Node):
         self._pos_l = 0.0           # integrated wheel angle, rad
         self._pos_r = 0.0
         self._bump_was_set = False
+        self._rejected_cmds = 0          # non-finite /cmd_vel, since start
+        self._rejected_since_diag = 0
 
         # ---- ROS interfaces --------------------------------------------------
         cmd_type = TwistStamped if p("use_stamped_cmd_vel").value else Twist
@@ -167,8 +191,17 @@ class HoverboardBridge(Node):
 
     # ---- Subscriptions -------------------------------------------------------
     def _on_cmd(self, msg: Twist) -> None:
-        self._target_v = msg.linear.x
-        self._target_w = msg.angular.z
+        v, w = msg.linear.x, msg.angular.z
+        if not is_finite_command(v, w):
+            # STOP, and stay alive. This used to raise in _tx_tick and kill the
+            # node: one bad message took the whole drivetrain down until a
+            # restart (see command_limits.py). Counted, logged once a second.
+            self._rejected_cmds += 1
+            self._rejected_since_diag += 1
+            self.get_logger().error(
+                f"non-finite /cmd_vel (v={v}, w={w}) — commanding zero",
+                throttle_duration_sec=1.0)
+        self._target_v, self._target_w = limit_twist(v, w, self._max_v, self._max_w)
         self._last_cmd_time = self.get_clock().now()
 
     def _on_cmd_stamped(self, msg: TwistStamped) -> None:
@@ -191,22 +224,9 @@ class HoverboardBridge(Node):
         else:
             v, w = self._target_v, self._target_w
 
-        # Differential drive inverse kinematics.
-        half_track = 0.5 * self._wheel_separation
-        v_l = v - w * half_track
-        v_r = v + w * half_track
-        rpm_l = v_l / (2.0 * math.pi * self._wheel_radius) * 60.0
-        rpm_r = v_r / (2.0 * math.pi * self._wheel_radius) * 60.0
-
-        cmd_l = rpm_l * self._cmd_per_rpm
-        cmd_r = rpm_r * self._cmd_per_rpm
-        # Undo the board's mixer: speedL = speed + steer, speedR = speed - steer.
-        speed = (cmd_l + cmd_r) * 0.5
-        steer = (cmd_l - cmd_r) * 0.5 * self._steer_sign
-
-        frame = pack_pi_command(
-            int(round(speed)), int(round(steer)), self._clear_estop_request
-        )
+        # Inverse kinematics + per-wheel raw limit; non-finite -> (0, 0).
+        speed, steer = wheel_commands(v, w, self._geometry, self._speed_limit)
+        frame = pack_pi_command(speed, steer, self._clear_estop_request)
         self._clear_estop_request = False
         try:
             self._serial.write(frame)
@@ -348,12 +368,19 @@ class HoverboardBridge(Node):
                 KeyValue(key="bump", value=str(fb.bump)),
                 KeyValue(key="frames_ok", value=str(self._parser.frames_ok)),
                 KeyValue(key="checksum_errors", value=str(self._parser.checksum_errors)),
+                KeyValue(key="rejected_nonfinite_cmds", value=str(self._rejected_cmds)),
             ]
             volts = fb.bat_voltage * self._battery_scale
             # 10S Li-ion: 3.3 V/cell is the "land now" line.
             if 0.0 < volts < 3.3 * self._battery_cells and status.level == DiagnosticStatus.OK:
                 status.level = DiagnosticStatus.WARN
                 status.message = f"battery low: {volts:.1f} V"
+
+        if self._rejected_since_diag and status.level < DiagnosticStatus.ERROR:
+            status.level = DiagnosticStatus.ERROR
+            status.message = (f"{self._rejected_since_diag} non-finite /cmd_vel "
+                              "in the last second — stopped; who is publishing NaN?")
+        self._rejected_since_diag = 0
 
         array = DiagnosticArray()
         array.header.stamp = self.get_clock().now().to_msg()
