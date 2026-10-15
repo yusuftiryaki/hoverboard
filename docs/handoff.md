@@ -378,6 +378,8 @@ ros2_control `SystemInterface`'i onun üstüne sarılır, düğüm teleop aracı
 |---|---|
 | `hoverboard_bridge/protocol.py` | `PiCommand` (10 B) / `EspFeedback` (16 B) pack/unpack + checksum + resync eden çerçeve ayrıştırıcı. `main.cpp` ile **byte-byte aynı olduğu doğrulandı** (struct'lar firmware'den söküldü, gcc referans byte'larıyla karşılaştırıldı). ⚠️ uint8 bayraklar checksum'da **ikişerli** 16-bit kelimeye katlanıyor → yeni bayrak eklerken yanına pad gerekir. |
 | `hoverboard_bridge/bridge_node.py` | `/cmd_vel` → ters kinematik → seri; `EspFeedback` → `/odom`, `/joint_states`, `/battery`, `/diagnostics`. `~/clear_estop` servisi (std_srvs/Trigger). |
+| `hoverboard_bridge/command_limits.py` | ROS'suz: NaN → dur, SI tavanları (v/ω birlikte ölçeklenir), teker başına ham sınır. Her girdide toplam (taşma, ≤0/NaN sınır → dur). |
+| `hoverboard_bridge/nav_cmd_gate.py` | `/cmd_vel_nav` → `/cmd_vel`, yalnızca `ekf_local` sağlıklıyken; karar `estimate_problem()` ROS'suz. |
 | `hoverboard_bridge/esp32_sim.py` | **ESP32'nin beyni**, tekerleksiz: protokol + watchdog + E-stop + çarpma vetosu + mixer. Arka uç takılabilir (`Backend` protokolü). ROS'suz. |
 | `hoverboard_bridge/fake_esp32.py` | ince CLI: `esp32_sim` + `LagBackend`. Dünyası/pozu yok — "çerçeveler ve güvenlik doğru mu" sorusunu cevaplar. `ros2 run hoverboard_bridge fake_esp32` |
 | `robot_sim/world.py` | ROS'suz kinematik dünya: tekerlek komutu → ölçülen rpm + **ground truth poz**. Arc entegrasyonu (Euler değil). Fizik YOK. |
@@ -708,6 +710,42 @@ Bilinçli kararlar:
   Nav2 1.3.13, robot_localization 3.8.3 rebuild). Bir sonraki rebuild zaten
   bunu getirecekti.
 
+### ✅ Motor komut yolu güvenliği (2026-10-15, PR #3)
+```
+controller_server, behavior_server ─► /cmd_vel_nav ─► nav_cmd_gate ─► /cmd_vel ─► hoverboard_bridge
+teleop ──────────────────────────────────────────────────────────────► /cmd_vel   (kapısız, bilerek)
+```
+- **NaN/inf `/cmd_vel` = DUR**, düğüm yaşar, `/diagnostics`'te ayrı ERROR.
+  Önceden `int(round(nan))` köprüyü öldürüyordu; sürüş katmanı yeniden
+  başlatılana kadar ölü kalıyordu.
+- **SI tavanları** `max_linear_vel` 1.0 m/s, `max_angular_vel` 1.5 rad/s.
+  Önceden tek tavan firmware'in ham 300'üydü: 5 m/s istenince **2.592 m/s**
+  sürdü (ölçüldü). `speed_limit` artık gerçekten uygulanıyor (teker başına).
+- **Sınırlar yayı korur:** v/ω ve iki teker AYNI oranla ölçeklenir. Önceden
+  speed ve steer (firmware'de de) ayrı kırpılıyordu → eğrilik değişiyordu.
+  Sınır içindeki komutlar eski köprüyle birebir aynı (kalibrasyon kaymaz;
+  .5 yuvarlama sınırları dahil testle sabit).
+- **Köprü tehlikeli parametreyle başlamayı REDDEDER** (negatif/0/NaN sınır,
+  steer_sign ≠ ±1, geometri ≤ 0, cmd_per_rpm 0). Negatif `max_linear_vel`
+  ileriyi tam hızda GERİ sürdürürdü.
+- **`nav_cmd_gate`:** Nav2'yi yalnızca `ekf_local`'in son çıktısı sonlu,
+  fiziksel sınırlar içinde (konum 1e4 m, hız 5 m/s, yaw hızı 10 rad/s) ve
+  taze (≤ 0.5 s; saat geri atlarsa bayat) iken geçirir, değilse SIFIR.
+  Yakaladığı: BOZUK filtre. Yakalayamadığı: yanlış ama makul tahmin
+  (A3c tuzak 3 hâlâ açık).
+- ⚠️ **Sağlıklı `ekf_local`'in konum varyansı sınırsız büyür** (~t⁵; odom'da
+  konumu ve vy'yi ölçen yok; CI kaydı: 41 sn'de 6.1e4 m²). Kapının ilk sürümü
+  1e6 kullanıyordu ve sağlıklı robotu **~72 sn'de** durduracaktı — hiçbir test
+  yığını o kadar yaşamadığı için görünmedi, bağımsız inceleme CI kaydından
+  buldu. Varyans artık yalnızca patlama dedektörü (1e100). **Ders:** sağlık
+  eşiğini "makul görünen" bir sayıyla değil, sağlıklı sistemin ölçülen uzun
+  koşu davranışıyla seç; testlerin süresi de bir kapsama sınırıdır.
+- `test_nav2` artık `/cmd_vel`'in tek yayıncısının `nav_cmd_gate` olduğunu
+  assert ediyor: remap'lerden biri silinirse robot kapısız sürer ve başka
+  hiçbir test bunu fark etmez.
+- Dokunulmayanlar: firmware, 200 ms watchdog, `cmd_timeout` deadman, E-stop,
+  tampon vetosu.
+
 ### A3e açık sorusu (`ekf_local` kare hatası 0.5–1.5 m) — güçlü aday, DOĞRULANMADI
 gz-sim **8.11.0**'da `OdometryPublisher`'ın kuaterniyon işaret dönmesi açısal
 hızda **~627 rad/s**'lik tek örnekli sıçramalar üretiyor (upstream #3834,
@@ -733,13 +771,7 @@ listedeki en yüksek getirili iş.** Ara adım olarak hızlı süzgeç:
 ve A3'ün asıl hatasını yakalayan `test_gazebo_config.py` bunun içinde).
 
 Sıradaki iş seçenekleri (2026-10-14 itibarıyla):
-- ⚠️ **Motor komut yolu güvenliği** — köprünün `speed_limit` parametresi
-  okunuyor ama HİÇ kullanılmıyor (gerçek sınır `protocol.py`'deki sabit 300 +
-  firmware); `/cmd_vel`'de NaN köprüyü çökertir, motorlar yalnızca ESP32'nin
-  200 ms watchdog'u sayesinde durur. EKF sağlığına bakan bir kapı da yok:
-  bu sefer Nav2 1e148'de tesadüfen durdu (worldToMap taşması), makul görünen
-  sonlu çöp yakalanmazdı. isfinite koruması + SI biriminde sınır + yerelleştirme
-  sağlık kapısı önerilir. CLAUDE.md güvenlik kuralı kapsamında.
+- ✅ ~~**Motor komut yolu güvenliği**~~ — **yapıldı (2026-10-15, PR #3)**, yukarıda.
 - **A3e'yi kapatmak** — gz sıçrama enjeksiyonu ile nedenselliği doğrula; sonra
   `test_gazebo_localization`'daki 2.5 m ıraksama sınırını sıkılaştır ve
   conftest'teki yanlış "1.52 m" cümlesini düzelt.
