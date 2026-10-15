@@ -150,3 +150,12 @@ def test_wrong_address_raises_like_a_real_bus():
     imu = MPU6050(bus, address=0x69)
     with pytest.raises(OSError):
         imu.who_am_i()
+
+
+def test_gyro_full_scale_is_the_int16_ceiling_by_hand():
+    """32767 counts / 131 LSB per dps = 250.13 dps = 4.3656 rad/s at the
+    robot's configured 250 dps range; 32767 / 16.4 = 1997.98 dps = 34.871
+    rad/s at 2000. Worked out by hand, not with the function's own formula."""
+    from mpu6050_driver.mpu6050 import gyro_full_scale_rad_s
+    assert gyro_full_scale_rad_s(250) == pytest.approx(4.36559, abs=1e-4)
+    assert gyro_full_scale_rad_s(2000) == pytest.approx(34.8714, abs=1e-3)

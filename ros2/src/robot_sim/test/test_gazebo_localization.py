@@ -200,17 +200,24 @@ def test_the_ekf_tracks_the_truth_around_a_square_even_with_real_slip(gazebo, pr
     """The same 8 m square test_localization.py drives, on real physics.
 
     Identical command profile on purpose — four ~2 m straights and four ~90 deg
-    turns, no pauses — so the two numbers are comparable. Measured over three
-    fresh stacks: 0.103 / 0.082 / 0.100 m of position error and 4.25 / 3.33 /
-    4.26 deg of yaw, against the kinematic world's 0.083 m and 4.3 deg.
+    turns, no pauses — so the two numbers are comparable. Measured 2026-10-15
+    (gz-sim 8.15.0, accelerometer out of the EKF), four fresh stacks: EKF
+    0.073 / 0.074 / 0.075 / 0.078 m and 3.22 / 3.36 / 3.34 / 3.38 deg; wheel
+    odometry 0.066-0.085 m. Kinematic world, same day: 0.080-0.082 m, 4.2-4.3 deg.
 
-    ⚠️ Those EKF figures are a MEASUREMENT, not what this test guards. Inside a
-    full pytest session the same code has also produced 0.487, 1.368 and
-    1.522 m, with the wheel odometry underneath unchanged at 0.080 m, RTF at
-    1.00 and every input topic at its nominal rate. The cause is not known. The
-    tight assertion below is therefore on the wheel odometry, which is steady to
-    millimetres and is the thing slip actually corrupts; the EKF gets a
-    divergence bound and an honest comment. See docs/handoff.md, A3e.
+    ⚠️ This EKF bound was 2.5 m for a while — a divergence check, not an
+    accuracy one — because the same code had also produced 0.487, 1.368 and
+    1.522 m with the wheels at 0.080 m, RTF 1.00 and every rate nominal, and
+    nobody knew why. It was gz-sim 8.11.0 (upstream #3834, fixed in 8.15.0):
+    OdometryPublisher let the pose quaternion flip sign between ticks, and the
+    finite difference read it as a full turn in one 20 ms step, i.e. +-314
+    rad/s for one sample. sim_node turns that omega into the gyro, and ekf_local
+    trusts the gyro ~500x over the wheels for yaw rate. 314 rad/s x 20 ms is
+    exactly 2 pi, so held for exactly one tick it is invisible; a few ms either
+    way leaves tens of degrees of heading — hence "random, not reproducible,
+    wheels fine". Reproduced by injecting that one sample into
+    /gazebo/ground_truth mid-turn: 0.076 / 5.63 / 0.41 / 0.076 m over four runs,
+    wheels 0.07 m every time. The bound below is an accuracy bound again.
 
     So slip costs roughly a centimetre over eight metres here, and the yaw error
     is unchanged — it is 0.1 deg/s of residual gyro bias integrated over the
@@ -241,16 +248,11 @@ def test_the_ekf_tracks_the_truth_around_a_square_even_with_real_slip(gazebo, pr
     odom_error = displacement_error(odom0, odom1, truth0, truth1)
     ekf_yaw = math.degrees(angle_diff(ekf1[2] - ekf0[2], truth1[2] - truth0[2]))
 
-    # Same threshold as the kinematic test, deliberately: the point is that
-    # switching on physics does NOT need a looser bound. Measured max 0.103.
     health = probe.health(sim0, wall0, counts0)
 
-    # ⚠️ THE TIGHT ASSERTION IS ON THE WHEELS, NOT ON THE EKF, and that split is
-    # the honest reading of what turned out to be reproducible.
-    #
     # Slip is a wheel-odometry effect, and wheel odometry over this square is
-    # steady to a few millimetres: 0.074 / 0.077 / 0.080 / 0.080 m across every
-    # run, good and bad. So this is where A3's question actually gets answered
+    # steady to a few millimetres: 0.066-0.085 m across every run, glitched or
+    # not. So this is where A3's question actually gets answered
     # — 8 m of driving with real slip costs the odometry under 0.1 m, and the
     # kinematic world's slip-free 0.083 m was not a flattering number.
     assert odom_error < 0.2, (
@@ -258,29 +260,20 @@ def test_the_ekf_tracks_the_truth_around_a_square_even_with_real_slip(gazebo, pr
         f"far past the ~0.08 m measured — slip has stopped cancelling, or the "
         f"wheel geometry has changed {health}")
 
-    # The EKF on top of it is NOT steady, and pretending otherwise would make
-    # this a test that fails for reasons it cannot explain. Measured on an idle
-    # box across four runs: 0.081 / 0.103 / 0.082 / 0.100 m. Measured inside a
-    # full pytest session, same code, same commands: also 0.487, 1.368 and
-    # 1.522 m — while the wheel odometry underneath read 0.080 m in those very
-    # runs, RTF was 1.00, and truth/odom/imu all arrived at their nominal rates.
-    # So it is not the physics, not load, and not lost messages. It is not
-    # understood, and it is written up as an open question rather than papered
-    # over with a threshold that happens to pass.
-    #
-    # What this bound therefore guards is DIVERGENCE — a filter that has stopped
-    # tracking at all — not accuracy. The accuracy figure lives in the docstring
-    # and in docs/handoff.md, next to the conditions it was measured under.
-    assert ekf_error < 2.5, (
-        f"the EKF has stopped tracking: {ekf_error:.3f} m off after ~8 m, with "
-        f"wheel odometry at {odom_error:.3f} m and yaw {ekf_yaw:.2f} deg "
-        f"{health}")
-    # Yaw is the steady part of the filter's behaviour: it is the residual gyro
-    # bias integrated, ~0.1 deg/s over the ~35 s this square takes, and it came
-    # out 4.25 / 3.33 / 4.26 deg against the kinematic world's 4.3.
-    assert ekf_yaw < 15.0, (
-        f"the EKF is {ekf_yaw:.1f} deg off after ~8 m — that is far more than "
-        f"the residual gyro bias can integrate to {health}")
+    # An ACCURACY bound: ~3x the measured 0.073-0.078 m. A heading step of the
+    # gz-8.11.0 kind (docstring) lands at 0.41 m and up, so it fails here now
+    # instead of hiding under a divergence-sized threshold.
+    assert ekf_error < 0.25, (
+        f"the EKF is {ekf_error:.3f} m off after ~8 m (measured 0.073-0.078), "
+        f"with wheel odometry at {odom_error:.3f} m and yaw {ekf_yaw:.2f} deg. "
+        f"Wheels fine but EKF not: suspect a yaw-rate glitch reaching the gyro "
+        f"(see the docstring) {health}")
+    # The residual gyro bias integrated, ~0.1 deg/s over the ~35 s this square
+    # takes: measured 3.2-3.4 deg (kinematic world 4.3). 8 deg leaves margin for
+    # the bias draw; the 10 deg step of a glitch-hit run does not fit under it.
+    assert ekf_yaw < 8.0, (
+        f"the EKF is {ekf_yaw:.1f} deg off after ~8 m (measured 3.2-3.4) — more "
+        f"than the residual gyro bias can integrate to {health}")
 
 
 def test_slip_from_speeding_up_is_given_back_when_slowing_down(gazebo, probe):

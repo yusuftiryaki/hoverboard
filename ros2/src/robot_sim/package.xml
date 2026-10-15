@@ -17,6 +17,8 @@
   <!-- For earth_field: the simulated magnetic field has ONE definition, and it
        lives with the magnetometer driver. See A6 in docs/handoff.md. -->
   <exec_depend>qmc5883l_driver</exec_depend>
+  <!-- gyro_full_scale_rad_s: the fake IMU saturates where the real chip does -->
+  <exec_depend>mpu6050_driver</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>nav_msgs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>

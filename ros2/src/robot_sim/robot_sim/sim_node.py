@@ -58,6 +58,7 @@ from std_msgs.msg import Bool
 from tf2_ros import TransformBroadcaster
 
 from hoverboard_bridge.esp32_sim import TX_PERIOD_S, Esp32Sim, PtyLink, step_once
+from mpu6050_driver.mpu6050 import gyro_full_scale_rad_s
 from qmc5883l_driver import earth_field
 from robot_sim.gazebo_backend import GazeboBackend
 from robot_sim.obstacle_map import DEFAULT_GRID, build_obstacle_grid, parse_obstacle_params
@@ -132,6 +133,9 @@ class SimNode(Node):
         self.declare_parameter("imu_gyro_noise_dps", 0.05)
         self.declare_parameter("imu_accel_noise", 0.05)
         self.declare_parameter("imu_rate_hz", 100.0)
+        # The real chip's range (robot_bringup/config/mpu6050.yaml). The fake
+        # gyro saturates there exactly as the int16 registers do.
+        self.declare_parameter("imu_gyro_range_dps", 250)
 
         # ---- Fake magnetometer -----------------------------------------------
         # Publishes what qmc5883l_driver WOULD PUBLISH: the field AFTER hard/soft
@@ -225,6 +229,7 @@ class SimNode(Node):
 
         self._gyro_bias = math.radians(p("imu_gyro_residual_bias_dps").value)
         self._gyro_noise = math.radians(p("imu_gyro_noise_dps").value)
+        self._gyro_full_scale = gyro_full_scale_rad_s(int(p("imu_gyro_range_dps").value))
         self._accel_noise = p("imu_accel_noise").value
         self._gps_wander_sigma = p("gps_wander_sigma").value
         self._gps_wander_tau = p("gps_wander_tau").value
@@ -378,9 +383,12 @@ class SimNode(Node):
         msg.header.frame_id = "imu_link"
         # Same contract as the real driver: 6-axis, so no orientation at all.
         msg.orientation_covariance[0] = -1.0
-        msg.angular_velocity.z = (
-            self._world.omega + self._gyro_bias + self._rng.gauss(0.0, self._gyro_noise)
-        )
+        rate = self._world.omega + self._gyro_bias + self._rng.gauss(0.0, self._gyro_noise)
+        # Saturate like the chip. Not cosmetic: gz-sim 8.11.0 once fed 314 rad/s
+        # through here for one tick and ekf_local, trusting the gyro ~500x over
+        # the wheels, kept a random heading step of up to 160 deg (A3e).
+        msg.angular_velocity.z = max(-self._gyro_full_scale,
+                                     min(self._gyro_full_scale, rate))
         msg.linear_acceleration.x = self._world.accel_x + self._rng.gauss(0.0, self._accel_noise)
         msg.linear_acceleration.z = STANDARD_GRAVITY + self._rng.gauss(0.0, self._accel_noise)
         for axis in range(3):

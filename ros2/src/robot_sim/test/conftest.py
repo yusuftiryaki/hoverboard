@@ -159,8 +159,13 @@ def stray_stack_pids():
     earlier run publish over the next one and silently corrupt its readings",
     and nothing enforced it. Silently is the operative word: a second
     hoverboard_bridge on /odom does not error, it interleaves — and the EKF
-    downstream then integrates two robots' worth of wheel data. Measured as
-    1.52 m of EKF error on a square that reads 0.08 m when the graph is clean.
+    downstream then integrates two robots' worth of wheel data.
+    ⚠️ A sentence here used to say this was "measured as 1.52 m of EKF error".
+    It was not: it was the hypothesis this guard was written to test, put down
+    in measurement language before the experiment — which then gave 1.368 m
+    with this guard silent. The 1.52 m runs were gz-sim 8.11.0's angular
+    velocity spikes (test_gazebo_localization.py). The guard is still right;
+    the number was never its evidence.
     Killing a process group is also not instant: the group dies, the grandchild
     node processes are reaped a moment later, so close() has to WAIT for them
     rather than assume.
