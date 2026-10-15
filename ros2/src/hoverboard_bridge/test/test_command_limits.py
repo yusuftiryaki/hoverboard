@@ -85,7 +85,9 @@ def test_the_firmware_clamp_never_has_to_act():
 
 def test_in_limit_commands_match_the_old_bridge_exactly():
     """Calibration must not move. This is the bridge's previous inline
-    kinematics, copied verbatim, for every command the robot normally sees."""
+    kinematics, copied verbatim. A grid, plus the inputs that sit next to a .5
+    rounding tie — where reassociated float maths (an earlier version of this
+    module) flipped the result by one count."""
     def old(v, w, g):
         half_track = 0.5 * g.wheel_separation
         rpm_l = (v - w * half_track) / (2.0 * math.pi * g.wheel_radius) * 60.0
@@ -97,3 +99,45 @@ def test_in_limit_commands_match_the_old_bridge_exactly():
     for v in (-1.0, -0.4, 0.0, 0.25, 0.5, 1.0):
         for w in (-1.5, -0.6, 0.0, 0.3, 1.5):
             assert wheel_commands(v, w, GEO, 300) == old(v, w, GEO), (v, w)
+
+    # Every speed whose straight-line command lands within a few ulp of n + .5.
+    for n in range(-116, 116):
+        tie = (n + 0.5) / RPM_PER_MPS_EXACT
+        for step in range(-4, 5):
+            v = tie + step * math.ulp(tie)
+            assert wheel_commands(v, 0.0, GEO, 300) == old(v, 0.0, GEO), v
+
+
+RPM_PER_MPS_EXACT = 60.0 / (2.0 * math.pi * 0.0825)
+
+
+@pytest.mark.parametrize("max_v, max_w", [
+    (-1.0, 1.5), (1.0, -1.5), (0.0, 1.5), (1.0, 0.0),
+    (math.nan, 1.5), (1.0, math.inf),
+])
+def test_an_unusable_twist_limit_means_stop_not_reverse(max_v, max_w):
+    # A negative limit used to give a negative scale: 0.5 m/s forward became
+    # 1 m/s REVERSE, and a zero command divided by zero inside the bridge.
+    assert limit_twist(0.5, 0.2, max_v, max_w) == (0.0, 0.0)
+    assert limit_twist(0.0, 0.0, max_v, max_w) == (0.0, 0.0)
+
+
+@pytest.mark.parametrize("raw_limit", [-300, 0, math.nan, -math.inf])
+def test_an_unusable_raw_limit_means_stop(raw_limit):
+    assert wheel_commands(0.5, 0.0, GEO, raw_limit) == (0, 0)
+    assert wheel_commands(0.0, 0.0, GEO, raw_limit) == (0, 0)
+
+
+@pytest.mark.parametrize("v, w", [(1e308, 0.0), (0.0, 1e308), (1e308, -1e308),
+                                  (-2e306, 5.0)])
+def test_finite_input_that_overflows_halfway_is_a_stop_not_a_crash(v, w):
+    # 1e308 * 115.7 is inf; inf * (300 / inf) is NaN; int(round(NaN)) raises.
+    assert wheel_commands(v, w, GEO, 300) == (0, 0)
+
+
+def test_steer_sign_minus_one_still_keeps_both_wheels_under_the_limit():
+    flipped = DriveGeometry(0.0825, 0.5, 1.0, -1.0)
+    speed, steer = wheel_commands(5.0, 2.0, flipped, 300)
+    assert (speed, steer) == (273, 27)
+    # with steer_sign -1 the board's left wheel is speed - steer
+    assert max(abs(speed + steer), abs(speed - steer)) == 300

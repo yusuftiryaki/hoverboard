@@ -33,7 +33,7 @@ def test_what_ci_actually_saw_is_stopped():
     # Second EKF output after startup, PR #2's nav2 bag: x 6.4e146, vx 4.1e148,
     # var_x 8.5e281. Any one of them alone must be enough.
     assert "position" in problem(x=6.4e146)
-    assert "variance" in problem(var_x=8.5e281)
+    assert "variance" in problem(var_x=8.5e281)     # caught even if alone
     assert "speed" in problem(vx=4.1e148)
 
 
@@ -44,11 +44,20 @@ def test_non_finite_anywhere_is_stopped(field):
     assert problem(**{field: math.inf}) == "EKF output is not finite"
 
 
+def test_a_healthy_filters_growing_covariance_never_trips_it():
+    """The bug the first version had: a HEALTHY ekf_local's pose variance grows
+    ~t^5 (nothing measures position or vy in the odom frame). Measured from a CI
+    bag: var_y 635 m^2 at 16.4 s, 6.11e4 at 41.4 s. A 1e6 bound tripped at
+    ~72 s and would have stopped every Nav2 goal on a working robot. Here: that
+    measured growth extrapolated to a 10-hour day must still pass."""
+    for seconds in (16.4, 41.4, 72.0, 3600.0, 36000.0):
+        var = 6.11e4 * (seconds / 41.4) ** 5
+        assert problem(var_x=var / 10, var_y=var) is None, (seconds, var)
+
+
 def test_the_limits_are_far_from_anything_a_healthy_robot_does():
-    # A day of driving: kilometres from the odom origin, wheel-only covariance
-    # grown to hundreds of m^2, top speed of the board, a fast spin.
-    assert problem(x=2500.0, y=-900.0, var_x=900.0, var_y=900.0,
-                   vx=2.6, wz=3.0) is None
+    # Kilometres from the odom origin, the board's top speed, a fast spin.
+    assert problem(x=2500.0, y=-900.0, vx=2.6, wz=3.0) is None
 
 
 # ---- the real node --------------------------------------------------------
@@ -58,7 +67,6 @@ def gate(ros):
     proc = subprocess.Popen(["ros2", "run", "hoverboard_bridge", "nav_cmd_gate"],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                             start_new_session=True)
-    time.sleep(2.5)
     yield proc
     os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
     proc.wait(timeout=10)
@@ -74,6 +82,14 @@ def rig(ros, gate):
     node.create_subscription(Twist, "/cmd_vel", got.append, 10)
     nav = node.create_publisher(Twist, "/cmd_vel_nav", 10)
     odom = node.create_publisher(Odometry, "/odometry/filtered/local", 10)
+    # Wait for the gate to be WIRED, not for a guess at how long it takes:
+    # it subscribes to both our topics and publishes the one we read.
+    deadline = time.monotonic() + 20.0
+    while time.monotonic() < deadline and not (
+            nav.get_subscription_count() and odom.get_subscription_count()
+            and node.count_publishers("/cmd_vel")):
+        ros.spin_once(node, timeout_sec=0.1)
+    assert nav.get_subscription_count(), "nav_cmd_gate never subscribed"
 
     def run(seconds, odom_fields=None, v=0.4):
         """Publish nav commands (and odometry, unless None) for a while;

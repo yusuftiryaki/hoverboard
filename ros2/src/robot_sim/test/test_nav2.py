@@ -196,10 +196,32 @@ def navigator(ros):
     node.destroy_node()
 
 
+def velocity_routing(node, timeout=15.0):
+    """{topic: sorted publisher node names} for the two velocity topics, read
+    once both Nav2 servers have been discovered on /cmd_vel_nav (or timeout)."""
+    def publishers(topic):
+        return sorted(i.node_name for i in node.get_publishers_info_by_topic(topic))
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        rclpy.spin_once(node, timeout_sec=0.2)
+        if {"controller_server", "behavior_server"} <= set(publishers("/cmd_vel_nav")):
+            break
+    return {topic: publishers(topic) for topic in ("/cmd_vel_nav", "/cmd_vel")}
+
+
 def test_nav2_drives_the_robot_to_a_goal(nav2_stack, navigator):
     nav2_stack()
     navigator.spin(3.0)
     assert navigator.truth is not None, "no /ground_truth — is sim_node up?"
+
+    # ⚠️ Nav2 must reach the wheels ONLY through nav_cmd_gate (nav2.launch.py
+    # remaps both servers). Drop either remap and every other test here still
+    # passes — the robot drives fine, just ungated — so this is the check.
+    routing = velocity_routing(navigator)
+    assert routing == {
+        "/cmd_vel_nav": ["behavior_server", "controller_server"],
+        "/cmd_vel": ["nav_cmd_gate"],
+    }, f"Nav2 velocity commands bypass the localization gate: {routing}"
     start = navigator.position
 
     status = navigator.go(GOAL_X, GOAL_Y)

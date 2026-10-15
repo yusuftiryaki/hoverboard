@@ -76,7 +76,7 @@ build_workspace() {
 # its log: the first CI run lost ekf_local to 8.6e147 m and left only "Failed
 # to meet update rate" behind. So in CI every ROS stage records what the filter
 # was fed and what it said, and the workflow uploads it when the stage fails.
-RECORDED_TOPICS=(/odom /imu/data_raw /imu/data /odometry/filtered/local
+RECORDED_TOPICS=(/odom /imu/data_raw /imu/data /odometry/filtered/local /cmd_vel_nav
                  /odometry/filtered/global /ground_truth /gazebo/ground_truth
                  /cmd_vel /diagnostics /tf /tf_static /bumper /collision_truth)
 RECORDER_PID=

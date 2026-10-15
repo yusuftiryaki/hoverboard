@@ -36,11 +36,20 @@ class HealthLimits:
     max_age: float = 0.5                  # s since the last EKF message
     # Bounds for "physically impossible", not for "inaccurate": wide enough
     # that a healthy filter never trips them over a day's driving, tight
-    # enough that any blow-up does at once (CI's was 1e148 m, 1e281 m^2).
+    # enough that any blow-up does at once (CI's was 1e148 m, 4e148 m/s).
     max_position: float = 1.0e4           # m from the odom origin
-    max_position_variance: float = 1.0e6  # m^2 (a 1 km sigma)
     max_speed: float = 5.0                # m/s; the board tops out near 2.6
     max_yaw_rate: float = 10.0            # rad/s
+    # ⚠️ NOT a health signal — only a blow-up detector. A HEALTHY ekf_local's
+    # pose variance grows without bound: nothing measures position in the odom
+    # frame and nothing measures vy, so var_y grows ~t^5 even standing still
+    # (measured from a CI bag: 635 m^2 at 16 s, 6.1e4 at 41 s). The first
+    # version of this gate used 1e6 and would have stopped every Nav2 goal ~72 s
+    # after startup on a perfectly healthy robot; the Nav2 tests never saw it
+    # because no test stack lives that long. 1e100 is reached only by a filter
+    # that has already blown up (CI's: 8.5e281), and position/speed catch those
+    # first anyway.
+    max_position_variance: float = 1.0e100
 
 
 def estimate_problem(x: float, y: float, yaw_z: float, yaw_w: float,
@@ -78,13 +87,19 @@ def main(args=None) -> None:
         def __init__(self) -> None:
             super().__init__("nav_cmd_gate")
             defaults = HealthLimits()
-            for name in ("max_age", "max_position", "max_position_variance",
-                         "max_speed", "max_yaw_rate"):
+            names = ("max_age", "max_position", "max_speed", "max_yaw_rate",
+                     "max_position_variance")
+            for name in names:
                 self.declare_parameter(name, getattr(defaults, name))
-            p = self.get_parameter
-            self._limits = HealthLimits(*(float(p(n).value) for n in (
-                "max_age", "max_position", "max_position_variance",
-                "max_speed", "max_yaw_rate")))
+            values = {n: float(self.get_parameter(n).value) for n in names}
+            # A NaN limit makes every comparison False, i.e. silently switches
+            # that check off; a negative one blocks everything. Refuse both.
+            bad = {n: v for n, v in values.items()
+                   if not math.isfinite(v) or v <= 0.0}
+            if bad:
+                self.get_logger().fatal(f"invalid health limits {bad}")
+                raise ValueError(f"nav_cmd_gate: invalid health limits {bad}")
+            self._limits = HealthLimits(**values)
 
             self._last_odom_time = None
             self._odom_problem = "no EKF output yet"
@@ -111,7 +126,10 @@ def main(args=None) -> None:
             if self._last_odom_time is None:
                 return "no EKF output yet"
             age = (self.get_clock().now() - self._last_odom_time).nanoseconds * 1e-9
-            if age > self._limits.max_age:
+            # Negative too: the clock jumped back (the Pi has no RTC, NTP
+            # steps it; a sim /clock restarts). Until it catches up, a dead
+            # EKF would otherwise look fresh.
+            if not 0.0 <= age <= self._limits.max_age:
                 return f"EKF output is {age:.2f} s old (limit {self._limits.max_age:g} s)"
             return self._odom_problem
 

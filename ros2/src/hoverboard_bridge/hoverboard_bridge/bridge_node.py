@@ -126,6 +126,7 @@ class HoverboardBridge(Node):
             self._speed_limit = SPEED_LIMIT
         self._max_v = float(p("max_linear_vel").value)
         self._max_w = float(p("max_angular_vel").value)
+        self._validate_drive_parameters()
         self._geometry = DriveGeometry(
             wheel_radius=self._wheel_radius,
             wheel_separation=self._wheel_separation,
@@ -141,6 +142,7 @@ class HoverboardBridge(Node):
         self._publish_tf = p("publish_tf").value
 
         # ---- Serial ----------------------------------------------------------
+        # (opened only after the parameters above passed validation)
         port = p("port").value
         try:
             # timeout=0 -> non-blocking reads; the executor stays responsive.
@@ -166,6 +168,7 @@ class HoverboardBridge(Node):
         self._bump_was_set = False
         self._rejected_cmds = 0          # non-finite /cmd_vel, since start
         self._rejected_since_diag = 0
+        self._scaled_cmds = 0            # slowed to max_linear/angular_vel
 
         # ---- ROS interfaces --------------------------------------------------
         cmd_type = TwistStamped if p("use_stamped_cmd_vel").value else Twist
@@ -201,6 +204,16 @@ class HoverboardBridge(Node):
             self.get_logger().error(
                 f"non-finite /cmd_vel (v={v}, w={w}) — commanding zero",
                 throttle_duration_sec=1.0)
+        else:
+            limited = limit_twist(v, w, self._max_v, self._max_w)
+            if limited != (v, w):
+                # Not an error — but someone calibrating cmd_per_rpm above the
+                # limit would otherwise measure the limit and never know.
+                self._scaled_cmds += 1
+                self.get_logger().warn(
+                    f"/cmd_vel ({v:.2f} m/s, {w:.2f} rad/s) scaled to "
+                    f"({limited[0]:.2f}, {limited[1]:.2f}) by max_linear_vel/"
+                    "max_angular_vel", throttle_duration_sec=5.0)
         self._target_v, self._target_w = limit_twist(v, w, self._max_v, self._max_w)
         self._last_cmd_time = self.get_clock().now()
 
@@ -368,7 +381,6 @@ class HoverboardBridge(Node):
                 KeyValue(key="bump", value=str(fb.bump)),
                 KeyValue(key="frames_ok", value=str(self._parser.frames_ok)),
                 KeyValue(key="checksum_errors", value=str(self._parser.checksum_errors)),
-                KeyValue(key="rejected_nonfinite_cmds", value=str(self._rejected_cmds)),
             ]
             volts = fb.bat_voltage * self._battery_scale
             # 10S Li-ion: 3.3 V/cell is the "land now" line.
@@ -376,16 +388,57 @@ class HoverboardBridge(Node):
                 status.level = DiagnosticStatus.WARN
                 status.message = f"battery low: {volts:.1f} V"
 
-        if self._rejected_since_diag and status.level < DiagnosticStatus.ERROR:
-            status.level = DiagnosticStatus.ERROR
-            status.message = (f"{self._rejected_since_diag} non-finite /cmd_vel "
-                              "in the last second — stopped; who is publishing NaN?")
+        # Its own entry, so it can neither hide nor be hidden by the link's
+        # E-stop / watchdog / bumper / battery messages above.
+        cmd_status = DiagnosticStatus(name="hoverboard_bridge: /cmd_vel",
+                                      hardware_id="esp32")
+        if self._rejected_since_diag:
+            cmd_status.level = DiagnosticStatus.ERROR
+            cmd_status.message = (
+                f"{self._rejected_since_diag} non-finite /cmd_vel in the last "
+                "second — commanded zero; who is publishing NaN?")
+        else:
+            cmd_status.level = DiagnosticStatus.OK
+            cmd_status.message = "commands finite"
+        cmd_status.values = [
+            KeyValue(key="rejected_nonfinite_cmds", value=str(self._rejected_cmds)),
+            KeyValue(key="scaled_cmds", value=str(self._scaled_cmds)),
+            KeyValue(key="max_linear_vel", value=f"{self._max_v:g}"),
+            KeyValue(key="max_angular_vel", value=f"{self._max_w:g}"),
+            KeyValue(key="speed_limit_raw", value=str(self._speed_limit)),
+        ]
         self._rejected_since_diag = 0
 
         array = DiagnosticArray()
         array.header.stamp = self.get_clock().now().to_msg()
-        array.status = [status]
+        array.status = [status, cmd_status]
         self._diag_pub.publish(array)
+
+    def _validate_drive_parameters(self) -> None:
+        """Refuse to start rather than drive on a parameter file that would
+        reverse the motors or divide by zero. command_limits stops on all of
+        these too; this makes the mistake loud at launch instead of silent."""
+        problems = []
+        if not (math.isfinite(self._max_v) and self._max_v > 0.0):
+            problems.append(f"max_linear_vel={self._max_v} (must be finite, > 0)")
+        if not (math.isfinite(self._max_w) and self._max_w > 0.0):
+            problems.append(f"max_angular_vel={self._max_w} (must be finite, > 0)")
+        if self._speed_limit < 0:
+            problems.append(f"speed_limit={self._speed_limit} (must be >= 0)")
+        if self._steer_sign not in (-1.0, 1.0):
+            problems.append(f"steer_sign={self._steer_sign} (must be +1.0 or -1.0)")
+        for name, value in (("wheel_radius", self._wheel_radius),
+                            ("wheel_separation", self._wheel_separation)):
+            if not (math.isfinite(value) and value > 0.0):
+                problems.append(f"{name}={value} (must be finite, > 0)")
+        # Negative is allowed: it flips both wheels, a legitimate fix for a
+        # board that drives backwards, and the per-wheel limit uses abs().
+        if not (math.isfinite(self._cmd_per_rpm) and self._cmd_per_rpm != 0.0):
+            problems.append(f"cmd_per_rpm={self._cmd_per_rpm} (must be finite, != 0)")
+        if problems:
+            message = "refusing to drive: " + "; ".join(problems)
+            self.get_logger().fatal(message)
+            raise ValueError(message)
 
     def destroy_node(self) -> bool:
         # Best effort: leave the motors commanded to zero rather than relying on
