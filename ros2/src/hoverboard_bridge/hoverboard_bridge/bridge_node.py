@@ -35,7 +35,9 @@ from std_msgs.msg import Bool
 from std_srvs.srv import Trigger
 from tf2_ros import TransformBroadcaster
 
-from hoverboard_bridge.protocol import FeedbackParser, pack_pi_command
+from hoverboard_bridge.command_limits import (
+    DriveGeometry, is_finite_command, limit_twist, wheel_commands)
+from hoverboard_bridge.protocol import SPEED_LIMIT, FeedbackParser, pack_pi_command
 
 RPM_TO_RAD_S = 2.0 * math.pi / 60.0
 
@@ -81,9 +83,16 @@ class HoverboardBridge(Node):
         self.declare_parameter("invert_left", False)
         self.declare_parameter("invert_right", True)
 
-        # Firmware clamps to SPEED_LIMIT=300 anyway; clamp here so /odom's
-        # expectations match what the motors will actually be asked to do.
-        self.declare_parameter("speed_limit", 300)
+        # Raw board units per WHEEL. The firmware clamps speed and steer to
+        # SPEED_LIMIT=300 separately, which bends the arc; command_limits keeps
+        # each wheel under this instead, so the firmware clamp never acts.
+        # Above the firmware's limit it means nothing, so it is capped there.
+        self.declare_parameter("speed_limit", SPEED_LIMIT)
+        # SI limits on what any /cmd_vel can ask for. Exceeding either SCALES
+        # v and omega together (same arc, slower) — never clips one axis.
+        # Nav2 asks for 0.5 m/s and 0.6 rad/s (nav2.yaml).
+        self.declare_parameter("max_linear_vel", 1.0)    # m/s
+        self.declare_parameter("max_angular_vel", 1.5)   # rad/s
 
         # EspFeedback raw -> SI. EFeru: batVoltage in 0.01 V, boardTemp in 0.1 C.
         # TODO: sanity check against a multimeter once the board is flashed.
@@ -110,6 +119,20 @@ class HoverboardBridge(Node):
         self._left_sign = -1.0 if p("invert_left").value else 1.0
         self._right_sign = -1.0 if p("invert_right").value else 1.0
         self._speed_limit = int(p("speed_limit").value)
+        if self._speed_limit > SPEED_LIMIT:
+            self.get_logger().warn(
+                f"speed_limit {self._speed_limit} is above the firmware's "
+                f"SPEED_LIMIT={SPEED_LIMIT}; capping it there")
+            self._speed_limit = SPEED_LIMIT
+        self._max_v = float(p("max_linear_vel").value)
+        self._max_w = float(p("max_angular_vel").value)
+        self._validate_drive_parameters()
+        self._geometry = DriveGeometry(
+            wheel_radius=self._wheel_radius,
+            wheel_separation=self._wheel_separation,
+            cmd_per_rpm=self._cmd_per_rpm,
+            steer_sign=self._steer_sign,
+        )
         self._cmd_timeout = p("cmd_timeout").value
         self._battery_scale = p("battery_scale").value
         self._temp_scale = p("temp_scale").value
@@ -119,6 +142,7 @@ class HoverboardBridge(Node):
         self._publish_tf = p("publish_tf").value
 
         # ---- Serial ----------------------------------------------------------
+        # (opened only after the parameters above passed validation)
         port = p("port").value
         try:
             # timeout=0 -> non-blocking reads; the executor stays responsive.
@@ -142,6 +166,9 @@ class HoverboardBridge(Node):
         self._pos_l = 0.0           # integrated wheel angle, rad
         self._pos_r = 0.0
         self._bump_was_set = False
+        self._rejected_cmds = 0          # non-finite /cmd_vel, since start
+        self._rejected_since_diag = 0
+        self._scaled_cmds = 0            # slowed to max_linear/angular_vel
 
         # ---- ROS interfaces --------------------------------------------------
         cmd_type = TwistStamped if p("use_stamped_cmd_vel").value else Twist
@@ -167,8 +194,27 @@ class HoverboardBridge(Node):
 
     # ---- Subscriptions -------------------------------------------------------
     def _on_cmd(self, msg: Twist) -> None:
-        self._target_v = msg.linear.x
-        self._target_w = msg.angular.z
+        v, w = msg.linear.x, msg.angular.z
+        if not is_finite_command(v, w):
+            # STOP, and stay alive. This used to raise in _tx_tick and kill the
+            # node: one bad message took the whole drivetrain down until a
+            # restart (see command_limits.py). Counted, logged once a second.
+            self._rejected_cmds += 1
+            self._rejected_since_diag += 1
+            self.get_logger().error(
+                f"non-finite /cmd_vel (v={v}, w={w}) — commanding zero",
+                throttle_duration_sec=1.0)
+        else:
+            limited = limit_twist(v, w, self._max_v, self._max_w)
+            if limited != (v, w):
+                # Not an error — but someone calibrating cmd_per_rpm above the
+                # limit would otherwise measure the limit and never know.
+                self._scaled_cmds += 1
+                self.get_logger().warn(
+                    f"/cmd_vel ({v:.2f} m/s, {w:.2f} rad/s) scaled to "
+                    f"({limited[0]:.2f}, {limited[1]:.2f}) by max_linear_vel/"
+                    "max_angular_vel", throttle_duration_sec=5.0)
+        self._target_v, self._target_w = limit_twist(v, w, self._max_v, self._max_w)
         self._last_cmd_time = self.get_clock().now()
 
     def _on_cmd_stamped(self, msg: TwistStamped) -> None:
@@ -191,22 +237,9 @@ class HoverboardBridge(Node):
         else:
             v, w = self._target_v, self._target_w
 
-        # Differential drive inverse kinematics.
-        half_track = 0.5 * self._wheel_separation
-        v_l = v - w * half_track
-        v_r = v + w * half_track
-        rpm_l = v_l / (2.0 * math.pi * self._wheel_radius) * 60.0
-        rpm_r = v_r / (2.0 * math.pi * self._wheel_radius) * 60.0
-
-        cmd_l = rpm_l * self._cmd_per_rpm
-        cmd_r = rpm_r * self._cmd_per_rpm
-        # Undo the board's mixer: speedL = speed + steer, speedR = speed - steer.
-        speed = (cmd_l + cmd_r) * 0.5
-        steer = (cmd_l - cmd_r) * 0.5 * self._steer_sign
-
-        frame = pack_pi_command(
-            int(round(speed)), int(round(steer)), self._clear_estop_request
-        )
+        # Inverse kinematics + per-wheel raw limit; non-finite -> (0, 0).
+        speed, steer = wheel_commands(v, w, self._geometry, self._speed_limit)
+        frame = pack_pi_command(speed, steer, self._clear_estop_request)
         self._clear_estop_request = False
         try:
             self._serial.write(frame)
@@ -355,10 +388,57 @@ class HoverboardBridge(Node):
                 status.level = DiagnosticStatus.WARN
                 status.message = f"battery low: {volts:.1f} V"
 
+        # Its own entry, so it can neither hide nor be hidden by the link's
+        # E-stop / watchdog / bumper / battery messages above.
+        cmd_status = DiagnosticStatus(name="hoverboard_bridge: /cmd_vel",
+                                      hardware_id="esp32")
+        if self._rejected_since_diag:
+            cmd_status.level = DiagnosticStatus.ERROR
+            cmd_status.message = (
+                f"{self._rejected_since_diag} non-finite /cmd_vel in the last "
+                "second — commanded zero; who is publishing NaN?")
+        else:
+            cmd_status.level = DiagnosticStatus.OK
+            cmd_status.message = "commands finite"
+        cmd_status.values = [
+            KeyValue(key="rejected_nonfinite_cmds", value=str(self._rejected_cmds)),
+            KeyValue(key="scaled_cmds", value=str(self._scaled_cmds)),
+            KeyValue(key="max_linear_vel", value=f"{self._max_v:g}"),
+            KeyValue(key="max_angular_vel", value=f"{self._max_w:g}"),
+            KeyValue(key="speed_limit_raw", value=str(self._speed_limit)),
+        ]
+        self._rejected_since_diag = 0
+
         array = DiagnosticArray()
         array.header.stamp = self.get_clock().now().to_msg()
-        array.status = [status]
+        array.status = [status, cmd_status]
         self._diag_pub.publish(array)
+
+    def _validate_drive_parameters(self) -> None:
+        """Refuse to start rather than drive on a parameter file that would
+        reverse the motors or divide by zero. command_limits stops on all of
+        these too; this makes the mistake loud at launch instead of silent."""
+        problems = []
+        if not (math.isfinite(self._max_v) and self._max_v > 0.0):
+            problems.append(f"max_linear_vel={self._max_v} (must be finite, > 0)")
+        if not (math.isfinite(self._max_w) and self._max_w > 0.0):
+            problems.append(f"max_angular_vel={self._max_w} (must be finite, > 0)")
+        if self._speed_limit < 0:
+            problems.append(f"speed_limit={self._speed_limit} (must be >= 0)")
+        if self._steer_sign not in (-1.0, 1.0):
+            problems.append(f"steer_sign={self._steer_sign} (must be +1.0 or -1.0)")
+        for name, value in (("wheel_radius", self._wheel_radius),
+                            ("wheel_separation", self._wheel_separation)):
+            if not (math.isfinite(value) and value > 0.0):
+                problems.append(f"{name}={value} (must be finite, > 0)")
+        # Negative is allowed: it flips both wheels, a legitimate fix for a
+        # board that drives backwards, and the per-wheel limit uses abs().
+        if not (math.isfinite(self._cmd_per_rpm) and self._cmd_per_rpm != 0.0):
+            problems.append(f"cmd_per_rpm={self._cmd_per_rpm} (must be finite, != 0)")
+        if problems:
+            message = "refusing to drive: " + "; ".join(problems)
+            self.get_logger().fatal(message)
+            raise ValueError(message)
 
     def destroy_node(self) -> bool:
         # Best effort: leave the motors commanded to zero rather than relying on

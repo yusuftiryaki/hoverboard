@@ -10,6 +10,7 @@ They spawn processes and take ~30 s. They SKIP without ROS on the path.
     python3 -m pytest src/hoverboard_bridge/test/test_bridge_integration.py -q
 """
 
+import math
 import os
 import time
 
@@ -168,3 +169,65 @@ def test_sim_time_without_a_clock_silences_the_bridge_instead_of_freezing_it(ros
             "wheels. That needs a real guard in bridge_node, not a comment.")
     finally:
         node.destroy_node()
+
+
+def test_a_nan_command_stops_the_wheels_and_the_bridge_survives(harness, probe):
+    """NaN on /cmd_vel used to raise inside the bridge's timer and kill it.
+
+    The motors still stopped — destroy_node() sent a zero and the ESP32
+    watchdog backed it up — but by accident, and the drivetrain then stayed dead
+    until someone restarted it. Now a non-finite command is a stop command and
+    the node lives. If it died, /odom freezes at its last value (driving), so
+    the first assertion catches the old behaviour too.
+    """
+    harness()
+    probe.settle(1.0)
+    assert probe.drive(+0.4) > DRIVING
+
+    from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus
+    cmd_errors = []
+    probe.create_subscription(
+        DiagnosticArray, "/diagnostics",
+        lambda m: cmd_errors.extend(
+            st for st in m.status
+            if st.name == "hoverboard_bridge: /cmd_vel"
+            and st.level == DiagnosticStatus.ERROR), 10)
+
+    probe.cmd = math.nan
+    probe.settle(2.0)
+    assert abs(probe.vx) < STOPPED, "a NaN command must stop the wheels"
+    assert cmd_errors, "NaN on /cmd_vel must show up as an ERROR in /diagnostics"
+
+    assert probe.drive(+0.4) > DRIVING, "the bridge died on a NaN — no restart"
+
+
+def test_an_over_limit_command_is_slowed_to_max_linear_vel(harness, probe):
+    """5 m/s asked, 1 m/s driven (max_linear_vel's default).
+
+    Before command_limits the only ceiling was the raw 300 units the firmware
+    clamps to: about 2.6 m/s at cmd_per_rpm 1.0, i.e. the robot drove 2.6x
+    faster than anything in the stack ever meant to ask for.
+    """
+    harness()
+    probe.settle(1.0)
+    v = probe.drive(+5.0)
+    assert 0.9 < v < 1.1, f"asked 5 m/s, expected ~1.0 (the limit), got {v:.3f}"
+
+
+@pytest.mark.parametrize("override", [
+    "max_linear_vel:=-1.0",      # would turn forward into full reverse
+    "max_angular_vel:=0.0",      # would divide by zero on the next command
+    "speed_limit:=-300",         # would reverse every wheel command
+    "steer_sign:=2.0",           # would push steer past the firmware clamp
+])
+def test_the_bridge_refuses_to_start_on_a_dangerous_parameter(ros, override):
+    """Validation happens BEFORE the serial port opens, so no ESP32 is needed:
+    the node must exit on its own, saying why, instead of driving."""
+    import subprocess
+    result = subprocess.run(
+        ["ros2", "run", "hoverboard_bridge", "hoverboard_bridge", "--ros-args",
+         "-p", "port:=/tmp/does_not_exist", "-p", override],
+        capture_output=True, text=True, timeout=30)
+    assert result.returncode != 0, f"started with {override}"
+    assert "refusing to drive" in result.stdout + result.stderr, (
+        result.stdout[-500:] + result.stderr[-500:])

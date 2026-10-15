@@ -14,8 +14,16 @@ which assumes a robot we do not have. That file wires
     controller -> /cmd_vel_nav -> velocity_smoother -> /cmd_vel_smoothed
                 -> collision_monitor -> /cmd_vel
 and collision_monitor exists to watch range sensors. We have none, so it would be
-an extra hop that inspects nothing. Here the controller publishes /cmd_vel
-directly and the chain is short enough to read.
+an extra hop that inspects nothing. Here the chain is
+
+    controller_server, behavior_server -> /cmd_vel_nav -> nav_cmd_gate -> /cmd_vel
+
+⚠️ nav_cmd_gate (hoverboard_bridge) forwards only while ekf_local's output is
+sane, and sends zero otherwise. robot_localization 3.8.3 once took ekf_local
+to 1e148 m silently and Nav2 stopped only because its planner overflowed; see
+the gate's docstring. BOTH servers that publish velocities go through it — a
+recovery spin or backup on a broken estimate is still driving on it. Teleop
+publishes /cmd_vel directly and is deliberately not gated.
 
 Deliberately not launched (and why):
   * velocity_smoother — the ESP32 sends at 50 Hz and the board ramps its own
@@ -64,7 +72,7 @@ def generate_launch_description():
             name="controller_server",
             output="screen",
             parameters=common,
-            # No remap: hoverboard_bridge listens on /cmd_vel.
+            remappings=[("cmd_vel", "cmd_vel_nav")],   # through nav_cmd_gate
         ),
         Node(
             package="nav2_planner",
@@ -79,6 +87,16 @@ def generate_launch_description():
             name="behavior_server",
             output="screen",
             parameters=common,
+            remappings=[("cmd_vel", "cmd_vel_nav")],   # spin/backup too
+        ),
+        # Not a lifecycle node: it must already be gating before the servers
+        # above activate and publish their first command.
+        Node(
+            package="hoverboard_bridge",
+            executable="nav_cmd_gate",
+            name="nav_cmd_gate",
+            output="screen",
+            parameters=[{"use_sim_time": use_sim_time}],
         ),
         Node(
             package="nav2_bt_navigator",

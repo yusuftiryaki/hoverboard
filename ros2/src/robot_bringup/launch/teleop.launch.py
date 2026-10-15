@@ -11,8 +11,13 @@ No EKF here, so the bridge publishes odom->base_link itself (publish_tf:=true) �
 otherwise RViz has no transform tree and shows you nothing.
 
 ⚠️ First real power-up: wheels in the air, hand on the E-stop, and read
-docs/bringup-checklist.md first. The speed limit in the firmware (300) is low on
-purpose; leave it there until the robot has proven it stops when told to.
+docs/bringup-checklist.md first. Teleop is NOT gated by localization (it needs
+none), but the bridge's ceilings still apply: max_linear_vel 1.0 m/s and
+max_angular_vel 1.5 rad/s (hoverboard_bridge.yaml), then speed_limit 300 raw per
+wheel, then the firmware's own 300. Leave them low until the robot has proven
+it stops when told to. ⚠️ Calibrating cmd_per_rpm above 1 m/s measures the
+LIMIT, not the wheel — the command is scaled down (logged, and counted in
+/diagnostics as scaled_cmds).
 """
 
 import os
