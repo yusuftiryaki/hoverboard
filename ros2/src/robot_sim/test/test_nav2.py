@@ -197,10 +197,12 @@ def navigator(ros):
 
 
 def velocity_routing(node, timeout=15.0):
-    """{topic: sorted publisher node names} for the two velocity topics, read
-    once both Nav2 servers have been discovered on /cmd_vel_nav (or timeout)."""
+    """{topic: sorted publisher node NAMES} for the two velocity topics, read
+    once both Nav2 servers have been discovered on /cmd_vel_nav (or timeout).
+    A set: behavior_server opens one publisher per behavior plugin (spin,
+    backup, drive_on_heading, wait), so it appears four times."""
     def publishers(topic):
-        return sorted(i.node_name for i in node.get_publishers_info_by_topic(topic))
+        return sorted({i.node_name for i in node.get_publishers_info_by_topic(topic)})
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         rclpy.spin_once(node, timeout_sec=0.2)
