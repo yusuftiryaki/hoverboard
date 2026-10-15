@@ -120,7 +120,12 @@ stop_recorder() {
 run_tests() {
   local report="${REPORTS}/$1.xml"
   shift
-  python3 -m pytest "$@" -q -rs -p no:cacheprovider --junitxml="${report}"
+  # faulthandler_timeout: a test running longer than this dumps every
+  # thread's stack into the log. A nav2 run once hung for three hours locally
+  # and the only record of why was lost; CI's job timeout would have killed it
+  # just as silently.
+  python3 -m pytest "$@" -q -rs -p no:cacheprovider --junitxml="${report}" \
+    -o faulthandler_timeout=600
   python3 - "${report}" <<'EOF'
 import sys
 import xml.etree.ElementTree as ET

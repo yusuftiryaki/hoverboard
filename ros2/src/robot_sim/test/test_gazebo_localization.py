@@ -6,8 +6,9 @@ says so itself, and it has always carried the caveat that its 0.083 m of error
 over an 8 m square proves the maths is wired up and nothing about outdoors.
 This file drives THE SAME SQUARE on real physics and puts a number on the gap.
 
-    kinematic world (no slip)   0.083 m position error, 4.3 deg yaw
-    physics world   (slip)      0.095 m position error, 3.9 deg yaw   <- here
+    kinematic world (no slip)   0.080-0.082 m position error, 4.2-4.3 deg yaw
+    physics world   (slip)      0.073-0.079 m position error, 3.2-3.4 deg yaw  <- here
+    (2026-10-15: gz-sim 8.15.0, accelerometer out of the EKF; 5 and 6 runs)
 
 ⚠️ THE ANSWER IS "ALMOST NOTHING", AND THAT IS NOT THE REASSURANCE IT LOOKS
 LIKE. Spin-up slip is real and large — stepping to 1 m/s the wheels over-report
@@ -52,7 +53,7 @@ SIM_TIME_STALL_FACTOR = 6.0
 # What the same square costs in the kinematic world, from test_localization.py.
 # Quoted, not imported: this is a number to compare against, and reaching into
 # the other module for it would make the two move together silently.
-KINEMATIC_SQUARE_ERROR_M = 0.083
+KINEMATIC_SQUARE_ERROR_M = 0.081   # 0.080-0.082 m over 5 runs, 2026-10-15
 
 
 def distance(a, b):
@@ -88,6 +89,16 @@ class Probe(Node):
         # Rate only — the EKF's other input. When the estimate is worse than
         # the wheels it is built on, this is the input to suspect.
         self.imu_stamps = []
+        # Gazebo's raw ground truth, before sim_node touches it. The largest
+        # |yaw rate| it reports is checked by the square test: gz-sim 8.11.0
+        # published ~628 rad/s here (upstream #3834), and since the simulated
+        # gyro now saturates like the real chip, the EKF no longer shows it.
+        self.max_truth_rate = 0.0
+        self.create_subscription(
+            Odometry, "/gazebo/ground_truth",
+            lambda m: setattr(self, "max_truth_rate",
+                              max(self.max_truth_rate, abs(m.twist.twist.angular.z))),
+            50)
         self.create_subscription(
             Imu, "/imu/data_raw",
             lambda m: self.imu_stamps.append(
@@ -153,10 +164,11 @@ class Probe(Node):
         """What the simulator actually delivered, as a one-line diagnosis.
 
         ⚠️ Bolted onto every assertion below because "the EKF is 1.37 m off"
-        does not say WHY, and the why here turned out to matter: the same test
-        reads 0.08 m alone and 1.37 m after another package's tests have run in
-        the same session. Rates and RTF separate "the estimate is bad" from
-        "its inputs never arrived" without another hour of bisecting.
+        does not say WHY. That exact reading happened on gz-sim 8.11.0 with
+        every rate nominal — which is what pointed AWAY from load and lost
+        messages and, eventually, at the simulator itself (see the square test).
+        Rates and RTF separate "the estimate is bad" from "its inputs never
+        arrived" without another hour of bisecting.
         """
         span = max(self.get_clock().now().nanoseconds * 1e-9 - since_sim, 1e-9)
         wall = max(time.monotonic() - since_wall, 1e-9)
@@ -206,18 +218,24 @@ def test_the_ekf_tracks_the_truth_around_a_square_even_with_real_slip(gazebo, pr
     odometry 0.066-0.085 m. Kinematic world, same day: 0.080-0.082 m, 4.2-4.3 deg.
 
     ⚠️ This EKF bound was 2.5 m for a while — a divergence check, not an
-    accuracy one — because the same code had also produced 0.487, 1.368 and
-    1.522 m with the wheels at 0.080 m, RTF 1.00 and every rate nominal, and
-    nobody knew why. It was gz-sim 8.11.0 (upstream #3834, fixed in 8.15.0):
-    OdometryPublisher let the pose quaternion flip sign between ticks, and the
-    finite difference read it as a full turn in one 20 ms step, i.e. +-314
-    rad/s for one sample. sim_node turns that omega into the gyro, and ekf_local
-    trusts the gyro ~500x over the wheels for yaw rate. 314 rad/s x 20 ms is
-    exactly 2 pi, so held for exactly one tick it is invisible; a few ms either
-    way leaves tens of degrees of heading — hence "random, not reproducible,
-    wheels fine". Reproduced by injecting that one sample into
-    /gazebo/ground_truth mid-turn: 0.076 / 5.63 / 0.41 / 0.076 m over four runs,
-    wheels 0.07 m every time. The bound below is an accuracy bound again.
+    accuracy one — because on 2026-09-08 the same code also produced 0.487,
+    1.368 and 1.522 m with the wheels at 0.080 m, RTF 1.00 and every rate
+    nominal, and nobody knew why. STRONGEST CANDIDATE, not proven (nothing was
+    recorded in those runs): gz-sim 8.11.0, which those runs used (dpkg log),
+    and its OdometryPublisher bug (upstream #3834, fixed in 8.15.0). The pose
+    quaternion can flip sign between 1 ms physics steps; the finite difference
+    reads that as a full turn in one step (~6283 rad/s), and the 10-sample
+    rolling mean publishes ~628 rad/s. On this square the flip falls near yaw
+    240 deg, in the third turn. sim_node turned that omega into the gyro, and
+    ekf_local trusts the gyro ~500x over the wheels for yaw rate: a heading
+    step of whatever the spike integrates to, mod 2 pi — wheels untouched.
+    SUFFICIENCY was shown with a stand-in (one extra, out-of-phase -314 rad/s
+    message on /gazebo/ground_truth in turn 2): 0.076 / 5.63 / 0.41 / 0.076 m
+    over four runs, wheels 0.07 m every time — the A3e signature.
+    Two guards since: the simulated gyro saturates like the real chip (4.37
+    rad/s at 250 dps), so such a spike can no longer reach the EKF at full
+    strength (same stand-in: 0.050-0.080 m); and this test asserts directly
+    that Gazebo never reports an impossible yaw rate.
 
     So slip costs roughly a centimetre over eight metres here, and the yaw error
     is unchanged — it is 0.1 deg/s of residual gyro bias integrated over the
@@ -254,23 +272,30 @@ def test_the_ekf_tracks_the_truth_around_a_square_even_with_real_slip(gazebo, pr
     # steady to a few millimetres: 0.066-0.085 m across every run, glitched or
     # not. So this is where A3's question actually gets answered
     # — 8 m of driving with real slip costs the odometry under 0.1 m, and the
-    # kinematic world's slip-free 0.083 m was not a flattering number.
+    # kinematic world's slip-free ~0.08 m was not a flattering number.
     assert odom_error < 0.2, (
         f"raw wheel odometry is {odom_error:.3f} m off after ~8 m with slip, "
         f"far past the ~0.08 m measured — slip has stopped cancelling, or the "
         f"wheel geometry has changed {health}")
 
-    # An ACCURACY bound: ~3x the measured 0.073-0.078 m. A heading step of the
-    # gz-8.11.0 kind (docstring) lands at 0.41 m and up, so it fails here now
-    # instead of hiding under a divergence-sized threshold.
+    # The simulator itself first: if Gazebo reports a yaw rate no robot here can
+    # have, every number below is measuring the simulator. 8.11.0 published
+    # ~628 rad/s (docstring); the bridge caps commands at 1.5 rad/s.
+    assert probe.max_truth_rate < 10.0, (
+        f"Gazebo reported a yaw rate of {probe.max_truth_rate:.1f} rad/s on "
+        f"/gazebo/ground_truth — impossible for this robot. A gz-sim "
+        f"OdometryPublisher regression (upstream #3834)? {health}")
+
+    # An ACCURACY bound: ~3x the measured 0.073-0.079 m (6 runs). Run-to-run
+    # spread is ~0.002 m, so only a real change trips it.
     assert ekf_error < 0.25, (
-        f"the EKF is {ekf_error:.3f} m off after ~8 m (measured 0.073-0.078), "
+        f"the EKF is {ekf_error:.3f} m off after ~8 m (measured 0.073-0.079), "
         f"with wheel odometry at {odom_error:.3f} m and yaw {ekf_yaw:.2f} deg. "
-        f"Wheels fine but EKF not: suspect a yaw-rate glitch reaching the gyro "
+        f"Wheels fine but EKF not: suspect the yaw rate reaching the gyro "
         f"(see the docstring) {health}")
-    # The residual gyro bias integrated, ~0.1 deg/s over the ~35 s this square
-    # takes: measured 3.2-3.4 deg (kinematic world 4.3). 8 deg leaves margin for
-    # the bias draw; the 10 deg step of a glitch-hit run does not fit under it.
+    # The residual gyro bias integrated: a FIXED 0.1 deg/s (sim_node, seeded
+    # RNG) over the ~35 s this square takes — measured 3.2-3.4 deg (kinematic
+    # world 4.3). 8 deg is ~2.4x that, room for timing jitter on a slow runner.
     assert ekf_yaw < 8.0, (
         f"the EKF is {ekf_yaw:.1f} deg off after ~8 m (measured 3.2-3.4) — more "
         f"than the residual gyro bias can integrate to {health}")

@@ -48,10 +48,11 @@ def gyro_full_scale_rad_s(gyro_range_dps: int) -> float:
     """The largest |angular rate| the chip can REPORT at this range.
 
     The output registers are int16, so the reading saturates at 32767 counts
-    whatever the robot does. The simulator clips its gyro here: a fake sensor
-    that can report what no MPU6050 could is A6 all over again (a sim feeding
-    the stack inputs the real hardware never would) — and it is how gz-sim
-    8.11.0's 314 rad/s spikes reached ekf_local at full strength.
+    (and -32768: the asymmetry is one LSB, ignored here) whatever the robot
+    does. The simulator clips its gyro here: a fake sensor that can report what
+    no MPU6050 could is A6 all over again (a sim feeding the stack inputs the
+    real hardware never would) — and it is how gz-sim 8.11.0's ~628 rad/s
+    ground-truth spikes could reach ekf_local at full strength (A3e).
     """
     return 32767.0 / GYRO_LSB_PER_DPS[gyro_range_dps] * DEG_TO_RAD
 

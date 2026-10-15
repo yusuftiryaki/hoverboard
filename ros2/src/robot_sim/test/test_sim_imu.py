@@ -1,10 +1,12 @@
 """The simulated gyro cannot report what a real MPU6050 could not.
 
-gz-sim 8.11.0 once fed a 314 rad/s angular velocity through sim_node for one
-tick (upstream #3834), and ekf_local — trusting the gyro ~500x over the wheels
-for yaw rate — kept a random heading step of up to 160 deg: the "unexplained"
-A3e errors. The real chip saturates at 32767 counts (4.37 rad/s at the robot's
-250 dps range), so the fake one must too. In-process; skips without ROS.
+gz-sim 8.11.0 could publish ~628 rad/s for one ground-truth sample (upstream
+#3834), and sim_node passed it straight into the gyro; ekf_local, trusting the
+gyro ~500x over the wheels for yaw rate, keeps whatever heading step that
+integrates to. A stand-in spike reproduced the "unexplained" A3e signature
+(up to 5.6 m / 161 deg, wheels untouched) — the strongest candidate for those
+runs. The real chip saturates at 32767 counts (4.37 rad/s at the robot's 250
+dps range), so the fake one must too. In-process; skips without ROS.
 """
 
 import math

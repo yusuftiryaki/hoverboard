@@ -40,10 +40,13 @@
 # (#945), which no Jazzy release carries yet — and 3.9.0-3.9.4 / 3.10.0 are
 # NEWER numbers that still have the bug. test_ekf_config.py fails if any of
 # this comes back on a version not listed as checked-and-fixed.
-# Cost of leaving it off: none measurable. The kinematic square reads
-# 0.080-0.082 m / 4.3 deg with ax off (2026-10-15, 5 runs) against 0.083 m /
-# 4.3 deg with it on — vx comes from the wheels either way, and nothing here
-# used ax to contradict them (docs/handoff.md, A3c trap 3).
+# Cost of leaving it off: none seen where it was measured, which is not
+# everywhere. The kinematic square reads 0.080-0.082 m / 4.3 deg with ax off
+# (2026-10-15, 5 runs) against 0.083 m / 4.3 deg with it on (one older run) —
+# but that world's accel_x is the derivative of the wheels' own speed, so ax
+# could add nothing there by construction. Under slip (Gazebo) there is no
+# A/B: the old numbers had ax ON and gz-sim 8.11.0, the new ones neither.
+# Nothing in this stack used ax to contradict the wheels (handoff, A3c trap 3).
 
 ekf_local:
   ros__parameters:
