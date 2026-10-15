@@ -43,6 +43,19 @@ GYRO_LSB_PER_DPS = {250: 131.0, 500: 65.5, 1000: 32.8, 2000: 16.4}
 STANDARD_GRAVITY = 9.80665  # m/s^2, per REP-103
 DEG_TO_RAD = 3.141592653589793 / 180.0
 
+
+def gyro_full_scale_rad_s(gyro_range_dps: int) -> float:
+    """The largest |angular rate| the chip can REPORT at this range.
+
+    The output registers are int16, so the reading saturates at 32767 counts
+    (and -32768: the asymmetry is one LSB, ignored here) whatever the robot
+    does. The simulator clips its gyro here: a fake sensor that can report what
+    no MPU6050 could is A6 all over again (a sim feeding the stack inputs the
+    real hardware never would) — and it is how gz-sim 8.11.0's ~628 rad/s
+    ground-truth spikes could reach ekf_local at full strength (A3e).
+    """
+    return 32767.0 / GYRO_LSB_PER_DPS[gyro_range_dps] * DEG_TO_RAD
+
 # With the DLPF enabled (CONFIG 1..6) the gyro output rate is 1 kHz, and
 # SMPLRT_DIV divides that down. With DLPF off it would be 8 kHz — one more reason
 # to always keep the filter on.

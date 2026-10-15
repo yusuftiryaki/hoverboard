@@ -251,8 +251,8 @@ Tam zincir: `/cmd_vel` → `hoverboard_bridge` → pty → `Esp32Sim` →
 | Engele çarpma noktası (elle: 3.0 − 0.5 − 0.35) | **2.1500 m** |
 | Sıkışmışken 6 sn'de: gerçek / `/odom` | **0.0000 m / +2.97 m** |
 | ~8 m karede ham `/odom` poz hatası (patinajın asıl bozduğu şey) | **0.077 m** (kararlı: 0.074–0.082) |
-| Aynı karede EKF poz hatası (boş makine, 4 koşu) | **0.095 m** (kinematik: 0.083 m) — ⚠️ kararsız, aşağı bak |
-| Aynı karede EKF yaw hatası | **3.9°** (kinematik: 4.3°) |
+| Aynı karede EKF poz hatası (boş makine, 4 koşu) | **0.095 m** (kinematik: 0.083 m) — gz 8.11.0 + `ax` açık; güncel: 0.073–0.079 m (A3e, 2026-10-15) |
+| Aynı karede EKF yaw hatası | **3.9°** (kinematik: 4.3°) — güncel: 3.2–3.4° |
 | Patinaj: pencere seyirde biterse / duruşu içerirse | **+0.1367 m / +0.0126 m** |
 
 > **Patinajın neden alt sınırı elle türetilebiliyor:** DiffDrive joint'leri hızla
@@ -286,21 +286,13 @@ Tam zincir: `/cmd_vel` → `hoverboard_bridge` → pty → `Esp32Sim` →
 > ya da engele dayanmış robot. Sonuncusu ölçüldü: 6 sn'de `/odom` **+2.97 m**
 > hayali yol saydı. Yığında bunu görebilen hiçbir şey yok (A3c tuzak 3).
 >
-> ⚠️ **AÇIK SORU — `ekf_local`'in bu karedeki hatası TEKRARLANABİLİR DEĞİL.**
-> Boş makinede 4 koşu: 0.081 / 0.103 / 0.082 / 0.100 m. Aynı kod, aynı komutlar,
-> ama tam bir pytest oturumunun içinde: **0.487 / 1.368 / 1.522 m** — ve o
-> koşularda **altındaki tekerlek odometrisi 0.080 m**'de kalmış, **RTF 1.00**,
-> `truth`/`odom`/`imu` hepsi nominal hızda. Yani sebep fizik değil, yük değil,
-> mesaj kaybı da değil. **Bilinmiyor.** Aynı sıralamayla koşulan bir tekrar
-> hiç patlamadı, yani deterministik de değil.
-> Bu yüzden `test_gazebo_localization.py` **sıkı iddiayı tekerlek
-> odometrisine** koyuyor (milimetre kararlılığında ve patinajın bozduğu şey o);
-> EKF'e sadece bir **ıraksama** sınırı (2.5 m) ve dürüst bir yorum düşüyor.
-> Eşiği geçecek kadar gevşetip "yeşil" demek, A3c tuzak 4'ün ta kendisi olurdu:
-> geçmeyen bir kontrol, olmayandan kötüdür.
-> **Şüpheli:** mutlak heading'i gözleyen hiçbir şey yok, o yüzden `ekf_local`'in
-> yaw'ı serbest bir durum; kapalı karede küçük bir heading farkı net yer
-> değiştirmeyi büyütüyor. Doğrulanmadı.
+> ✅ **KAPANDI (2026-10-15) — eski "AÇIK SORU":** aynı kare bazen 0.08 m,
+> bazen 0.487 / 1.368 / 1.522 m veriyordu (tekerlek 0.080 m, RTF 1.00, hızlar
+> nominal). En güçlü aday **gz-sim 8.11.0** (upstream #3834): ~628 rad/s'lik
+> tek örnekli jiroskop sıçraması → rastgele yön adımı (kanıtlanmadı, o
+> koşularda kayıt yok; yeterlilik bir vekille gösterildi). Ayrıntı ve ölçümler
+> "ŞU AN NEREDEYIZ" altında, A3e bölümünde. Bu tablodaki sayılar o eski
+> ortamdan (gz 8.11.0, `ax` açık); güncelleri orada.
 
 ## Yol boyunca yapılan ÖNEMLİ düzeltmeler (tekrarlanmasın)
 1. ⚠️ **Flash sırasında batarya BAĞLI olmalı.** (Önce "bağlama" denmişti, YANLIŞ.)
@@ -503,7 +495,8 @@ olarak yayınlıyor; montaj yönü **URDF'teki `imu_joint` rpy'ında** tarif edi
 - ✅ **A3e. EKF'in patinaja karşı hatası — BİTTİ, ölçüldü (2026-09-08).**
   `test_gazebo_localization.py` kinematik testin **birebir aynı** karesini fizik
   dünyasında sürüyor (3 taze yığın): EKF **0.095 m / 3.9°**, kinematik dünyada
-  **0.083 m / 4.3°**. Yani patinaj 8 metrede ~1 cm'e mal oluyor ve tahmin
+  **0.083 m / 4.3°** (o günün ortamı; 2026-10-15'te gz 8.15.0 ve `ax` kapalı:
+  **0.073–0.079 m / 3.2–3.4°** ve 0.080–0.082 m / 4.3°). Yani patinaj 8 metrede ~1 cm'e mal oluyor ve tahmin
   bilesin diye: **hata hâlâ jiro bias'ından, patinajdan değil.**
   Bu rahatlatıcı sonucun sebebi ayrı bir testle izole edildi
   (`test_slip_from_speeding_up_is_given_back_when_slowing_down`): aynı sürüş,
@@ -746,15 +739,49 @@ teleop ────────────────────────�
 - Dokunulmayanlar: firmware, 200 ms watchdog, `cmd_timeout` deadman, E-stop,
   tampon vetosu.
 
-### A3e açık sorusu (`ekf_local` kare hatası 0.5–1.5 m) — güçlü aday, DOĞRULANMADI
-gz-sim **8.11.0**'da `OdometryPublisher`'ın kuaterniyon işaret dönmesi açısal
-hızda **~627 rad/s**'lik tek örnekli sıçramalar üretiyor (upstream #3834,
-**8.15.0**'da düzeltildi). `sim_node` jiroskobu doğrudan bundan türetiyor, EKF
-yaw'ı neredeyse tamamen jiroskoptan alıyor → kalıcı yön hatası, `/odom`
-(tekerlek) etkilenmiyor. A3e koşuları dpkg kaydına göre 8.11.0'daydı; artık
-8.15.0 kurulu. Nedensellik için sıçramayı kasıtlı enjekte eden deney gerekli.
-Not: conftest'teki "1.52 m'yi yetim düğümler yaptı" cümlesi bir hipotezdi,
-ölçüm değil (o oturumun transkriptinden doğrulandı) — düzeltilmeli.
+### ✅ A3e kapandı (2026-10-15) — en güçlü aday gz-sim 8.11.0; iki koruma eklendi
+**Kanıtlanan (doğrulandı):** A3e koşuları (2026-09-08) gz-sim **8.11.0**'daydı
+(dpkg kaydı; 2026-10-14'te 8.15.0'a yükseldi). 8.11.0'ın `OdometryPublisher`'ı
+poz kuaterniyonunun işaretini 1 ms'lik fizik adımları arasında çevirebiliyor;
+sonlu fark bunu tek adımda tam tur okuyor (~6283 rad/s), 10 örneklik kayan
+ortalama **~628 rad/s** yayınlıyor (upstream #3834, 8.15.0'da düzeltildi).
+Bu karede dönme yaw ≈ 240°'de, 3. dönüşte oluyor; yayınlanan bir mesaja
+yaklaşık her iki karede bir denk geliyor. `sim_node` bu ω'yı doğrudan
+jiroskop yapıyordu; `ekf_local` yaw hızında jiroskobu tekerleğe ~500×
+ağırlıklandırıyor → integre olduğu kadar kalıcı yön adımı, tekerlek etkilenmez.
+
+**Kanıtlanmayan:** eski 0.487 / 1.368 / 1.522 m koşularında sıçramanın
+GERÇEKTEN olduğu — o koşularda ω ya da yaw kaydedilmedi. Ayrıca o koşularda
+`ax` açıktı (robot_localization 3.8.3'ün hatası; zayıf bir alternatif).
+**Yeterlilik bir vekille gösterildi:** 2. dönüşte `/gazebo/ground_truth`'a
+fazladan, faz dışı tek bir −314 rad/s mesajı (gerçek hatanın büyüklüğü,
+zamanlaması ve dönüşü değil) — A3e imzasını birebir üretti:
+
+| seri (gz 8.15.0, `ax` kapalı) | EKF konum | tekerlek | EKF yaw |
+|---|---|---|---|
+| kinematik kare ×5 | **0.080–0.082 m** | — | 4.2–4.3° |
+| Gazebo kare, kontrol ×6 | **0.073–0.079 m** | 0.065–0.085 m | 3.2–3.4° |
+| Gazebo + vekil sıçrama ×4 | 0.076 / **5.63** / **0.41** / 0.076 m | 0.069–0.075 m | 3.4 / **161** / **10** / 3.4° |
+| aynısı, **jiroskop doyumlu** ×4 | 0.050–0.080 m | 0.072–0.076 m | 0.4–3.5° |
+
+Değişiklikler:
+- **Sim jiroskobu gerçek çip gibi doyuyor** (`imu_gyro_range_dps` 250 →
+  ±4.37 rad/s; `mpu6050_driver.gyro_full_scale_rad_s` tek tanım). A6 ile aynı
+  ders: sim, gerçek sensörün üretemeyeceği girdiyi yığına vermemeli.
+- ⚠️ **Doyumun bedeli:** böyle bir Gazebo hatası artık EKF hatası olarak
+  GÖRÜNMEZ (doyumlu vekil: hepsi eşiğin altında). Bu yüzden
+  `test_gazebo_localization` Gazebo'nun ham `/gazebo/ground_truth` yaw hızını
+  DOĞRUDAN kontrol ediyor (< 10 rad/s): simülatör regresyonu kendi adıyla
+  patlar.
+- EKF sınırı **2.5 m (ıraksama) → 0.25 m, yaw 15° → 8°** (ölçülenin ~3× ve
+  ~2.4×'ı; koşudan koşuya yayılım ~0.002 m; jiroskop sapması sabit 0.1 dps).
+- `ax`'ın bedeli: kinematik dünyada fark yok (0.080–0.082 vs 0.083 m) — ama
+  orada `ax` yapı gereği tekerleğe bağımlı; **patinaj altında ölçülmedi**.
+- conftest'teki "1.52 m'yi yetim düğümler yaptı" cümlesi düzeltildi.
+- `ci.sh`: 10 dakikayı aşan test thread yığınlarını loga döker
+  (`faulthandler_timeout`). Bu iş sırasında yerelde bir `nav2` koşusu **3 saat
+  asılı kaldı**, ikinci testi bir kez düştü; ayrıntı kayboldu. Aynı dalda tekrar
+  koşu 4/4 geçti — aralıklı, sebebi bilinmiyor. Bir dahakine döküm kalacak.
 
 ### A5'ten önceki durum
 
@@ -770,13 +797,12 @@ listedeki en yüksek getirili iş.** Ara adım olarak hızlı süzgeç:
 `pytest src/robot_sim/test -q -k "not gazebo_physics and not nav2"` (saniyeler,
 ve A3'ün asıl hatasını yakalayan `test_gazebo_config.py` bunun içinde).
 
-Sıradaki iş seçenekleri (2026-10-14 itibarıyla):
+Sıradaki iş seçenekleri (2026-10-15 itibarıyla):
 - ✅ ~~**Motor komut yolu güvenliği**~~ — **yapıldı (2026-10-15, PR #3)**, yukarıda.
-- **A3e'yi kapatmak** — gz sıçrama enjeksiyonu ile nedenselliği doğrula; sonra
-  `test_gazebo_localization`'daki 2.5 m ıraksama sınırını sıkılaştır ve
-  conftest'teki yanlış "1.52 m" cümlesini düzelt.
-- **`ax` kapatmanın bedelini ölçmek** — A1/A3e karelerini yeniden ölç,
-  tablolar `ax açık` olarak etiketlensin ya da güncellensin.
+- ✅ ~~**A3e'yi kapatmak**~~ + ~~**`ax`'ın bedelini ölçmek**~~ — **yapıldı
+  (2026-10-15)**, yukarıda.
+- **`twist_mux`** — Nav2 hedefi aktifken ve kapı engellerken teleop'un öncelik
+  alabilmesi için (şu an kapının sıfırlarıyla yarışır; güvenli tarafa düşer).
 - **Sıkışma tespiti** — A3c tuzak 3; donanıma bağlı (GPS, INA228, tampon).
 - **SP3 → SP5** — batarya/docking zinciri; SP1'in ölçüm katmanı hazır.
 

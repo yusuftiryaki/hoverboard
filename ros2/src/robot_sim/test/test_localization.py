@@ -15,10 +15,11 @@ real odometry error. This proves the maths is wired up correctly and nothing
 more; the truth needs dirt.
 
 The same square HAS since been driven on real physics, in
-test_gazebo_localization.py: 0.095 m of error against the 0.083 m below, and
-the same ~4 deg of yaw. So slip costs about a centimetre over eight metres and
-this file's numbers are not the flattering ones they look like — but only
-because braking hands back 91% of the slip that speeding up creates. Slip that
+test_gazebo_localization.py: 0.073-0.079 m of error against this world's
+0.080-0.082 m, and 3.2-3.4 deg of yaw against 4.2-4.3 (2026-10-15). So slip
+costs nothing measurable over eight metres and this file's numbers are not the
+flattering ones they look like — but only because braking hands back 91% of
+the slip that speeding up creates. Slip that
 only goes one way (a spinning wheel, a jammed robot) is not covered by either
 file's numbers, and nothing in this stack can see it.
 
