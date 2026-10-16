@@ -47,9 +47,14 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, EmitEvent, LogInfo, RegisterEventHandler
+from launch.conditions import IfCondition
+from launch.event_handlers import OnProcessExit
+from launch.events import Shutdown
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+
+from hoverboard_bridge.nav2_watchdog import NAV2_STUCK_EXIT
 
 # Started, then driven through configure/activate by the lifecycle manager.
 LIFECYCLE_NODES = [
@@ -62,6 +67,21 @@ LIFECYCLE_NODES = [
 ]
 
 
+# NAV2_STUCK_EXIT is nav2_watchdog's "Nav2 is stuck" exit code. Only THAT
+# shuts the bringup down: a watchdog that crashed for its own reasons (exit 1,
+# a traceback) must not take a working robot down with it — it is logged and
+# left dead. (Checked: with the code mismatched, the launch is NOT shut down.)
+def _on_watchdog_exit(event, _context):
+    if event.returncode == NAV2_STUCK_EXIT:
+        return [LogInfo(msg="nav2_watchdog gave up on Nav2 — shutting the bringup "
+                            "down so systemd can restart it"),
+                EmitEvent(event=Shutdown(reason="nav2_watchdog: Nav2 not active"))]
+    if event.returncode not in (0, -2, -15):     # clean, SIGINT, SIGTERM
+        return [LogInfo(msg=f"nav2_watchdog died (exit {event.returncode}); Nav2 is "
+                            "no longer watched")]
+    return []
+
+
 def generate_launch_description():
     pkg = get_package_share_directory("robot_bringup")
     params = os.path.join(pkg, "config", "nav2.yaml")
@@ -70,6 +90,22 @@ def generate_launch_description():
     autostart = LaunchConfiguration("autostart")
     battery_config = LaunchConfiguration("battery_config")
     dock_database = LaunchConfiguration("dock_database")
+    watchdog_timeout = LaunchConfiguration("watchdog_timeout")
+
+    # ⚠️ Nav2 1.3.13 can hang in bring-up for good (hoverboard_bridge
+    # nav2_watchdog.py has the measured story). The watchdog only notices and
+    # exits; THIS turns its exit into a Shutdown of the whole launch — robot.
+    # launch.py included — so systemd starts everything afresh.
+    # ⚠️ `ros2 launch` exits 0 after such a Shutdown (measured), so
+    # robot.service needs Restart=always, NOT on-failure (deployment.md step 8).
+    watchdog = Node(
+        package="hoverboard_bridge",
+        executable="nav2_watchdog",
+        name="nav2_watchdog",
+        output="screen",
+        condition=IfCondition(autostart),     # without autostart nothing activates
+        parameters=[{"timeout_s": watchdog_timeout, "use_sim_time": use_sim_time}],
+    )
 
     common = [params, {"use_sim_time": use_sim_time}]
 
@@ -78,6 +114,11 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "autostart", default_value="true",
             description="Let the lifecycle manager bring the Nav2 nodes up on start.",
+        ),
+        DeclareLaunchArgument(
+            "watchdog_timeout", default_value="120.0",
+            description="Seconds Nav2 may be not-active (at bring-up or later) "
+                        "before the whole bringup is shut down for a restart.",
         ),
         DeclareLaunchArgument(
             "battery_config",
@@ -177,4 +218,8 @@ def generate_launch_description():
                 "node_names": LIFECYCLE_NODES,
             }],
         ),
+
+        watchdog,
+        RegisterEventHandler(OnProcessExit(target_action=watchdog,
+                                           on_exit=_on_watchdog_exit)),
     ])
