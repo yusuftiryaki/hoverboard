@@ -214,6 +214,16 @@ navigate_to_pose ◄── devriye, rota, nokta, uzun geçişler        follow_p
   robot kimsenin kazara alması gereken bir varsayılan değil. `~/resume` aynı
   başlangıçtan yeniden planlar ve kaydedilen index'ten devam eder.
 - ⚠️ `/toLL` de dönüşüm hazır değilken (0, 0) döndürüyor — aynı tuzak.
+- ⚠️ **tf hazır değil ≠ waypoint başarısız.** Yeni açılmış bir runner'ın tf
+  tamponu boş: her hedef "frame does not exist" ile anında düşüyor, üç
+  waypoint 20 ms'de atlanıp görev hiç kıpırdamadan PAUSED oluyordu (mission
+  testlerinde iki kez, log yakalanana kadar sebebi bilinmedi). Artık tf de
+  sunucular gibi 15 sn bekleniyor.
+- **Biçme bayrağı** (`~/status` `work`) yalnızca bir satırın kendi
+  `follow_path`'i koşarken açık — satıra gidişte (yaklaşma, birleşme) kapalı.
+  Uzaktan satıra (dock dönüşü, atlanmış geçiş) önce `navigate_to_pose` (engel
+  dolanır), sonra birleşme çizgisi. Düz çizgiyle dönüşte robot istasyondan
+  çime 1.94 m çim dışında "biçiyordu" ve istasyon gövdesinin içinden geçerdi.
 
 ### Kaplama satırları neden `navigate_to_pose` ile sürülmüyor (ölçüldü)
 4 × 3 m çim, 0.5 m kesim, ground truth (`test_mission_coverage.py`):
@@ -257,6 +267,32 @@ navigate_to_pose ◄── devriye, rota, nokta, uzun geçişler        follow_p
   behavior_trees/` stok ağaçların kopyaları + checker adı, bt_navigator
   varsayılanları onlara bakıyor. `test_nav2_profiles.py` kuralları tutuyor.
 
+## 3b: ev = sahanın istasyonu
+- Sahada `kind: station` adı supervisor'ın `dock_id`'si (varsayılan `home`)
+  olan bir istasyon varsa, **ev oradan gelir**: lat/lon → `/fromLLArray` (survey
+  haritasındaki istasyon gövdesiyle aynı dönüşüm), `docks.yaml`'ın `map` pozu
+  **yok sayılır**. Sebep: `map`'in orijini ilk GPS fix'i, yani docks.yaml'daki
+  sabit poz ancak robot istasyonda — o yöne bakarak — açılırsa doğru.
+- Dönüşüm hazır olana kadar ev bilinmez; o arada LOW gelirse staging adımı
+  "home is not known yet" ile düşer → SAFE_STOP (zaten `map` yokken robot
+  eve gidemezdi). `/diagnostics`'te `home: site | docks.yaml`.
+- `DockRobot` artık **pozla** (`use_dock_id: false`, `dock_pose`) — docking
+  server'ın kendi veritabanı çalışma anında dönüştürülen pozu bilemez.
+  docks.yaml yalnızca dock tipi ve sahasız çalışma için kalıyor.
+- `site_map_server` artık iki pozu karşılaştırmıyor; sahada istasyon yokken
+  docks.yaml'da varsa **WARN**: o istasyon survey haritasında çizili değil
+  (çizilmemiş istasyona robot çarpıyordu — `test_docking_sweep`).
+- **Kabul testi** (`test_mission_dock.py`, sessiz GPS): kaplama görevi → batarya
+  LOW → supervisor satırı iptal eder, **sahanın istasyonuna** gider (docks.yaml
+  hâlâ orijinde, robot orada başlamadı) → yanaşır, şarj, FULL → mission_runner
+  undock ister → kaldığı yerden devam → DONE.
+- ⚠️ **Yolda bulunan (gerçek robotu da etkilerdi):** SoC tahmincisi FULL'ü
+  yalnızca sayılan SoC < 1.0 iken bildiriyordu. Coulomb sayımı şarj
+  incelmeden 1.0'a dayanmışsa (kapasite düşük girilmiş, INA228 yüksek okuyor —
+  `capacity_ah` hâlâ yer tutucu) FULL **hiç** gelmiyor, supervisor CHARGING'de
+  sonsuza kadar bekliyor, robot istasyondan **hiç** ayrılmıyordu. İlk koşu 20 dk
+  şarjda kaldı. Artık bekleme süresi ilk aşıldığında bir kez bildiriliyor.
+
 ## Robotun kendi tespit ettiği engeller (2026-10-16, kullanıcı onayı)
 Bugünkü donanımda menzil sensörü yok (handoff karar 8): survey edilmemiş bir
 taşı robot ancak **tamponla değince** fark ediyor, Nav2 de sıkışmayı göremiyor
@@ -285,11 +321,5 @@ modellerinde (COCO) "ağaç" ve "taş" sınıfı yok. Plan:
 ve misinalı aparatla kabul edilebilir; bıçakla olmazdı.
 
 ## Bilinen açıklar
-- ⚠️ **İstasyon iki yerde:** opennav_docking ve supervisor hâlâ `docks.yaml`'ın
-  `map` pozunu okuyor, harita ise sahadaki lat/lon'u çiziyor. `map`'in orijini
-  ilk GPS fix'i (`wait_for_datum: false`) olduğu için docks.yaml'daki sabit poz
-  ancak robot istasyonda açılırsa doğru — ve placeholder'ın yaw'ı 0 (doğuya
-  bakan istasyon) olduğu için ancak istasyon doğuya bakıyorsa. `site_map_server`
-  ikisi **1 m ya da 15°'den fazla** ayrışırsa `/diagnostics`'e ERROR basıyor;
-  kalıcı çözüm 3. aşamada (poz çalışma anında sahadan).
+- ✅ ~~İstasyon iki yerde~~ — **3b'de kapandı** (aşağıda).
 - Survey edilmemiş engel hâlâ görünmez (menzil sensörü yok, karar 8).

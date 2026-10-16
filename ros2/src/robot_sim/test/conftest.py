@@ -549,8 +549,43 @@ class SiteNav2Stack(Nav2Stack):
     def launch_args(self):
         return (*self.LAUNCH_ARGS, "use_site_map:=true", f"site_file:={self.site_file}")
 
+    def nav2_args(self):
+        # battery_supervisor reads home from the site's station (missions.md 3b).
+        return (f"site_file:={self.site_file}",)
+
     def _pin_map(self):
         """No pin: ekf_global publishes map->odom."""
+
+
+class SiteDockStack(SiteNav2Stack):
+    """SiteNav2Stack with DockStack's battery: fake_battery and a small pack on
+    both sides, so a mission runs the battery LOW and the supervisor takes the
+    robot home — to the station the SITE says, on the real `map`."""
+
+    def __init__(self, workdir, features, sim_args, monitor=None, supervisor=None):
+        self._battery_config = write_battery_config(workdir, monitor, supervisor)
+        super().__init__(workdir, features, *sim_args)
+
+    def launch_args(self):
+        return (*super().launch_args(), "fake_battery:=true",
+                f"battery_config:={self._battery_config}")
+
+    def nav2_args(self):
+        return (*super().nav2_args(), f"battery_config:={self._battery_config}")
+
+
+@pytest.fixture
+def site_dock_stack(ros, tmp_path):
+    made = []
+
+    def _make(features, sim_args, **kwargs):
+        stack = SiteDockStack(str(tmp_path), features, sim_args, **kwargs)
+        made.append(stack)
+        return stack
+
+    yield _make
+    for stack in made:
+        stack.close()
 
 
 @pytest.fixture
@@ -565,6 +600,24 @@ def site_nav2_stack(ros, tmp_path):
     yield _make
     for stack in made:
         stack.close()
+
+
+def write_battery_config(workdir, monitor=None, supervisor=None):
+    """A copy of battery_manager.yaml with the test's overrides, on BOTH sides
+    (the sim's pack and the monitor's belief are set by the caller)."""
+    import yaml
+    from ament_index_python.packages import get_package_share_directory
+
+    source = os.path.join(get_package_share_directory("robot_bringup"),
+                          "config", "battery_manager.yaml")
+    with open(source, encoding="utf-8") as handle:
+        config = yaml.safe_load(handle)
+    config["battery_monitor"]["ros__parameters"].update(monitor or {})
+    config["battery_supervisor"]["ros__parameters"].update(supervisor or {})
+    path = os.path.join(workdir, "battery_manager.yaml")
+    with open(path, "w", encoding="utf-8") as handle:
+        yaml.safe_dump(config, handle)
+    return path
 
 
 class DockStack(Nav2Stack):
@@ -584,17 +637,8 @@ class DockStack(Nav2Stack):
 
     def __init__(self, workdir, sim_args, monitor=None, supervisor=None, dock_pose=None):
         import yaml
-        from ament_index_python.packages import get_package_share_directory
 
-        source = os.path.join(get_package_share_directory("robot_bringup"),
-                              "config", "battery_manager.yaml")
-        with open(source, encoding="utf-8") as handle:
-            config = yaml.safe_load(handle)
-        config["battery_monitor"]["ros__parameters"].update(monitor or {})
-        config["battery_supervisor"]["ros__parameters"].update(supervisor or {})
-        self._battery_config = os.path.join(workdir, "battery_manager.yaml")
-        with open(self._battery_config, "w", encoding="utf-8") as handle:
-            yaml.safe_dump(config, handle)
+        self._battery_config = write_battery_config(workdir, monitor, supervisor)
         self._dock_database = os.path.join(workdir, "docks.yaml")
         with open(self._dock_database, "w", encoding="utf-8") as handle:
             yaml.safe_dump({"docks": {"home": {

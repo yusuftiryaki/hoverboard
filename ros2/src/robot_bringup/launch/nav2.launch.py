@@ -91,6 +91,7 @@ def generate_launch_description():
     autostart = LaunchConfiguration("autostart")
     battery_config = LaunchConfiguration("battery_config")
     dock_database = LaunchConfiguration("dock_database")
+    site_file = LaunchConfiguration("site_file")
     watchdog_timeout = LaunchConfiguration("watchdog_timeout")
 
     # ⚠️ Nav2 1.3.13 can hang in bring-up for good (hoverboard_bridge
@@ -124,6 +125,11 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "battery_config",
             default_value=os.path.join(pkg, "config", "battery_manager.yaml"),
+        ),
+        DeclareLaunchArgument(
+            "site_file", default_value="",
+            description="The site (docs/missions.md). A station named like the "
+                        "supervisor's dock_id there REPLACES docks.yaml's pose.",
         ),
         DeclareLaunchArgument(
             "dock_database",
@@ -209,6 +215,7 @@ def generate_launch_description():
             name="battery_supervisor",
             output="screen",
             parameters=[battery_config, {"dock_database": dock_database,
+                                         "site_file": site_file,
                                          "use_sim_time": use_sim_time}],
             respawn=True,
             respawn_delay=2.0,

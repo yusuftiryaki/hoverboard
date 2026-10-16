@@ -22,6 +22,10 @@
   <exec_depend>nav2_msgs</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
+  <!-- home from the site file (docs/missions.md 3b) -->
+  <exec_depend>robot_missions</exec_depend>
+  <exec_depend>robot_localization</exec_depend>
+  <exec_depend>geographic_msgs</exec_depend>
 
   <test_depend>python3-pytest</test_depend>
 

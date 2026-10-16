@@ -101,6 +101,26 @@ def measure(track, step=0.05):
     return covered / (len(xs) * len(ys)), overrun
 
 
+def start_mission(node, mission, timeout_s=30.0):
+    """~/start, retried while the runner has not heard the supervisor's
+    latched state yet (it refuses to start until NORMAL)."""
+    client = node.create_client(StartMission, "/mission_runner/start")
+    assert client.wait_for_service(timeout_sec=20.0), "no /mission_runner/start"
+    deadline = time.monotonic() + timeout_s
+    while True:
+        request = StartMission.Request()
+        request.mission = json.dumps(mission)
+        future = client.call_async(request)
+        while not future.done():
+            rclpy.spin_once(node, timeout_sec=0.05)
+        if future.result().accepted:
+            return
+        assert time.monotonic() < deadline, future.result().message
+        end = time.monotonic() + 1.0
+        while time.monotonic() < end:
+            rclpy.spin_once(node, timeout_sec=0.05)
+
+
 def run_mission(site_nav2_stack, tmp_path, sim_args, mission_params, anchor="chain"):
     stack = site_nav2_stack([lawn_feature()], *sim_args)
     log_path = tmp_path / "mission_runner.log"
@@ -117,20 +137,8 @@ def run_mission(site_nav2_stack, tmp_path, sim_args, mission_params, anchor="cha
     try:
         assert watcher.spin_for(20.0, lambda: watcher.status is not None), \
             "mission_runner published no status"
-        client = watcher.create_client(StartMission, "/mission_runner/start")
-        assert client.wait_for_service(timeout_sec=20.0)
-        deadline = time.monotonic() + 30.0
-        while True:                       # the supervisor's state may lag the runner
-            request = StartMission.Request()
-            request.mission = json.dumps({"type": "coverage", "area": "cim",
-                                          "params": mission_params})
-            future = client.call_async(request)
-            while not future.done():
-                rclpy.spin_once(watcher, timeout_sec=0.05)
-            if future.result().accepted:
-                break
-            assert time.monotonic() < deadline, future.result().message
-            watcher.spin_for(1.0)
+        start_mission(watcher, {"type": "coverage", "area": "cim",
+                                "params": mission_params})
         started = time.monotonic()
         finished = watcher.spin_for(
             MISSION_TIMEOUT_S,

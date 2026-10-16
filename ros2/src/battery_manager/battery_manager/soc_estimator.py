@@ -60,8 +60,16 @@ class SocEstimator:
         self._soc = max(0.0, min(1.0, self._soc))
 
         if pack_voltage >= self._full_voltage and abs(current_a) <= self._taper_a:
+            before = self._full_timer_s
             self._full_timer_s += dt
-            if self._full_timer_s >= self._full_hold_s and self._soc < 1.0:
+            # ⚠️ Fires when the hold is FIRST crossed, whatever the counted
+            # SoC says. It used to also require soc < 1.0 — and coulomb
+            # counting that had already clamped to 1.0 (a capacity set low, an
+            # INA228 reading high; capacity_ah is still a placeholder) then
+            # never reported FULL: the supervisor waited in CHARGING forever
+            # and the robot never left the dock. Found by
+            # test_mission_dock.py, 20 minutes on the charger.
+            if before < self._full_hold_s <= self._full_timer_s:
                 self._soc = 1.0
                 self.just_reached_full = True
         else:

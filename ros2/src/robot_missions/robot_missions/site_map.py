@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Sequence, Tuple
+from typing import Callable, List, Sequence, Tuple
 
 from robot_missions.occupancy import (
     Circle, Point, covering_grid, empty_grid, mark_circle, mark_polygon)
@@ -160,34 +160,3 @@ def build_grid(geometry: MapGeometry, resolution: float, margin: float,
     for circle in (*geometry.circles, *geometry.station_bodies):
         mark_circle(grid, spec, circle)
     return spec, grid
-
-
-def dock_disagreements(stations: Sequence[StationPose],
-                       docks: Dict[str, Sequence[float]],
-                       max_distance: float, max_yaw: float) -> List[str]:
-    """Where the site's station and docks.yaml's pose for the same name part.
-
-    opennav_docking and battery_supervisor still read docks.yaml; this map draws
-    the site's station. Apart by more than the marker can absorb (about a metre
-    sideways from the staging pose, docks.yaml's header), docking fails — and
-    the station on the map is not where Nav2 drives to dock, so a robot heading
-    past it can drive into it. docs/missions.md "Bilinen açıklar".
-    """
-    problems = []
-    for station in stations:
-        pose = docks.get(station.name)
-        if pose is None:
-            problems.append(f"site station {station.name!r} has no dock of that "
-                            "name in docks.yaml")
-            continue
-        apart = math.hypot(station.x - pose[0], station.y - pose[1])
-        turn = abs(math.atan2(math.sin(station.yaw - pose[2]),
-                              math.cos(station.yaw - pose[2])))
-        if apart > max_distance or turn > max_yaw:
-            problems.append(
-                f"station {station.name!r}: the site puts it at ({station.x:.2f}, "
-                f"{station.y:.2f}, yaw {math.degrees(station.yaw):.0f}°) in map, "
-                f"docks.yaml at ({pose[0]:.2f}, {pose[1]:.2f}, yaw "
-                f"{math.degrees(pose[2]):.0f}°) — {apart:.2f} m / "
-                f"{math.degrees(turn):.0f}° apart")
-    return problems

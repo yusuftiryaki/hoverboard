@@ -29,8 +29,6 @@ where reading half a file would be quiet and dangerous.
 
 from __future__ import annotations
 
-import math
-
 import rclpy
 import yaml
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
@@ -45,7 +43,7 @@ from robot_missions.occupancy import occupied_cells
 from robot_missions.site import Site, describe, load_site
 from robot_missions.site_map import (
     STATION_BODY_OFFSET, STATION_BODY_RADIUS, MapGeometry, NotReady, assemble,
-    build_grid, dock_disagreements, needs_conversion, positions_to_convert)
+    build_grid, needs_conversion, positions_to_convert)
 
 DIAG_NAME = "site_map_server: survey map"
 
@@ -62,10 +60,8 @@ class SiteMapServer(Node):
         self.declare_parameter("max_cells", 9_000_000)
         self.declare_parameter("station_body_offset", STATION_BODY_OFFSET)
         self.declare_parameter("station_body_radius", STATION_BODY_RADIUS)
-        # docks.yaml, to cross-check the station (see dock_disagreements).
+        # docks.yaml: only to notice a station that is NOT on the site (_check_docks).
         self.declare_parameter("dock_database", "")
-        self.declare_parameter("dock_max_distance", 1.0)
-        self.declare_parameter("dock_max_yaw_deg", 15.0)
         self.declare_parameter("retry_period", 1.0)
 
         p = self.get_parameter
@@ -150,27 +146,35 @@ class SiteMapServer(Node):
         self._published = True
 
         occupied = occupied_cells(grid)
-        self._problems = self._check_docks(geometry)
+        self._problems = self._check_docks()
         for problem in self._problems:
-            self.get_logger().error(problem)
+            self.get_logger().warn(problem)
         summary = (f"{spec.width} x {spec.height} cells at {spec.resolution} m, "
                    f"{occupied} occupied")
         self.get_logger().info(f"/obstacle_map published: {summary}")
         if self._problems:
-            self._status = (DiagnosticStatus.ERROR, "; ".join(self._problems))
+            self._status = (DiagnosticStatus.WARN, "; ".join(self._problems))
         else:
             self._status = (DiagnosticStatus.OK, summary)
 
-    def _check_docks(self, geometry: MapGeometry) -> list[str]:
+    def _check_docks(self) -> list[str]:
+        """A station in docks.yaml that the site lacks is NOT on this map.
+
+        A site station is the one source of home (battery_supervisor reads it
+        too, docs/missions.md 3b), so there is nothing to compare then. But a
+        robot running on docks.yaml alone has a station the survey never drew
+        — and measured (test_docking_sweep.py), a robot heading past an
+        undrawn station drives straight into it."""
         path = self.get_parameter("dock_database").value
-        if not path or not geometry.stations:
+        if not path or self._site.stations:
             return []
         with open(path, encoding="utf-8") as handle:
             docks = (yaml.safe_load(handle) or {}).get("docks", {})
-        poses = {name: dock["pose"] for name, dock in docks.items()}
-        return dock_disagreements(
-            geometry.stations, poses, self.get_parameter("dock_max_distance").value,
-            math.radians(self.get_parameter("dock_max_yaw_deg").value))
+        if not docks:
+            return []
+        return [f"docks.yaml has station(s) {sorted(docks)} but the site has none: the "
+                "survey map does not draw it — record the station in the site "
+                "(kind: station)"]
 
     def _publish_diagnostics(self) -> None:
         level, message = self._status
