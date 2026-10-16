@@ -104,10 +104,12 @@ Laptop tarayıcı (uydu haritası)        Pi
    yoktu) kapatır.
 2. **Planlayıcı**: coverage, patrol, route, goto. ROS'suz, elle hesaplanmış testler.
 3. **mission_runner**: yürütme, ilerlemeyi diske yazma, şarjdan sonra devam;
-   istasyon pozunu docks.yaml yerine sahadan alma. Sim'de uçtan uca: alan →
+   istasyon pozunu docks.yaml yerine sahadan alma; **tampon temas haritası**
+   (aşağıda). Sim'de uçtan uca: alan →
    düşük batarya → dock → devam. **Kaplama yüzdesi ve sınır ihlali** ground
    truth'tan, GPS gürültüsü açık/kapalı.
-4. **Web arayüzü**: çizim, görev formu, canlı durum.
+4. **Web arayüzü**: çizim, görev formu, canlı durum; tespit edilen engelleri
+   onaylama/etiketleme.
 5. **Öğret-kaydet**: web teleop + sınır/waypoint/istasyon kaydı.
 
 ## 1. aşama: ne yapıldı, nasıl kullanılır
@@ -137,6 +139,33 @@ Laptop tarayıcı (uydu haritası)        Pi
   doğru 0.15 m kaymış, sonraki her fix robotla dönen 0.15 m hatalı. Aynı
   süpürme hatayla **0.105–0.182 m** okuyordu; eşik (0.12 m) bunun altında.
   Düzeltme: GPS anteni tf'ten okuyor (kamera montajı gibi).
+
+## Robotun kendi tespit ettiği engeller (2026-10-16, kullanıcı onayı)
+Bugünkü donanımda menzil sensörü yok (handoff karar 8): survey edilmemiş bir
+taşı robot ancak **tamponla değince** fark ediyor, Nav2 de sıkışmayı göremiyor
+(A3c tuzak 3). Kamera tek başına mesafe ölçemiyor; hazır nesne tanıma
+modellerinde (COCO) "ağaç" ve "taş" sınıfı yok. Plan:
+
+1. **Temas haritası (3. aşama, `mission_runner` ile):** tampon her tetiklendiğinde
+   temas noktası (robotun `map`'teki kendi tahmini + tamponun base_link'teki
+   yeri) "tespit edilen engel" olarak kaydedilir ve **canlı haritaya hemen**
+   girer — aynı görevde robot aynı taşa ikinci kez gitmez. Kayıt diske yazılır,
+   saha dosyasına **kendiliğinden girmez**. Aynı sinyal sıkışma tespitine de
+   girdi: tampon tetikli ama tekerlek odometrisi "ilerliyorum" diyor.
+2. **İnsan onayı ve etiket (4. aşama, web arayüzü):** tespit edilen noktalar
+   "onay bekleyen" olarak görünür; kullanıcı "ağaç, 0.4 m" der → saha dosyasına
+   kalıcı `obstacle` olarak geçer, ya da reddeder. Robot "burada bir şey var"
+   der, **ne olduğunu insan söyler** — otomatik sınıflandırma hedef değil.
+3. **Gerçek algılama ertelendi:** menzil sensörü kararı ilk saha denemelerinden
+   sonra (çim boyu ve taş yüksekliği sahada görülünce). Kullanıcı ileride
+   **derinlik kamerasını** (OAK-D Lite sınıfı) değerlendirecek. Not: 2D LiDAR'ın
+   çim biçen robotta tuzağı — alçak monte edilirse uzun çimi engel sanar, yüksek
+   monte edilirse alçak taşı görmez; derinlik kamerası ikisini ayırabilir.
+   Hangisi gelirse gelsin Nav2'nin `obstacle_layer`'ına girer, temas haritası
+   yedek olarak kalır.
+
+⚠️ Bedel: temas haritası öğrenmek için önce **çarpmayı** gerektirir. Yavaş hız
+ve misinalı aparatla kabul edilebilir; bıçakla olmazdı.
 
 ## Bilinen açıklar
 - ⚠️ **İstasyon iki yerde:** opennav_docking ve supervisor hâlâ `docks.yaml`'ın
