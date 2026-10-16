@@ -146,6 +146,16 @@ class Esp32Sim:
         self.cmd_speed = 0
         self.cmd_steer = 0
 
+    @property
+    def bat_voltage(self) -> int:
+        """Pack voltage as the board reports it, 0.01 V/count. robot_sim's
+        pack model writes it every tick; the firmware just forwards the board's."""
+        return self._bat_voltage
+
+    @bat_voltage.setter
+    def bat_voltage(self, counts: int) -> None:
+        self._bat_voltage = int(counts)
+
     # ---- Pi -> ESP32 ---------------------------------------------------------
     def feed(self, data: bytes, now: float) -> None:
         """Parse PiCommand frames. Mirrors the firmware's piReceive()."""

@@ -307,3 +307,87 @@ waypoint_follower:
       enabled: true
       # Let the GPS settle before the next leg is planned from this position.
       waypoint_pause_duration: 2000
+
+# SP4: opennav_docking — the last two metres onto the charging contacts.
+#
+#   battery_supervisor: NavigateToPose(staging) -> Spin(face dock) -> DockRobot
+#   docking_server:     marker -> dock pose -> graceful controller -> contacts
+#                       -> "charging" = /battery current > charging_threshold
+#
+# The staging and turning are the supervisor's, not this server's: its own
+# staging navigation would use the loose goal checker above (1.0 m, any
+# heading) and then fail its initial perception — without retrying — whenever
+# the robot arrived facing away from the marker.
+docking_server:
+  ros__parameters:
+    controller_frequency: 20.0
+    # How long the marker may take to show up once staged and turned.
+    initial_perception_timeout: 5.0
+    wait_charge_timeout: 5.0
+    dock_approach_timeout: 30.0
+    undock_linear_tolerance: 0.05
+    undock_angular_tolerance: 0.1
+    max_retries: 3
+    base_frame: base_link
+    # The dock pose is tracked in odom, NOT map: map->odom jumps with every GPS
+    # fix, and a dock that jumps metres mid-approach is not a dock you reach.
+    fixed_frame: odom
+    # Forward: the camera is at the front and has to see the marker.
+    dock_backwards: false
+    dock_prestaging_tolerance: 0.5
+    # dock_database is set by nav2.launch.py (config/docks.yaml by default).
+    dock_plugins: ["charging_dock"]
+    charging_dock:
+      plugin: "opennav_docking::SimpleChargingDock"
+      # The marker (image_proc track_marker_node -> detected_dock_pose) steers
+      # the approach; the database pose only says where to look.
+      use_external_detection_pose: true
+      external_detection_timeout: 1.0
+      # The marker is 0.55 m AHEAD of the docked base_link (the station:
+      # robot_sim/dock_model.py; SP6 builds the real one — CALIBRATE).
+      external_detection_translation_x: -0.55
+      external_detection_translation_y: 0.0
+      # These undo the aruco/AprilTag marker convention (z out of the marker,
+      # y up). Nav2's defaults, written to 4 digits instead of 1.57: 0.0008 rad
+      # of yaw error across 0.55 m is half a millimetre, but it is free to fix.
+      external_detection_rotation_roll: -1.5708
+      external_detection_rotation_pitch: 1.5708
+      external_detection_rotation_yaw: 0.0
+      filter_coef: 0.1
+      # Docked = /battery says current is flowing IN. Without an INA228
+      # battery_monitor publishes NaN current and docking ends in
+      # FAILED_TO_CHARGE: SP4 needs the current sensor (design decision).
+      use_battery_status: true
+      charging_threshold: 0.5
+      use_stall_detection: false
+      # The approach also stops this close to the detected dock pose — the
+      # spring contacts close over the last ~6 cm (CALIBRATE with SP6).
+      docking_threshold: 0.05
+      # Staging 1.5 m out: near enough for a 10 cm marker to decode, far enough
+      # that a survey error of the dock database is still in view.
+      staging_x_offset: -1.5
+      staging_yaw_offset: 0.0
+    controller:
+      k_phi: 3.0
+      k_delta: 2.0
+      beta: 0.4
+      lambda: 2.0
+      # Slow on the final approach: 0.15 m/s into spring contacts.
+      v_linear_min: 0.05
+      v_linear_max: 0.15
+      v_angular_max: 0.5
+      slowdown_radius: 0.25
+      use_collision_detection: true
+      costmap_topic: "local_costmap/costmap_raw"
+      footprint_topic: "local_costmap/published_footprint"
+      transform_tolerance: 0.2
+      projection_time: 3.0
+      simulation_time_step: 0.1
+      # ⚠️ 0.5, not Nav2's 0.3. The station is on the survey map (it has to
+      # be: docks.yaml), and docking ENDS with the robot touching it — so the
+      # projected approach collides with the station's own cells near the end.
+      # MEASURED at 0.3 (test_docking_sweep): "Collision detected at (3.99,
+      # 0.00)" one centimetre short of the dock, FAILED_TO_CONTROL after 4
+      # retries, in 7 of 11 approaches. 0.5 ignores poses in the last ~25 cm
+      # before the dock pose: nothing but the station can be surveyed there.
+      dock_collision_threshold: 0.5

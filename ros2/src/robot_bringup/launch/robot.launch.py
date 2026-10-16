@@ -56,7 +56,6 @@ def generate_launch_description():
     pkg = get_package_share_directory("robot_bringup")
     launch_dir = os.path.join(pkg, "launch")
     bridge_params = os.path.join(pkg, "config", "hoverboard_bridge.yaml")
-    battery_params = os.path.join(pkg, "config", "battery_manager.yaml")
 
     use_localization = LaunchConfiguration("use_localization")
     use_gps = LaunchConfiguration("use_gps")
@@ -70,6 +69,7 @@ def generate_launch_description():
     fake_mag = LaunchConfiguration("fake_mag")
     fake_battery = LaunchConfiguration("fake_battery")
     use_sim_time = LaunchConfiguration("use_sim_time")
+    battery_config = LaunchConfiguration("battery_config")
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -109,6 +109,13 @@ def generate_launch_description():
             "use_nav2", default_value="false",
             description="Run Nav2. Requires use_localization:=true AND use_gps:=true — "
                         "Nav2 plans in `map`, which only exists once navsat_transform runs.",
+        ),
+        DeclareLaunchArgument(
+            "battery_config",
+            default_value=os.path.join(pkg, "config", "battery_manager.yaml"),
+            description="battery_monitor's (and, via nav2.launch.py, the "
+                        "supervisor's) parameter file. Tests point it at a "
+                        "small-capacity copy so a pack drains in seconds.",
         ),
         DeclareLaunchArgument(
             "esp32_port", default_value="/dev/esp32",
@@ -168,7 +175,7 @@ def generate_launch_description():
             executable="battery_monitor",
             name="battery_monitor",
             output="screen",
-            parameters=[battery_params, {"use_fake_bus": fake_battery,
+            parameters=[battery_config, {"use_fake_bus": fake_battery,
                                          "use_sim_time": use_sim_time}],
             respawn=True,
             respawn_delay=2.0,
@@ -198,6 +205,7 @@ def generate_launch_description():
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(os.path.join(launch_dir, "nav2.launch.py")),
             condition=IfCondition(use_nav2),
-            launch_arguments={"use_sim_time": use_sim_time}.items(),
+            launch_arguments={"use_sim_time": use_sim_time,
+                              "battery_config": battery_config}.items(),
         ),
     ])

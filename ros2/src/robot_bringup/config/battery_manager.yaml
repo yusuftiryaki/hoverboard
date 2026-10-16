@@ -20,3 +20,29 @@ battery_monitor:
     taper_current_a: 0.3
     full_hold_s: 30.0
     init_window_s: 5.0
+
+# SP5: low battery -> cancel the mission, go home, dock, charge
+# (battery_manager/supervisor_policy.py). Launched with Nav2 (nav2.launch.py).
+battery_supervisor:
+  ros__parameters:
+    # CALIBRATE on the real pack (design doc: DÖN ~25 %, KRİTİK ~10 %). The
+    # gap between them is the energy budget for the trip home — "eve
+    # yetişemedi" is an accepted v1 risk, and this gap is where it lives.
+    return_soc: 0.25
+    critical_soc: 0.10
+    # Fallback without an INA228 (percentage NaN): per-cell volts on a slow
+    # filter, conservative on purpose. CALIBRATE.
+    return_cell_v: 3.50
+    critical_cell_v: 3.30
+    cells: 10
+    debounce_s: 3.0
+    voltage_filter_s: 30.0
+    stale_s: 5.0
+    # = nav2.yaml docking_server charging_dock.charging_threshold
+    charging_current_a: 0.5
+    charge_lost_s: 10.0
+    dock_id: home
+    dock_type: charging_dock
+    # = -staging_x_offset of nav2.yaml's charging_dock (test_docking_config).
+    staging_distance: 1.5
+    max_staging_time_s: 300.0

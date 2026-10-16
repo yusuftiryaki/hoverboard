@@ -206,7 +206,7 @@ Güç        : Powerbank → Pi/ESP32   |   Batarya → sigorta → E-stop → M
 
 ## 6. Açık uçlar / karar bekleyenler
 - [ ] Kontaktör modeli + E-stop bobin sürüş şekli (akıma göre).
-- [ ] Manyetometre alımı (QMC5883L, ~100 TL) — 6-eksen IMU'nun eksik parçası.
+- [x] ~~Manyetometre alımı~~ — GY-271 geldi (2026-10-16); çipte `5883` yazıyor (HMC değil); adres `i2cdetect` ile doğrulanacak → 0x0D.
 - [x] ~~Ultrasonik alınacak mı?~~ — **Hayır, tasarımdan çıkarıldı (2026-10-08).**
       Sonucu: yakın menzil katmanı yok; robot survey edilmemiş bir engeli ancak
       tampona değince fark eder (`handoff.md` karar 8).

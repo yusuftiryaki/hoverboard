@@ -3,7 +3,7 @@
 #
 #   unit, firmware   bare runner. Neither needs ROS, and `unit` exists to prove
 #                    exactly that.
-#   stack/nav2/gazebo  inside the image built from .devcontainer/Dockerfile —
+#   stack/nav2/gazebo/dock/sweep  inside the image built from .devcontainer/Dockerfile —
 #                    not a package list repeated here. A package that was
 #                    apt-installed by hand in someone's container and never made
 #                    it into the Dockerfile fails here instead of passing
@@ -76,7 +76,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        stage: [stack, nav2, gazebo]
+        stage: [stack, nav2, gazebo, dock, sweep]
     name: ${{ matrix.stage }}
     steps:
       - uses: actions/checkout@v7

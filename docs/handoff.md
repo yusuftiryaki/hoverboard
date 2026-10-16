@@ -22,7 +22,18 @@ riskler fizik/elektrik/RF tarafında. Ek bütçe ~2-3 bin TL.
 ## Anakartlar (kritik)
 - **Kart 1 (kullanılacak):** `TXTY150914NNC-6052MAIN_V2.1`, **STM32F103 LQFP64**.
   Yan kart: `TXTY150911NNC-6052BLB_V8.1`.
-- **Kart 2 (ertelendi):** `TSX1-6052-JYV2.0` yan kart etiketi, **GD32**.
+  *(2026-10-16, fotoğrafla)* **Sarı kasalı** hoverboard'da. Çip üstü
+  `ARM STM32 … RCT6` (F103 kısmı karalamanın altında) — GD32 değil gibi, ama
+  kesin karar `st-info --probe`. Yanındaki kartın etiketi
+  `TXTY150914NNC-6052FB_V2.1` (LQFP48 MCU + küçük QFN IMU, ayak sensörü pad'leri)
+  — yukarıdaki `BLB_V8.1` ile aynı kart değil; BLB diğer yarıda olabilir,
+  doğrulanmadı. ✅ **SWD = `J4`, ölçüldü (2026-10-16):** çipin sol üstünde 3 yuvarlak
+  pad — sol = SWCLK (bacak 49), orta = GND, sağ = SWDIO (bacak 46); 3V3 yok.
+  Tablo `bringup-checklist.md` adım 1'de. Pin 1 = çip gövdesindeki nokta
+  (sol alt); PCB'deki sol üst beyaz üçgen yanıltıcı.
+- **Kart 2 (ertelendi):** *(2026-10-16)* **gri/gümüş kasalı** hoverboard'da;
+  alt kartta `GND A B` pad'leri görüldü. Çip yanında 4 delikli pad sırası var
+  (Kart 2'nin, Kart 1'in değil — karıştırma). `TSX1-6052-JYV2.0` yan kart etiketi, **GD32**.
   Alt kartında `FLASH` ipek baskılı pad grubu + `A B` padleri var.
 - ⚠️ **Araştırma sonucu: TXTY 6052 varyantı hiçbir yerde belgelenmemiş.**
   (EFeru, RoboDurden varyant DB'si, forumlar tarandı — kayıt yok.)
@@ -307,7 +318,7 @@ Tam zincir: `/cmd_vel` → `hoverboard_bridge` → pty → `Esp32Sim` →
 ```
 docs/bringup-checklist.md   STM32 kartı flash prosedürü (multimetre doğrulama noktalarıyla)
 docs/wiring-map.md          Kaba bağlantı haritası (güç + Pi + ESP32 + MCU + sensörler)
-docs/devcontainer.md        Dev ortamı + flashing iş akışı (WSL2 usbipd vs Pi'dan flash)
+docs/devcontainer.md        Dev ortamı + USB/flashing (ST-Link container'dan, ESP32 container ya da Pi'dan)
 docs/deployment.md          Pi deployment planı (8 adım)
 docs/handoff.md             bu dosya
 firmware/esp32_bridge/      platformio.ini + src/main.cpp  (pio run ile derlenir)
@@ -317,7 +328,7 @@ ros2/src/robot_sim/         iki dünya (kinematik + Gazebo fiziği) + ground tru
 ros2/src/robot_sim/gazebo/  empty.sdf (dünya + fizik), hoverbot.sdf (model), bridge.yaml (ROS-GZ eşlemesi)
 ros2/src/qmc5883l_driver/   manyetometre sürücüsü + sahte I2C (mutlak yönün tek kaynağı)
 ros2/src/ina228_driver/     INA228 register seviyesi akım sürücüsü + sahte I2C
-ros2/src/battery_manager/   SoC tahmini + yetkili /battery yayıncısı
+ros2/src/battery_manager/   SoC tahmini + yetkili /battery yayıncısı + SP5 battery_supervisor (eve dön / dock / şarj)
 ros2/src/robot_bringup/     launch + ekf.yaml + urdf
 .devcontainer/              Dockerfile + devcontainer.json
 scripts/deploy.sh           push → Pi'da pull + colcon build
@@ -431,8 +442,8 @@ olarak yayınlıyor; montaj yönü **URDF'teki `imu_joint` rpy'ında** tarif edi
 - ROS 2 **Jazzy native** (apt), container değil.
 - Dev döngüsü: **Pi'da git pull + colcon build** (`scripts/deploy.sh`).
 - Dev makine ↔ Pi **aynı DDS ağı** (`ROS_DOMAIN_ID=42`).
-  ⚠️ **WSL2 tuzağı:** WSL2 NAT arkasında; `--network=host` YETMEZ.
-  Windows `.wslconfig` → `networkingMode=mirrored` + `wsl --shutdown` şart.
+  Dev makine **native Ubuntu** (2026-10-16'dan beri, WSL2 değil):
+  `--network=host` doğrudan LAN'da, eski WSL2 mirrored-networking adımı gereksiz.
 - ⚠️ udev ile sabit isim: `/dev/esp32`, `/dev/gps` (ikisi de USB-serial,
   numaraları kayar). Aynı çip kullanırlarsa VID:PID çakışır → farklı çip al.
 
@@ -467,6 +478,9 @@ olarak yayınlıyor; montaj yönü **URDF'teki `imu_joint` rpy'ında** tarif edi
   yaw sorunu çözüldü. Chip hâlâ alınmadı; sahte I2C'ye karşı doğrulandı.
 - ✅ **A6. Aynalı manyetometre hatası** — sim'deki tek eksi işareti; A2'yi ve
   A4'ün "kanıtını" sahte kılmıştı. Düzeltildi + tam-tur regresyon testi eklendi.
+- ✅ **SP3–SP5. İşaretçi → docking → eve dönüş** — **yazıldı, sim'de uçtan uca
+  ölçüldü (2026-10-16)**. Detay "ŞU AN NEREDEYIZ" altında. SP6 (istasyon
+  donanımı) İz B'de.
 - ✅ **SP1. Batarya izleme yazılımı** — INA228 register sürücüsü, sahte I2C,
   coulomb sayan SoC ve sensör yokken voltaj-yalnız `/battery` modu yazıldı;
   launch'ta köprü `/battery_raw`, `battery_monitor` `/battery` yayınlıyor.
@@ -529,15 +543,19 @@ olarak yayınlıyor; montaj yönü **URDF'teki `imu_joint` rpy'ında** tarif edi
   Detay "ŞU AN NEREDEYIZ" altında.
 
 ### İz B — Donanım (sıra atlanmaz)
-1. **ST-Link al → anakartı flash'la** (STM32, EFeru FOC) — **tüm izin kilidi**, en riskli adım
+1. **~~ST-Link al~~ (geldi 2026-10-16) → anakartı flash'la** (STM32, EFeru FOC) — **tüm izin kilidi**, en riskli adım
 2. **ESP32 tezgah testi** — protokol + çarpma refleksi gerçek kartla
 3. **Şasi** — en sıkıcı, en uzun
 4. **KALİBRASYON** — `cmd_per_rpm`, `steer_sign`, `invert_left/right`,
   `wheel_separation`, `battery_scale`, `BUMP_BLOCKS_POSITIVE_SPEED`,
   `shunt_ohms`, `invert_current`, `capacity_ah`; INA228 şönt yerleşimi de
-  multimetreyle doğrulanacak
+  multimetreyle doğrulanacak. Docking için: kamera iç parametreleri
+  (`camera_calibration`), `marker_size`, `external_detection_translation_x`
+  (işaretçi ↔ dock'lu base_link), `docking_threshold`, `charging_threshold`,
+  batarya eşikleri (`return_soc`/`critical_soc`, voltaj yedeği)
 5. **Gerçek teleop** — burada sürülebilir robot olur
-6. **Gerçek sensörler** — IMU montajı + `imu_joint` rpy ölçümü, GPS, mag
+6. **Gerçek sensörler** — IMU montajı + `imu_joint` rpy ölçümü, GPS, mag,
+   kamera + işaretçi (`use_camera:=true` → `/detected_dock_pose`; güneşte dene)
 7. **Sahada Nav2 + engelden kaçınma**
 
 ### İzlerin birleştiği yer: B4
@@ -627,7 +645,7 @@ kalır ve gerçek yığın her iki dünyada da devrededir.
 > `test_yaw_drifts_without_a_magnetometer` bunu kalıcı olarak belgeliyor.
 
 ## ŞU AN NEREDEYIZ / SIRADAKİ İŞ
-*(son güncelleme: 2026-10-14 — A5 koştu ve gerçek bir hata buldu; altındaki
+*(son güncelleme: 2026-10-16 — twist_mux (PR #5) ve SP3–SP5; altındaki
 "A5'ten önceki durum" sayıları 2026-09-08'den)*
 
 ### A5 (CI) — çalışıyor, ve ilk koşuda gerçek bir hata yakaladı
@@ -643,6 +661,8 @@ PR #1 (A5) birleşti; PR #2 aşağıdaki düzeltmeleri taşıyor; düzeltmeden s
 | `stack` | devcontainer imajı | build + ağır dosyalar hariç her test | ~4 dk |
 | `nav2` | devcontainer imajı | build + `test_nav2.py` | ~4 dk |
 | `gazebo` | devcontainer imajı | build + iki Gazebo dosyası | ~5 dk |
+| `dock` | devcontainer imajı | build + `test_docking.py` (SP3–SP5, 2 yığın) | ~5 dk |
+| `sweep` | devcontainer imajı | build + `test_docking_sweep.py` (11 yanaşma, 1 yığın) | ~12 dk |
 
 Bilinçli kararlar:
 - **ROS işleri Dockerfile'dan build edilen imajda koşar**, workflow'da
@@ -702,6 +722,182 @@ Bilinçli kararlar:
 - **Dev container paketleri 2026-10-14'te yükseltildi** (gz-sim 8.15.0,
   Nav2 1.3.13, robot_localization 3.8.3 rebuild). Bir sonraki rebuild zaten
   bunu getirecekti.
+
+### ✅ SP3–SP5 (2026-10-16) — düşük batarya → görevi bırak → eve dön → yanaş → şarj
+```
+/battery ─► battery_supervisor ─► cancel-all (görevler) ─► NavigateToPose(staging) ─► Spin(dock'a dön)
+                │                                        ─► DockRobot (opennav_docking, işaretçiyle)
+                └─► nav_lock (twist_mux, öncelik 50: Nav2'yi keser, teleop'u ASLA)
+kamera ─► image_proc track_marker_node ─► /detected_dock_pose ─► docking_server ─► /cmd_vel_nav ─► kapı ─► mux
+```
+Durumlar (`battery_manager/supervisor_policy.py`, ROS'suz, 34 birim testi):
+`NORMAL → RETURNING → DOCKING → CHARGING → DOCKED_IDLE`, `~/resume` ile
+`UNDOCKING → NORMAL`; KRİTİK (NORMAL/RETURNING/DOCKING/UNDOCKING'de) ve her
+adım hatası → `SAFE_STOP` (latch'li, `~/resume` açar). Durum `~/state`'te
+(latched), `/diagnostics`'te.
+
+**Ölçülen (sim, ground truth; `test_docking.py`, yeni `dock` CI aşaması):**
+gerçek istasyon (0, −3) güneye bakıyor; survey **0.3 m yanlış** (docks.yaml).
+Görev 12 m doğuya; SoC 0.30'un altına x≈5.7 m'de düştü → görev CANCELED →
+yanaşma bitti: dock'a göre **−0.032 m boyuna / +0.0007 m yanal / −2.7° yaw**,
+survey edilen konuma göre −0.30 m yanal (işaretçi düzeltti), `/battery` +2.0 A,
+`nav_lock` tutuluyor; `resume` → kilit önce kalkıyor, robot kontaklardan
+1 m+ geri çıkıyor. Karşıt yol: işaretçi görünmezse `FAILED_TO_DETECT_DOCK` →
+SAFE_STOP, robot 3 sn'de < 2 cm, **teleop yine döndürüyor**.
+
+Kararlar ve tasarım dokümanından sapmalar (gerekçeli):
+- ⚠️ **Staging'i ve dönmeyi supervisor yapıyor, DockRobot değil.** Nav2'nin
+  goal checker'ı bilerek gevşek (1.0 m, **her yön**). DockRobot'un kendi
+  staging navigasyonu aynı checker'ı kullanıyor ve robot işaretçiye sırtı
+  dönük varınca **initial perception retry'sız düşüyor** (docking_server.cpp:
+  `doInitialPerception` retry döngüsünün dışında). Supervisor: staging →
+  survey edilmiş dock'a doğru Spin → `DockRobot(navigate_to_staging_pose=false)`.
+- ⚠️ **Ölçüldü: ilk yaklaşma genelde bir kez düşüyor, retry kurtarıyor.**
+  Gevşek checker robotu staging'in ~1 m yanında bırakıyor (ölçülen:
+  (1.05, −1.06), hedef (0.3, −1.5)); graceful controller dock eksenine oturmak
+  için yana kıvrılıyor ve işaretçi 62°'lik görüşten çıkıyor ("Lost detection").
+  docking_server'ın retry'ı **tespit edilen** dock'tan staging'i hesaplayıp
+  oraya hassas gidiyor ve ikinci deneme oturuyor. ~10 sn'ye mal oluyor; daha
+  iyisi ya ayrı hassas goal checker (iki checker = her BT'de
+  `goal_checker_id` şart) ya da daha uzak staging. Şimdilik bilinçli kabul.
+- **docking_server da kapıdan geçer** (`cmd_vel` → `/cmd_vel_nav`): son
+  yaklaşmayı ekf_local'e göre sürüyor. `test_nav2`'nin rota assert'i artık üç
+  sunucuyu bekliyor — ilk yerel koşuda bu assert yeni yayıncıyı yakaladı.
+- **"Dur" = görev iptali + twist_mux kilidi**, motor yoluna yeni kapı yok
+  (tasarımdaki "yeni kapı eklemez" korunuyor; kilit mux'ın kendi mekanizması).
+  Kilit SAFE_STOP, CHARGING ve DOCKED_IDLE'da tutulur — istasyondaki robot
+  bir görev gelince kontaklardan kendini sökmeye kalkmasın diye. Teleop (100)
+  kilidin (50) üstünde: düşük bataryalı robot elle eve sürülebilir.
+- **CHARGING/DOCKED_IDLE'da KRİTİK durdurmaz** (tasarım "her durumda"
+  diyordu): %8'de şarj olan robot doğru şeyi yapıyor; SAFE_STOP hiçbir şeyi
+  iptal etmeden ERROR basardı.
+- **Şarj kaybı:** CHARGING'de paket 10 sn **DISCHARGING** ise (akım < −0.05 A)
+  SAFE_STOP "kontak/şarj aleti kayıp". Akımın şarj eşiğinin altına inmesine
+  bakılmıyor — CV kuyruğunda akım zaten 0.5 A'nın altına iner, yanlış alarm olur.
+- **SP4 INA228 ister.** Voltaj-yalnız modda `/battery` akımı NaN →
+  `SimpleChargingDock` asla "şarj oluyor" demez → `FAILED_TO_CHARGE`. Supervisor
+  ise voltaj yedeğiyle (30 sn filtre, hücre 3.50/3.30 V) yine eve döner.
+- **Voltaj yedeği yük düşüşüne karşı:** 5 sn 33 V (yokuş) / 10 sn 37.5 V
+  döngüsü 10 dk boyunca OK kalıyor; filtre 0.5 sn yapılınca aynı test 704
+  örnekte alarm veriyor (karşıt test yapıldı). Debounce 3 sn tek başına
+  yetmiyor.
+- **Bilinen boşluk:** RETURNING sırasında bir görev istemcisi yeni hedef
+  gönderirse supervisor'ın staging navigasyonunu ezer. Sadece LOW anında bir
+  kez iptal ediliyor (v1).
+- `undock`: docking_server 1.3.13 robot "dock'ta değil" derse hedefi kendisi
+  sonuçlandırmadan dönüyor; nav2_util'in SimpleActionServer'ı onu **ABORT**
+  ediyor ("Current goal was not completed successfully"). Yani kontak zaten
+  ayrılmışken `resume` → UNDOCK başarısız → SAFE_STOP; bir `resume` daha
+  NORMAL'e alır. Sim'de tetiklenmedi.
+
+- ⚠️ **CI'da bir kez `test_without_the_wall…` 0.69 m saptı** (sınır 0.5). Bag'den:
+  Nav2'nin ilk komutu yığın başladıktan **14 / 32 / 52 / 72 sn** sonra geldi
+  (testten teste); 72 sn'lik olanda robot dururken jiro'nun 0.1°/s artığı EKF'i
+  **7°** döndürmüştü → "düz çizgi" 9° yanlış yönde sürüldü. ~20 sn'lik
+  basamaklar `_await_nav2`'nin `is_active` çağrı bütçesinin (20 sn) boşa
+  yanmasına benziyor (çıkarım: fixture turlarını loglamıyordu) — eski
+  yöneticiye giden istek cevapsız kalıyor. `NAV2_CALL_S` 20 → **5 sn**. Not:
+  bu, durarak beklenen her saniyenin yaw'a mal olduğu bir yığın; Nav2 testleri
+  başlangıç süresine bu yüzden duyarlı.
+
+#### ✅ Her yönden süpürme (2026-10-16, `test_docking_sweep.py`, CI aşaması `sweep`)
+Tek yığın, istasyon (4, 0) doğuya bakıyor; robot 11 başlangıçtan
+`~/return_home` ile eve dönüyor (yeni servis: "şimdi şarja git"), sonra
+`~/resume` ile çıkıyor. 8 yön × 4 m (önü, yanları, **arkası**) + 2/8 m.
+**Sonuç: 11/11 kontakta**, dock'a göre boyuna −0.040…+0.020 m, yanal ≤ 4 mm,
+yaw ≤ 2.3°, 11–49 sn. Toplam 6 "Failed dock detection" retry'ı (ilk yaklaşma
+düşüp retry'la oturan bilinen desen). Tablo her koşuda loga basılıyor.
+
+Yolda bulunanlar (üçü de gerçekti, ikisi düzeltildi):
+1. ⚠️⚠️ **İstasyon survey haritasında değilse robot ona çarpıyor.** Karşıt
+   koşu (`dock_in_survey:=false`): istasyonun ötesindeki bir noktaya giderken
+   robot düz içinden geçti, **kendi kontaklarına oturdu**, şarj akımı görünce
+   supervisor CHARGING'e geçip kilitledi; sıkışma (A3c tuzak 3) EKF'i **3 m**
+   kaydırdı ve sonraki **6 durumun hepsi** düştü. Artık sim istasyonu haritaya
+   çiziyor (docks.yaml'daki **survey** pozunda; fizik gerçek pozda), gövde
+   0.30 m çapında (tahmin, SP6). ⚠️ **Gerçek robotta `/obstacle_map`'i
+   yayınlayan bir şey henüz yok** — survey haritası kurulurken istasyon
+   içine girmeli (docks.yaml başlığında yazılı).
+2. **İstasyon haritaya girince yanaşma denetleyicisi onu engel saydı:**
+   "Collision detected at (3.99, 0.00)" — dock'a 1 cm kala, 11'den 7'sinde
+   FAILED_TO_CONTROL. Robot yanaşmayı istasyona **değerek** bitiriyor;
+   `dock_collision_threshold` 0.3 → **0.5** (son ~25 cm'de sadece istasyon
+   olabilir).
+3. **Supervisor action sunucusunu keşfetmeden vazgeçiyordu:** Nav2 kalkar
+   kalkmaz gelen ilk `return_home` 1 sn'de "navigate_to_pose server not
+   available" ile SAFE_STOP. Artık sunucuyu 10 sn bekliyor; iptal servisleri
+   de 3 sn (keşfedilmemiş ama çalışan bir görev atlanmasın diye).
+
+⚠️ **Jiro sapması (manyetometresiz yığın) bu testte KAPALI**, bilerek:
+açıkken EKF 5. yanaşmada **24° / 1.7 m** kaymıştı. **Yanaşmalar yine de
+oturdu** (işaretçi göreli ölçüm), ama 6. başlangıca giderken robot 18° dönük
+bir haritayla sürdü ve gerçek istasyona çarptı. Bu bir lokalizasyon bulgusu
+(sahada ekf_global + mag var), yanaşma geometrisi değil.
+
+⚠️ **Süpürmenin kanıtlamadığı, sahada asıl risk:** bu yığında map = odom
+(sabit). Gerçek robotta staging `map`'te ve GPS 2.5–5 m geziniyor; robot
+staging'e metrelerce hatayla varır, "dock'a dön" açısı da o hatayla hesaplanır.
+Staging'den işaretçi ~±1 m yanal hatayı tolere ediyor. Yani **GPS hatası
+yanaşmanın başlamasını bozabilir** — ölçülmedi. Aday çözümler: istasyon
+yakınında odom'a geçmek / işaretçiyi aramak için dönerek tarama / daha uzak
+staging. Sıradaki iş adayı.
+
+⚠️ **Nav2 açılışı bazen sonsuza kadar asılıyor — sebep bulundu.** Bir yığında
+`lifecycle_manager` "Configuring controller_server"da kaldı; controller_server
+logu: `failed to send response to /controller_server/change_state (timeout):
+client will not receive response` (rmw_fastrtps). nav2_util'in
+`change_state(transition)`'ı **zaman aşımı olmadan** bekliyor → cevap
+düşerse yönetici sonsuza kadar bekler. A3e notundaki "nav2 koşusu 3 saat asılı
+kaldı" büyük ihtimalle bu. Aynı gün CI'da da (#7, `nav2` aşaması) aynı satırla
+patladı. **Test tarafı:** `Nav2Stack` ilk denemeye 75 sn veriyor, aktifleşmezse
+Nav2 launch'ını öldürüp **bir kez** yeniden başlatıyor ve pytest uyarısı
+basıyor (yol, eşik 1 sn'ye indirilerek denendi: uyarı + test geçti).
+✅ **Robot tarafı: `nav2_watchdog` (2026-10-16).** `nav2.launch.py`'de koşuyor
+(autostart açıkken), `is_active`'i 2 sn'de bir soruyor; Nav2 **120 sn** aktif
+değilse (açılışta ya da sonradan) çıkış kodu **3** ile çıkıyor →
+launch'ın çıkış işleyicisi **Shutdown** → `ros2 launch` biter → systemd yeniden
+başlatır. Kararlar:
+- ⚠️ **`ros2 launch` Shutdown'dan sonra 0 ile çıkıyor (ölçüldü)** →
+  `robot.service` artık **`Restart=always`** (on-failure robotu kapalı
+  bırakırdı). deployment.md adım 8.
+- Sadece kod 3 kapatır: izleyicinin kendi çökmesi (kod 1) çalışan robotu
+  düşürmez, loglanır. Karşıt test: kod uyuşmayınca launch 90 sn sonra hâlâ
+  ayaktaydı.
+- Bütün yığın yeniden başlar (köprü, EKF dahil): Nav2 zaten sürmüyordu, köprü
+  düşünce ESP32 watchdog'u tekerleği durdurur. IMU açılış kalibrasyonu yine
+  robotun durgun olmasını ister — Nav2 asıldığında robot zaten duruyor.
+- Testler: `BringupWatch` (ROS'suz, 8) + `test_nav2_watchdog.py` (stack, ~20 sn):
+  cevapsız yönetici → kod 3; TF'siz (aktifleşemeyen) Nav2 + 4 sn eşik →
+  launch kendiliğinden kapanıyor, geride Nav2 süreci kalmıyor. Sağlıklı durum:
+  her Nav2 yığını izleyiciyle dakikalarca koşuyor, hiçbiri kapanmadı.
+- Sınır: **runtime'da** da (aktifken bir sunucu çökerse) 120 sn sonra
+  tüm robotu yeniden başlatır. Bilerek: aktif olmayan Nav2'yle robot zaten
+  otonom değil.
+
+Sim parçaları (`robot_sim`, ROS'suz, elle hesaplanmış testlerle — karar 10):
+- `battery_model.py`: 10S paket, **kendi** OCV tablosu (tahmincininkiyle
+  kasten aynı değil), iç direnç, CC/CV şarj aleti. Gerilim → `Esp32Sim.bat_voltage`
+  → protokol → köprü; akım → `/sim/battery_current` → battery_monitor'ün sahte
+  INA228'i. Yani sürücü + tahminci döngüde.
+- `dock_model.py`: istasyon gövdesi (survey edilmemiş engel: dock'u 2 cm
+  geçemez), kontak penceresi (6 cm yol / 6 cm yanal / 0.25 rad), işaretçi
+  tespiti **track_marker_node'un konvansiyonunda** (optik çerçeve, aruco
+  ekseni). Kamera montajı tf'ten okunuyor (URDF tek kaynak). Yön testleri tam
+  tur süpürülüyor (karar 11). Gerçek montajla işaretçi dock'a kadar görüşte
+  kalıyor (test var).
+- `/dock_contact_truth` bir **kâhin** (`/collision_truth` gibi): yığın okumaz.
+- ✅ **Sahte işaretçi = gerçek algılayıcı, karşılaştırıldı** (`test_marker_convention.py`,
+  stack, ~10 sn): **gerçek** `track_marker_node`'a **elle** çizilmiş (fizikten:
+  dik duran etiket, yüzü 0/±30° döndürülmüş, pinhole izdüşümü) bir 36h11 resmi
+  veriliyor; cevabı `dock_model`'in aynı sahne için söylediğiyle 1 cm / 3° içinde.
+  Karşıt test: beklenen tarafta yaw işareti ters çevrilince iki eğik durum
+  **60.7°** ile patlıyor. Yani nav2.yaml'ın `external_detection_*` değerleri
+  sim'e değil gerçek algılayıcının konvansiyonuna ayarlı (A6 dersi).
+
+⚠️ Sim'in kanıtlamadıkları: kontak mekaniği, oksit, gerçek şarj eğrisi,
+güneşte AprilTag tespiti (track_marker_node hiç piksel görmüyor), INA228
+doğruluğu, Pi'da libcamera. Kamera kalibre edilmeden (`camera_info` K/D sıfır)
+tespit edilen her poz **kendinden emin bir çöp**.
 
 ### ✅ twist_mux (2026-10-16) — teleop, Nav2'den önce gelir
 ```
@@ -833,7 +1029,11 @@ Sıradaki iş seçenekleri (2026-10-15 itibarıyla):
   (2026-10-15)**, yukarıda.
 - ✅ ~~**`twist_mux`**~~ — **yapıldı (2026-10-16)**, aşağıda.
 - **Sıkışma tespiti** — A3c tuzak 3; donanıma bağlı (GPS, INA228, tampon).
-- **SP3 → SP5** — batarya/docking zinciri; SP1'in ölçüm katmanı hazır.
+- ✅ ~~**SP3 → SP5**~~ — **yapıldı (2026-10-16)**, aşağıda.
+- **SP6** — istasyon donanımı (kontaklar, pilot devresi + röle, V-huni,
+  işaretçi montajı) + `docs/charging-station.md`. Sim'in istasyon ölçüleri
+  (`robot_sim/dock_model.py`) tasarım değeri; SP6 başka yaparsa ikisi birlikte
+  değişir (`test_docking_config`).
 
 ### ✅ A4 (manyetometre) yazıldı — yaw sorunu ÇÖZÜLDÜ, ölçüldü
 `qmc5883l_driver` + `imu_filter_madgwick` devrede. Zincir:
@@ -954,7 +1154,7 @@ python3 -m pytest src/battery_manager/test -q     # 11 (~27 sn)
 # hepsi: 143 test, ~10.6 dk
 
 # ya da CI'ın koştuğu haliyle (build + overlay source + skip'i hata sayar):
-../scripts/ci.sh stack nav2 gazebo
+../scripts/ci.sh stack nav2 gazebo dock sweep
 
 # Yığın kaldırmayan hızlı süzgeç (saniyeler). test_gazebo_config.py bunun
 # içinde ve A3'ün asıl hatasını — köprünün hiçbir şeye bağlı olmaması — tam
@@ -1032,12 +1232,20 @@ Artık repodalar.
 
 ## Bilinen blokerler / bekleyen alımlar
 **Güncel alım listesi ve gerekçeleri: `docs/purchase-list.md`** (2026-10-08).
-- **ST-Link V2 klon** — adım 1 için şart, henüz alınmadı
-- **Magnetometer QMC5883L** — listedeki en yüksek getirili harcama. ⚠️ GY-271
-  kartı HMC5883L ile de satılıyor; sürücümüz 0x0D'deki QMC'yi bekler.
+- ✅ **ST-Link V2 klon** — **geldi (2026-10-16)**, mor alüminyum kasa. Kasa
+  yazısı: 1 RST, 2 SWDIO, 3/4 GND, 5 SWIM, 6 SWCLK, 7/8 3.3V, 9/10 5.0V.
+  Klon yazısına güvenilmez → bağlamadan önce GND'yi USB gövdesine süreklilikle
+  doğrula. **B1'in alım blokeri kalktı**; sırada multimetreyle SWD pad'leri.
+- ✅ **Magnetometer GY-271** — **geldi (2026-10-16)**, çip üstü `5883`
+  → HMC5883L **değil** (o `L883` yazar). Kesin kimlik yine `i2cdetect -y 1`:
+  **0x0D** = QMC5883L ✓. Aynı aileden 0x2C (QMC5883P) ya da 0x0C (VCM5883L)
+  çıkarsa yazmaçlar farklı, sürücümüz çalışmaz.
 - ❌ Buck — tasarımdan çıktı (karar 13); Pi powerbank'ten beslenir.
   Powerbank (5V ≥3A) elde yoksa alınacak.
-- **FT232RL USB-TTL** — GPS için, ESP32'nin çipinden farklı olsun diye
+- ✅ **FT232RL USB-TTL** — **geldi (2026-10-16)**, kırmızı mini-USB modül,
+  VCCIO jumper'lı. NEO-6M'e bağlamadan önce jumper **3.3V**'ta olmalı.
+  Takınca `lsusb`'de `0403:6001` görünmeli (udev kuralı buna göre,
+  `deployment.md` adım 4); çip klon çıkabilir, Linux'ta sorun değil.
 - ✅ INA228 — **elde**, üzerinde 2 mΩ şönt; harici şönt gerekmiyor
 - ✅ Sigorta — **elde**, 20 A / 60 V, yuvalı (plan 30–40 A diyordu; firmware
   akım limitleri buna göre ayarlanacak, `bringup-checklist.md` adım 3)
@@ -1048,11 +1256,12 @@ Artık repodalar.
 - Caster ×2 (125-150 mm kauçuk) — hırdavatçı işi, elektronikçide yok
 - ✅ ~~`ros-jazzy-nmea-navsat-driver` Jazzy apt'de olmayabilir~~ — **VAR**
   (2.0.1-3noble, apt'te doğrulandı). Bloker değil.
-- `camera_ros` apt'te **var** (0.6.0-1noble) ama Dockerfile'a eklenmedi
-  (`sensors.launch.py` `use_camera:=true` ile onu çağırıyor) — kamera işine
-  gelince Dockerfile'a ekle, engel yok.
+- ✅ ~~`camera_ros` Dockerfile'a eklenmedi~~ — **eklendi (2026-10-16, SP3)**,
+  `image_proc` ile birlikte (0.7.0 / 5.0.13). ⚠️ Pi'da Ubuntu'nun libcamera'sı
+  Pi Camera V2'yi (IMX219) tanıyor mu **doğrulanmadı** — tanımazsa
+  raspberrypi/libcamera fork'u gerekir. İlk kamera işinde bak.
 - Gazebo: `ros-jazzy-ros-gz` 1.0.22 apt'te **var** → A3 için engel yok.
-  Makine: 4 çekirdek / 7 GB RAM (WSL2) — fizik simülasyonu koşar ama hızlı değil.
+  Makine: 8 çekirdek / 7 GB RAM (native Ubuntu; 2026-10-16'dan önce WSL2'ydi, 4 çekirdek) — fizik simülasyonu koşar ama hızlı değil.
 - ✅ ~~**Devcontainer rebuild bekliyor.**~~ — **yapıldı, doğrulandı (2026-07-17)**:
   `sudo -n true` ✓, `import smbus2` ✓, `imu_filter_madgwick` ✓ (/opt/ros/jazzy).
   İmajdakiler: `python3-smbus2` (IMU sürücüsü), **parolasız sudo**

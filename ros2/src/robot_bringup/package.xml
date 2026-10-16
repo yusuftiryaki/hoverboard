@@ -26,12 +26,18 @@
   <exec_depend>tf2_ros</exec_depend>
   <!-- The one publisher of /cmd_vel: teleop above Nav2 (config/twist_mux.yaml). -->
   <exec_depend>twist_mux</exec_depend>
+  <!-- SP4: the final approach onto the charging contacts. -->
+  <exec_depend>opennav_docking</exec_depend>
+  <exec_depend>battery_manager</exec_depend>
 
   <!-- Sensor drivers. Not hard deps: each is behind a launch argument so the
        stack still comes up while the hardware is still in a box.
        nmea_navsat_driver may be missing from the Jazzy apt repo — see the note
        in docs/handoff.md. -->
   <exec_depend>teleop_twist_keyboard</exec_depend>
+  <!-- SP3: Pi Camera V2 + marker detection (use_camera:=true). -->
+  <exec_depend>camera_ros</exec_depend>
+  <exec_depend>image_proc</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

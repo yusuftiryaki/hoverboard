@@ -170,7 +170,10 @@ ExecStartPre=/bin/sleep 5
 ExecStart=/bin/bash -lc 'source /opt/ros/jazzy/setup.bash && \
   source /home/enes/howerboard/ros2/install/setup.bash && \
   ros2 launch robot_bringup robot.launch.py'
-Restart=on-failure
+# ⚠️ always, NOT on-failure: nav2_watchdog shuts the launch down when Nav2
+# hangs in bring-up, and `ros2 launch` then exits 0 (measured) — on-failure
+# would leave the robot off. `systemctl stop` still stops it for good.
+Restart=always
 RestartSec=3
 
 [Install]
@@ -180,6 +183,13 @@ WantedBy=multi-user.target
 sudo systemctl enable --now robot.service
 journalctl -u robot.service -f    # logları izle
 ```
+> **Nav2 açılış izleyicisi (`nav2_watchdog`):** Nav2 1.3.13'ün lifecycle
+> manager'ı bir `change_state` cevabı düşerse **sonsuza kadar** bekliyor (Nav2
+> hiç aktifleşmez, hiçbir şey hata vermez). İzleyici Nav2 120 sn aktif olmazsa
+> (açılışta ya da sonradan) launch'ı kapatır, systemd 3 sn sonra her şeyi
+> yeniden kaldırır. `journalctl -u robot.service`'te "nav2_watchdog gave up on
+> Nav2" satırı bunun olduğunu söyler; süre `watchdog_timeout:=<sn>`.
+
 > Geliştirme sırasında bunu **kapalı** tut (`systemctl stop`), yoksa senin elle
 > başlattığın düğümlerle çakışır. Sadece "aç-çalış" saha modu için.
 

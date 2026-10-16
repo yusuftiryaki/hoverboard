@@ -200,11 +200,15 @@ def navigator(ros):
 
 
 VELOCITY_TOPICS = ("/cmd_vel_nav", "/cmd_vel_nav_gated", "/cmd_vel")
+# Every Nav2 server that drives the wheels. docking_server (SP4) steers the
+# final approach on ekf_local exactly like the controller does, so it is gated
+# exactly like it.
+NAV2_VELOCITY_SERVERS = ["behavior_server", "controller_server", "docking_server"]
 
 
 def velocity_routing(node, timeout=15.0):
     """{topic: sorted publisher node NAMES} for the velocity topics, read once
-    both Nav2 servers have been discovered on /cmd_vel_nav and twist_mux on
+    the three Nav2 servers have been discovered on /cmd_vel_nav and twist_mux on
     /cmd_vel (or timeout). A set: behavior_server opens one publisher per
     behavior plugin (spin, backup, drive_on_heading, wait), so it appears
     four times."""
@@ -213,7 +217,7 @@ def velocity_routing(node, timeout=15.0):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         rclpy.spin_once(node, timeout_sec=0.2)
-        if ({"controller_server", "behavior_server"} <= set(publishers("/cmd_vel_nav"))
+        if (set(NAV2_VELOCITY_SERVERS) <= set(publishers("/cmd_vel_nav"))
                 and publishers("/cmd_vel")):
             break
     return {topic: publishers(topic) for topic in VELOCITY_TOPICS}
@@ -225,12 +229,12 @@ def test_nav2_drives_the_robot_to_a_goal(nav2_stack, navigator):
     assert navigator.truth is not None, "no /ground_truth — is sim_node up?"
 
     # ⚠️ Nav2 must reach the wheels ONLY through nav_cmd_gate (nav2.launch.py
-    # remaps both servers), and the gate only through twist_mux. Drop any one
+    # remaps all three servers), and the gate only through twist_mux. Drop any one
     # remap and every other test here still passes — the robot drives fine,
     # just ungated, or racing teleop again — so this is the check.
     routing = velocity_routing(navigator)
     assert routing == {
-        "/cmd_vel_nav": ["behavior_server", "controller_server"],
+        "/cmd_vel_nav": NAV2_VELOCITY_SERVERS,
         "/cmd_vel_nav_gated": ["nav_cmd_gate"],
         "/cmd_vel": ["twist_mux"],
     }, f"Nav2 velocity commands bypass the localization gate or the mux: {routing}"

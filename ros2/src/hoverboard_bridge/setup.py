@@ -22,6 +22,7 @@ setup(
             "hoverboard_bridge = hoverboard_bridge.bridge_node:main",
             "fake_esp32 = hoverboard_bridge.fake_esp32:main",
             "nav_cmd_gate = hoverboard_bridge.nav_cmd_gate:main",
+            "nav2_watchdog = hoverboard_bridge.nav2_watchdog:main",
         ],
     },
 )
