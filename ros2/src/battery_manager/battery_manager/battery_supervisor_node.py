@@ -15,6 +15,9 @@ and publishes:
 
     nav_lock (std_msgs/Bool, 2 Hz)   twist_mux lock above Nav2, below teleop
     ~/state  (std_msgs/String, latched) the Phase, for people and tests
+
+and serves ~/return_home (go and charge now) and ~/resume (carry on: undock
+from the dock, or clear a SAFE_STOP), both std_srvs/Trigger.
     /diagnostics
 
 ⚠️ Why it stages and turns by itself instead of letting DockRobot navigate:
@@ -57,6 +60,7 @@ MISSION_ACTIONS = ("follow_gps_waypoints", "follow_waypoints",
                    "navigate_through_poses", "navigate_to_pose")
 OWN_ACTIONS = ("spin", "dock_robot", "undock_robot")
 CANCEL_WAIT_S = 3.0
+SERVER_WAIT_S = 10.0
 # Under this the robot already faces the dock well enough.
 FACE_TOLERANCE_RAD = 0.10
 
@@ -117,6 +121,7 @@ class BatterySupervisor(Node):
         self._diag_pub = self.create_publisher(DiagnosticArray, "/diagnostics", 10)
         self.create_subscription(BatteryState, "battery", self._on_battery, 10)
         self.create_service(Trigger, "~/resume", self._on_resume)
+        self.create_service(Trigger, "~/return_home", self._on_return_home)
         self.create_timer(0.5, self._tick)
         self.create_timer(1.0, self._diag_tick)
         self._publish_state()
@@ -142,6 +147,12 @@ class BatterySupervisor(Node):
         response.success, response.message = accepted, message
         return response
 
+    def _on_return_home(self, _request, response):
+        accepted, message, steps = self._sup.return_home()
+        self._run(steps)
+        response.success, response.message = accepted, message
+        return response
+
     def _now(self) -> float:
         return self.get_clock().now().nanoseconds * 1e-9
 
@@ -159,25 +170,28 @@ class BatterySupervisor(Node):
         self._run(self._sup.on_result(step, ok, detail))
 
     def _cancel_all_goals(self, names, on_done=None) -> None:
-        """Cancel-all (zero goal id, zero stamp) on each action that is up."""
+        """Cancel-all (zero goal id, zero stamp) on each action, waiting up to
+        CANCEL_WAIT_S for its service to be discovered. An action nobody runs
+        (no GPS waypoint follower, say) just times out; one that IS running but
+        was not yet discovered must not be skipped — that is a mission left
+        driving while the robot is supposed to be going home."""
+        pending = list(names)
         futures = []
-        for name in names:
-            client = self._cancel[name]
-            if client.service_is_ready():
-                futures.append(client.call_async(CancelGoal.Request()))
-        if on_done is None:
-            return
-        if not futures:
-            on_done(True)
-            return
         deadline = self._now() + CANCEL_WAIT_S
 
         def poll():
-            if all(f.done() for f in futures) or self._now() > deadline:
+            for name in list(pending):
+                if self._cancel[name].service_is_ready():
+                    futures.append(self._cancel[name].call_async(CancelGoal.Request()))
+                    pending.remove(name)
+            answered = all(f.done() for f in futures)
+            if (not pending and answered) or self._now() > deadline:
                 timer.cancel()
                 self.destroy_timer(timer)
-                on_done(all(f.done() for f in futures))
+                if on_done is not None:
+                    on_done(answered)
         timer = self.create_timer(0.1, poll)
+        poll()
 
     def _do_cancel_missions(self) -> None:
         self._cancel_all_goals(MISSION_ACTIONS,
@@ -244,9 +258,15 @@ class BatterySupervisor(Node):
                                       f"undock status {status}"))
 
     def _send(self, client: ActionClient, goal, step: Step, judge) -> None:
-        if not client.server_is_ready():
-            self._report(step, False, f"{client._action_name} server not available")
-            return
+        """Send once the server is discovered (up to SERVER_WAIT_S), then
+        report the outcome as `step`'s result.
+
+        ⚠️ Waiting matters. MEASURED: called right after Nav2 came up, the
+        first return_home failed in 1 s with "navigate_to_pose server not
+        available" — the server was active, this client had simply not
+        discovered it yet — and a robot that should have gone home locked
+        itself in SAFE_STOP instead."""
+        deadline = self._now() + SERVER_WAIT_S
 
         def accepted(future):
             handle = future.result()
@@ -260,7 +280,23 @@ class BatterySupervisor(Node):
             ok, detail = judge(response.result, response.status)
             self._report(step, ok, detail)
 
-        client.send_goal_async(goal).add_done_callback(accepted)
+        def poll():
+            if self._sup.pending != step:          # superseded (SAFE_STOP) while waiting
+                stop()
+                return
+            if client.server_is_ready():
+                stop()
+                client.send_goal_async(goal).add_done_callback(accepted)
+            elif self._now() > deadline:
+                stop()
+                self._report(step, False, f"{client._action_name} server not available "
+                                          f"after {SERVER_WAIT_S:g} s")
+
+        def stop():
+            timer.cancel()
+            self.destroy_timer(timer)
+        timer = self.create_timer(0.1, poll)
+        poll()
 
     # ---- outputs ----------------------------------------------------------------
     def _publish_state(self) -> None:

@@ -383,4 +383,11 @@ docking_server:
       transform_tolerance: 0.2
       projection_time: 3.0
       simulation_time_step: 0.1
-      dock_collision_threshold: 0.3
+      # ⚠️ 0.5, not Nav2's 0.3. The station is on the survey map (it has to
+      # be: docks.yaml), and docking ENDS with the robot touching it — so the
+      # projected approach collides with the station's own cells near the end.
+      # MEASURED at 0.3 (test_docking_sweep): "Collision detected at (3.99,
+      # 0.00)" one centimetre short of the dock, FAILED_TO_CONTROL after 4
+      # retries, in 7 of 11 approaches. 0.5 ignores poses in the last ~25 cm
+      # before the dock pose: nothing but the station can be surveyed there.
+      dock_collision_threshold: 0.5

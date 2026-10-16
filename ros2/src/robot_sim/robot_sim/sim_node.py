@@ -137,6 +137,13 @@ class SimNode(Node):
         # false = the marker is there but the camera never decodes it (dirt,
         # glare, night): the failure path the design names.
         self.declare_parameter("dock_tag_visible", True)
+        # The station is a fixed structure, so it belongs on the survey map
+        # like any surveyed obstacle — drawn where the SURVEY says it is
+        # (docks.yaml's pose; unset = surveyed exactly), while the physics puts
+        # it at dock_pose. false = nobody mapped it: measured, a robot coming
+        # from behind then drives into it (test_docking_sweep.py).
+        self.declare_parameter("dock_in_survey", True)
+        self.declare_parameter("dock_surveyed_pose", Parameter.Type.DOUBLE_ARRAY)
         # What image_proc's track_marker_node manages on a Pi 4 at 640x480.
         self.declare_parameter("dock_detection_rate_hz", 15.0)
         # Position noise grows with range (pixels per metre shrink); the angle
@@ -205,14 +212,22 @@ class SimNode(Node):
         )
         dock = self._unset_as_empty("dock_pose")
         self._station = None
+        # Drawn on the published map, never collided with: the survey's idea
+        # of an obstacle whose physical twin lives in _unsurveyed.
+        self._map_only = ()
         if dock:
             if len(dock) != 3:
                 raise ValueError(f"dock_pose must be [x, y, yaw], got {dock}")
             self._station = DockStation(*dock)
-            # The station body is physically there and on nobody's survey:
-            # it stops a robot that drives in too far (dock_model.py).
+            robot_radius = p("robot_radius").value
+            # The body physically stops a robot that drives in too far.
             self._unsurveyed = self._unsurveyed + (
-                self._station.stop_obstacle(p("robot_radius").value),)
+                self._station.stop_obstacle(robot_radius),)
+            if p("dock_in_survey").value:
+                surveyed = self._unset_as_empty("dock_surveyed_pose") or dock
+                if len(surveyed) != 3:
+                    raise ValueError(f"dock_surveyed_pose must be [x, y, yaw], got {surveyed}")
+                self._map_only = (DockStation(*surveyed).stop_obstacle(robot_radius),)
         if p("backend").value == "gazebo":
             if p("slip_factor").value:
                 # Slip is what this backend is FOR — it comes out of friction,
@@ -380,7 +395,7 @@ class SimNode(Node):
         message.info.origin.position.x = spec.origin_x
         message.info.origin.position.y = spec.origin_y
         message.info.origin.orientation.w = 1.0
-        message.data = build_obstacle_grid(self._obstacles, spec)
+        message.data = build_obstacle_grid(self._obstacles + self._map_only, spec)
         self._obstacle_map_pub.publish(message)
 
     def _tick(self) -> None:

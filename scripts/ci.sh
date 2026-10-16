@@ -6,13 +6,14 @@
 #
 #   unit      every package's tests with NO ROS on the path        (seconds)
 #   firmware  pio run                                              (~1 min)
-#   stack     colcon build + every test except the three below     (~4 min)
+#   stack     colcon build + every test except the four below      (~4 min)
 #   nav2      colcon build + the Nav2 stacks                       (~4 min)
 #   gazebo    colcon build + the Gazebo physics worlds             (~5 min)
 #   dock      colcon build + battery -> return -> dock stacks      (~5 min)
+#   sweep     colcon build + docking from every side, one stack    (~12 min)
 #   all       the lot, in that order
 #
-# stack + nav2 + gazebo + dock together are the whole suite: `stack` is defined as
+# stack + nav2 + gazebo + dock + sweep together are the whole suite: `stack` is defined as
 # "everything that is not in HEAVY", so a new test file lands there by default
 # and cannot fall between the jobs.
 
@@ -26,7 +27,8 @@ NAV2_TESTS=(src/robot_sim/test/test_nav2.py)
 GAZEBO_TESTS=(src/robot_sim/test/test_gazebo_physics.py
               src/robot_sim/test/test_gazebo_localization.py)
 DOCK_TESTS=(src/robot_sim/test/test_docking.py)
-HEAVY=("${NAV2_TESTS[@]}" "${GAZEBO_TESTS[@]}" "${DOCK_TESTS[@]}")
+SWEEP_TESTS=(src/robot_sim/test/test_docking_sweep.py)
+HEAVY=("${NAV2_TESTS[@]}" "${GAZEBO_TESTS[@]}" "${DOCK_TESTS[@]}" "${SWEEP_TESTS[@]}")
 
 packages_with_tests() {
   local dir
@@ -184,12 +186,21 @@ stage_dock() {
   run_tests dock "${DOCK_TESTS[@]}"
 }
 
-[[ $# -gt 0 ]] || { sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2; }
+stage_sweep() {
+  build_workspace
+  start_recorder sweep
+  echo ">> sweep"
+  # -s: the sweep's table is the result worth reading, pass or fail.
+  run_tests sweep -s "${SWEEP_TESTS[@]}"
+}
+
+[[ $# -gt 0 ]] || { sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2; }
 
 for stage in "$@"; do
   case "${stage}" in
-    unit|firmware|stack|nav2|gazebo|dock) "stage_${stage}" ;;
-    all) stage_unit; stage_firmware; stage_stack; stage_nav2; stage_gazebo; stage_dock ;;
+    unit|firmware|stack|nav2|gazebo|dock|sweep) "stage_${stage}" ;;
+    all) stage_unit; stage_firmware; stage_stack; stage_nav2; stage_gazebo; stage_dock
+         stage_sweep ;;
     *) echo "unknown stage: ${stage}" >&2; exit 2 ;;
   esac
 done

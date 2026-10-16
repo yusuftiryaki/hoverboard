@@ -22,7 +22,18 @@ riskler fizik/elektrik/RF tarafında. Ek bütçe ~2-3 bin TL.
 ## Anakartlar (kritik)
 - **Kart 1 (kullanılacak):** `TXTY150914NNC-6052MAIN_V2.1`, **STM32F103 LQFP64**.
   Yan kart: `TXTY150911NNC-6052BLB_V8.1`.
-- **Kart 2 (ertelendi):** `TSX1-6052-JYV2.0` yan kart etiketi, **GD32**.
+  *(2026-10-16, fotoğrafla)* **Sarı kasalı** hoverboard'da. Çip üstü
+  `ARM STM32 … RCT6` (F103 kısmı karalamanın altında) — GD32 değil gibi, ama
+  kesin karar `st-info --probe`. Yanındaki kartın etiketi
+  `TXTY150914NNC-6052FB_V2.1` (LQFP48 MCU + küçük QFN IMU, ayak sensörü pad'leri)
+  — yukarıdaki `BLB_V8.1` ile aynı kart değil; BLB diğer yarıda olabilir,
+  doğrulanmadı. ✅ **SWD = `J4`, ölçüldü (2026-10-16):** çipin sol üstünde 3 yuvarlak
+  pad — sol = SWCLK (bacak 49), orta = GND, sağ = SWDIO (bacak 46); 3V3 yok.
+  Tablo `bringup-checklist.md` adım 1'de. Pin 1 = çip gövdesindeki nokta
+  (sol alt); PCB'deki sol üst beyaz üçgen yanıltıcı.
+- **Kart 2 (ertelendi):** *(2026-10-16)* **gri/gümüş kasalı** hoverboard'da;
+  alt kartta `GND A B` pad'leri görüldü. Çip yanında 4 delikli pad sırası var
+  (Kart 2'nin, Kart 1'in değil — karıştırma). `TSX1-6052-JYV2.0` yan kart etiketi, **GD32**.
   Alt kartında `FLASH` ipek baskılı pad grubu + `A B` padleri var.
 - ⚠️ **Araştırma sonucu: TXTY 6052 varyantı hiçbir yerde belgelenmemiş.**
   (EFeru, RoboDurden varyant DB'si, forumlar tarandı — kayıt yok.)
@@ -651,6 +662,7 @@ PR #1 (A5) birleşti; PR #2 aşağıdaki düzeltmeleri taşıyor; düzeltmeden s
 | `nav2` | devcontainer imajı | build + `test_nav2.py` | ~4 dk |
 | `gazebo` | devcontainer imajı | build + iki Gazebo dosyası | ~5 dk |
 | `dock` | devcontainer imajı | build + `test_docking.py` (SP3–SP5, 2 yığın) | ~5 dk |
+| `sweep` | devcontainer imajı | build + `test_docking_sweep.py` (11 yanaşma, 1 yığın) | ~12 dk |
 
 Bilinçli kararlar:
 - **ROS işleri Dockerfile'dan build edilen imajda koşar**, workflow'da
@@ -787,6 +799,58 @@ Kararlar ve tasarım dokümanından sapmalar (gerekçeli):
   yöneticiye giden istek cevapsız kalıyor. `NAV2_CALL_S` 20 → **5 sn**. Not:
   bu, durarak beklenen her saniyenin yaw'a mal olduğu bir yığın; Nav2 testleri
   başlangıç süresine bu yüzden duyarlı.
+
+#### ✅ Her yönden süpürme (2026-10-16, `test_docking_sweep.py`, CI aşaması `sweep`)
+Tek yığın, istasyon (4, 0) doğuya bakıyor; robot 11 başlangıçtan
+`~/return_home` ile eve dönüyor (yeni servis: "şimdi şarja git"), sonra
+`~/resume` ile çıkıyor. 8 yön × 4 m (önü, yanları, **arkası**) + 2/8 m.
+**Sonuç: 11/11 kontakta**, dock'a göre boyuna −0.040…+0.020 m, yanal ≤ 4 mm,
+yaw ≤ 2.3°, 11–49 sn. Toplam 6 "Failed dock detection" retry'ı (ilk yaklaşma
+düşüp retry'la oturan bilinen desen). Tablo her koşuda loga basılıyor.
+
+Yolda bulunanlar (üçü de gerçekti, ikisi düzeltildi):
+1. ⚠️⚠️ **İstasyon survey haritasında değilse robot ona çarpıyor.** Karşıt
+   koşu (`dock_in_survey:=false`): istasyonun ötesindeki bir noktaya giderken
+   robot düz içinden geçti, **kendi kontaklarına oturdu**, şarj akımı görünce
+   supervisor CHARGING'e geçip kilitledi; sıkışma (A3c tuzak 3) EKF'i **3 m**
+   kaydırdı ve sonraki **6 durumun hepsi** düştü. Artık sim istasyonu haritaya
+   çiziyor (docks.yaml'daki **survey** pozunda; fizik gerçek pozda), gövde
+   0.30 m çapında (tahmin, SP6). ⚠️ **Gerçek robotta `/obstacle_map`'i
+   yayınlayan bir şey henüz yok** — survey haritası kurulurken istasyon
+   içine girmeli (docks.yaml başlığında yazılı).
+2. **İstasyon haritaya girince yanaşma denetleyicisi onu engel saydı:**
+   "Collision detected at (3.99, 0.00)" — dock'a 1 cm kala, 11'den 7'sinde
+   FAILED_TO_CONTROL. Robot yanaşmayı istasyona **değerek** bitiriyor;
+   `dock_collision_threshold` 0.3 → **0.5** (son ~25 cm'de sadece istasyon
+   olabilir).
+3. **Supervisor action sunucusunu keşfetmeden vazgeçiyordu:** Nav2 kalkar
+   kalkmaz gelen ilk `return_home` 1 sn'de "navigate_to_pose server not
+   available" ile SAFE_STOP. Artık sunucuyu 10 sn bekliyor; iptal servisleri
+   de 3 sn (keşfedilmemiş ama çalışan bir görev atlanmasın diye).
+
+⚠️ **Jiro sapması (manyetometresiz yığın) bu testte KAPALI**, bilerek:
+açıkken EKF 5. yanaşmada **24° / 1.7 m** kaymıştı. **Yanaşmalar yine de
+oturdu** (işaretçi göreli ölçüm), ama 6. başlangıca giderken robot 18° dönük
+bir haritayla sürdü ve gerçek istasyona çarptı. Bu bir lokalizasyon bulgusu
+(sahada ekf_global + mag var), yanaşma geometrisi değil.
+
+⚠️ **Süpürmenin kanıtlamadığı, sahada asıl risk:** bu yığında map = odom
+(sabit). Gerçek robotta staging `map`'te ve GPS 2.5–5 m geziniyor; robot
+staging'e metrelerce hatayla varır, "dock'a dön" açısı da o hatayla hesaplanır.
+Staging'den işaretçi ~±1 m yanal hatayı tolere ediyor. Yani **GPS hatası
+yanaşmanın başlamasını bozabilir** — ölçülmedi. Aday çözümler: istasyon
+yakınında odom'a geçmek / işaretçiyi aramak için dönerek tarama / daha uzak
+staging. Sıradaki iş adayı.
+
+⚠️ **Nav2 açılışı bazen sonsuza kadar asılıyor — sebep bulundu.** Bir yığında
+`lifecycle_manager` "Configuring controller_server"da kaldı; controller_server
+logu: `failed to send response to /controller_server/change_state (timeout):
+client will not receive response` (rmw_fastrtps). nav2_util'in
+`change_state(transition)`'ı **zaman aşımı olmadan** bekliyor → cevap
+düşerse yönetici sonsuza kadar bekler. A3e notundaki "nav2 koşusu 3 saat asılı
+kaldı" büyük ihtimalle bu. **Gerçek robotta da olabilir** (Pi açılışında Nav2
+hiç aktifleşmez). Düzeltilmedi: test tarafında fixture'ın Nav2'yi bir kez
+yeniden başlatması, robot tarafında açılış izleyicisi — kullanıcıya soruldu.
 
 Sim parçaları (`robot_sim`, ROS'suz, elle hesaplanmış testlerle — karar 10):
 - `battery_model.py`: 10S paket, **kendi** OCV tablosu (tahmincininkiyle
@@ -1068,7 +1132,7 @@ python3 -m pytest src/battery_manager/test -q     # 11 (~27 sn)
 # hepsi: 143 test, ~10.6 dk
 
 # ya da CI'ın koştuğu haliyle (build + overlay source + skip'i hata sayar):
-../scripts/ci.sh stack nav2 gazebo dock
+../scripts/ci.sh stack nav2 gazebo dock sweep
 
 # Yığın kaldırmayan hızlı süzgeç (saniyeler). test_gazebo_config.py bunun
 # içinde ve A3'ün asıl hatasını — köprünün hiçbir şeye bağlı olmaması — tam

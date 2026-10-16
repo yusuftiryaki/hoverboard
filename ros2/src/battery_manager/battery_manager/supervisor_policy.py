@@ -2,6 +2,7 @@
 
     NORMAL ──LOW──▶ RETURNING ─────────────────────▶ DOCKING ──charging──▶ CHARGING ──FULL──▶ DOCKED_IDLE
       │             cancel missions → staging → face     (DockRobot)                  │
+      │             (also on request: return_home)
       │                                                                              resume → UNDOCKING → NORMAL
       └── CRITICAL, from NORMAL / RETURNING / DOCKING / UNDOCKING ──▶ SAFE_STOP (latched; resume clears)
           any step failing (staging, facing, docking, undocking) ──▶ SAFE_STOP
@@ -247,6 +248,14 @@ class Supervisor:
             self._enter(Phase.NORMAL, "undocked")
             return []
         return []
+
+    def return_home(self) -> Tuple[bool, str, List[Step]]:
+        """A person (or a mission planner) says go and charge now, whatever
+        the battery says. The same sequence a LOW battery starts."""
+        if self.phase != Phase.NORMAL:
+            return False, f"cannot return home from {self.phase.value}", []
+        self._enter(Phase.RETURNING, "return home requested")
+        return True, "returning to dock", self._start(Step.CANCEL_MISSIONS)
 
     def resume(self) -> Tuple[bool, str, List[Step]]:
         """A person says carry on. Returns (accepted, message, steps)."""
