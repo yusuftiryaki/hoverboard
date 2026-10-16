@@ -11,7 +11,7 @@
 #   gazebo    colcon build + the Gazebo physics worlds             (~5 min)
 #   dock      colcon build + battery -> return -> dock stacks      (~5 min)
 #   sweep     colcon build + docking from every side, one stack    (~12 min)
-#   mission   colcon build + coverage missions on ground truth     (~10 min)
+#   mission   colcon build + coverage missions, one with a charge  (~20 min)
 #   all       the lot, in that order
 #
 # stack + nav2 + gazebo + dock + sweep + mission together are the whole suite: `stack` is defined as
@@ -29,7 +29,7 @@ GAZEBO_TESTS=(src/robot_sim/test/test_gazebo_physics.py
               src/robot_sim/test/test_gazebo_localization.py)
 DOCK_TESTS=(src/robot_sim/test/test_docking.py)
 SWEEP_TESTS=(src/robot_sim/test/test_docking_sweep.py)
-MISSION_TESTS=(src/robot_sim/test/test_mission_coverage.py)
+MISSION_TESTS=(src/robot_sim/test/test_mission_coverage.py src/robot_sim/test/test_mission_dock.py)
 HEAVY=("${NAV2_TESTS[@]}" "${GAZEBO_TESTS[@]}" "${DOCK_TESTS[@]}" "${SWEEP_TESTS[@]}"
        "${MISSION_TESTS[@]}")
 

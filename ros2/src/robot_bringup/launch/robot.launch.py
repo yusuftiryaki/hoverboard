@@ -266,6 +266,7 @@ def generate_launch_description():
             condition=IfCondition(use_nav2),
             launch_arguments={"use_sim_time": use_sim_time,
                               "battery_config": battery_config,
-                              "dock_database": dock_database}.items(),
+                              "dock_database": dock_database,
+                              "site_file": site_file}.items(),
         ),
     ])

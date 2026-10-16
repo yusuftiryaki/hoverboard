@@ -16,8 +16,7 @@ import pytest
 from robot_missions.occupancy import OCCUPIED
 from robot_missions.site import parse_site
 from robot_missions.site_map import (
-    NotReady, StationPose, build_grid, convert_site, dock_disagreements,
-    needs_conversion)
+    NotReady, build_grid, convert_site, needs_conversion)
 
 LAT0, LON0 = 41.0, 29.0
 DLAT_10M = 8.993216e-05
@@ -168,32 +167,3 @@ def test_the_survey_grid_carries_keepout_obstacle_and_station():
     assert spec.origin_x == pytest.approx(-5.5, abs=1e-6)
     assert spec.origin_y == pytest.approx(-5.2, abs=1e-6)
     assert spec.width in (225, 226) and spec.height == 207
-
-
-def test_matching_dock_poses_raise_nothing():
-    stations = [StationPose("home", 0.1, -0.2, math.radians(3))]
-    assert dock_disagreements(stations, {"home": [0.0, 0.0, 0.0]}, 1.0, math.radians(15)) == []
-
-
-@pytest.mark.parametrize("station_yaw_deg, pose, words", [
-    (0.0, [1.5, 0.0, 0.0], "1.50 m"),
-    (0.0, [0.0, 0.0, math.radians(30)], "30°"),
-    (20.0, [0.0, 0.0, math.radians(-150)], "170°"),     # the short way round
-])
-def test_dock_poses_that_part_are_reported(station_yaw_deg, pose, words):
-    stations = [StationPose("home", 0.0, 0.0, math.radians(station_yaw_deg))]
-    (problem,) = dock_disagreements(stations, {"home": pose}, 1.0, math.radians(15))
-    assert words in problem
-
-
-def test_yaw_wraps_when_comparing_dock_poses():
-    # 179 vs -179 deg are 2 deg apart, not 358.
-    stations = [StationPose("home", 0.0, 0.0, math.radians(179))]
-    assert dock_disagreements(stations, {"home": [0.0, 0.0, math.radians(-179)]},
-                              1.0, math.radians(15)) == []
-
-
-def test_a_station_docks_yaml_does_not_know_is_reported():
-    (problem,) = dock_disagreements([StationPose("garaj", 0, 0, 0)],
-                                    {"home": [0.0, 0.0, 0.0]}, 1.0, math.radians(15))
-    assert "garaj" in problem

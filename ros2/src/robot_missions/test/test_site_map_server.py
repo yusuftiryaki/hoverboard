@@ -161,17 +161,19 @@ def worst_status(messages):
     return max(levels) if levels else None
 
 
-@pytest.mark.parametrize("dock_pose, level", [
-    ([0.0, 0.0, math.pi / 2], DiagnosticStatus.OK),        # north = +90 deg yaw
-    ([0.0, 0.0, 0.0], DiagnosticStatus.ERROR),             # docks.yaml's placeholder
+@pytest.mark.parametrize("site_has_station, level", [
+    (True, DiagnosticStatus.OK),          # the site is home's one source
+    (False, DiagnosticStatus.WARN),       # docks.yaml's station is not on the map
 ])
-def test_the_station_is_checked_against_docks_yaml(context, tmp_path, dock_pose, level):
+def test_a_station_only_docks_yaml_knows_is_flagged(context, tmp_path, site_has_station,
+                                                     level):
     docks = tmp_path / "docks.yaml"
     docks.write_text(json.dumps({"docks": {"home": {
-        "type": "charging_dock", "frame": "map", "pose": dock_pose}}}), encoding="utf-8")
+        "type": "charging_dock", "frame": "map", "pose": [0.0, 0.0, 0.0]}}}),
+        encoding="utf-8")
     navsat = FakeNavsat(empty_answers=0)
-    node = server(tmp_path, write_site(tmp_path, station_facing_north()),
-                  dock_database=str(docks))
+    features = [station_facing_north()] if site_has_station else [keepout_10m_east()]
+    node = server(tmp_path, write_site(tmp_path, *features), dock_database=str(docks))
     executor = SingleThreadedExecutor()
     executor.add_node(navsat.node)
     executor.add_node(node)

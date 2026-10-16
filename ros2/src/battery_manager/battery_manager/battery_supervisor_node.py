@@ -53,6 +53,11 @@ from tf2_ros import Buffer, TransformException, TransformListener
 
 from battery_manager.supervisor_policy import (BatterySample, Phase, Step, Supervisor,
                                                Thresholds, load_dock)
+from geographic_msgs.msg import GeoPoint
+from robot_localization.srv import FromLLArray
+from robot_missions.site import load_site
+from robot_missions.site_map import (STATION_BODY_OFFSET, STATION_BODY_RADIUS, NotReady,
+                                     assemble, positions_to_convert)
 
 # Mission-level first: a waypoint follower whose current navigate_to_pose is
 # cancelled under it just moves on to its next waypoint.
@@ -94,15 +99,28 @@ class BatterySupervisor(Node):
         # config test holds them together.
         self.declare_parameter("staging_distance", 1.5)
         self.declare_parameter("max_staging_time_s", 300.0)
+        # The site (docs/missions.md). When it has a station named dock_id,
+        # HOME COMES FROM THE SITE — lat/lon through navsat_transform's
+        # /fromLLArray, the same conversion the survey map's station body went
+        # through — and docks.yaml's `map` pose is ignored: `map` is anchored
+        # on the first GPS fix (ekf.yaml), so a fixed pose there is right only
+        # for a robot that boots on the dock, facing the way the file says.
+        self.declare_parameter("site_file", "")
 
         p = self.get_parameter
         thresholds = Thresholds(cells=int(p("cells").value),
                                 **{n: float(p(n).value) for n in names})
         self._sup = Supervisor(thresholds)
-        self._dock = load_dock(str(p("dock_database").value), str(p("dock_id").value))
-        if self._dock["frame"] != "map":
-            raise ValueError("the home dock must be surveyed in `map` (handoff decision 12)")
         self._dock_id = str(p("dock_id").value)
+        self._site = self._site_with_station(str(p("site_file").value))
+        if self._site is None:
+            self._dock = load_dock(str(p("dock_database").value), self._dock_id)
+            if self._dock["frame"] != "map":
+                raise ValueError("the home dock must be surveyed in `map` (handoff decision 12)")
+            self._home_source = "docks.yaml"
+        else:
+            self._dock = None            # until navsat_transform converts it
+            self._home_source = "site (waiting for navsat_transform)"
         self._dock_type = str(p("dock_type").value)
         self._staging_distance = float(p("staging_distance").value)
         self._max_staging_time = float(p("max_staging_time_s").value)
@@ -128,6 +146,10 @@ class BatterySupervisor(Node):
         self.create_service(Trigger, "~/return_home", self._on_return_home)
         self.create_timer(0.5, self._tick)
         self.create_timer(1.0, self._diag_tick)
+        if self._site is not None:
+            self._from_ll = self.create_client(FromLLArray, "fromLLArray")
+            self._converting = False
+            self._home_timer = self.create_timer(1.0, self._convert_home)
         self._publish_state()
 
     # ---- inputs -------------------------------------------------------------------
@@ -204,7 +226,58 @@ class BatterySupervisor(Node):
     def _do_cancel_all(self) -> None:
         self._cancel_all_goals(OWN_ACTIONS + MISSION_ACTIONS)
 
+    # ---- home from the site ---------------------------------------------------
+    def _site_with_station(self, path: str):
+        if not path:
+            return None
+        site = load_site(path)
+        if any(st.name == self._dock_id for st in site.stations):
+            return site
+        self.get_logger().warn(
+            f"site {path} has no station named '{self._dock_id}' — home comes from "
+            "docks.yaml, and the survey map does not draw the station")
+        return None
+
+    def _convert_home(self) -> None:
+        """Ask /fromLLArray until it answers in full (it answers an EMPTY list,
+        not an error, before navsat_transform has a transform)."""
+        if self._dock is not None or self._converting:
+            return
+        if not self._from_ll.service_is_ready():
+            return
+        asked = positions_to_convert(self._site)
+        request = FromLLArray.Request()
+        request.ll_points = [GeoPoint(latitude=q.lat, longitude=q.lon) for q in asked]
+        self._converting = True
+
+        def done(future):
+            self._converting = False
+            response = future.result()
+            answer = [(pt.x, pt.y) for pt in response.map_points] if response else []
+            try:
+                geometry = assemble(self._site, answer, STATION_BODY_OFFSET,
+                                    STATION_BODY_RADIUS)
+            except NotReady:
+                return                    # asked again on the next tick
+            station = next(st for st in geometry.stations if st.name == self._dock_id)
+            self._dock = {"x": station.x, "y": station.y, "yaw": station.yaw, "frame": "map"}
+            self._home_source = "site"
+            self._home_timer.cancel()
+            self.get_logger().info(
+                f"home '{self._dock_id}' from the site: ({station.x:.2f}, {station.y:.2f}) "
+                f"in map, yaw {math.degrees(station.yaw):.1f} deg")
+        self._from_ll.call_async(request).add_done_callback(done)
+
+    def _home_unknown(self, step: Step) -> bool:
+        if self._dock is not None:
+            return False
+        self._report(step, False, "home is not known yet: the site's station has not "
+                                  "been converted (is navsat_transform running?)")
+        return True
+
     def _do_go_to_staging(self) -> None:
+        if self._home_unknown(Step.GO_TO_STAGING):
+            return
         d, yaw = self._dock, self._dock["yaw"]
         goal = NavigateToPose.Goal()
         goal.pose = PoseStamped()
@@ -219,6 +292,8 @@ class BatterySupervisor(Node):
                                       f"navigate_to_pose status {status}"))
 
     def _do_face_dock(self) -> None:
+        if self._home_unknown(Step.FACE_DOCK):
+            return
         try:
             tf = self._tf.lookup_transform("map", "base_link", Time(),
                                            timeout=Duration(seconds=1.0))
@@ -240,9 +315,20 @@ class BatterySupervisor(Node):
                                       f"spin status {status}"))
 
     def _do_dock(self) -> None:
+        if self._home_unknown(Step.DOCK):
+            return
         goal = DockRobot.Goal()
-        goal.use_dock_id = True
-        goal.dock_id = self._dock_id
+        # By pose, not by id: the pose may come from the site (converted at
+        # runtime), which docking_server's own database cannot know.
+        goal.use_dock_id = False
+        goal.dock_type = self._dock_type
+        goal.dock_pose = PoseStamped()
+        goal.dock_pose.header.frame_id = "map"
+        goal.dock_pose.header.stamp = self.get_clock().now().to_msg()
+        goal.dock_pose.pose.position.x = self._dock["x"]
+        goal.dock_pose.pose.position.y = self._dock["y"]
+        goal.dock_pose.pose.orientation.z = math.sin(self._dock["yaw"] / 2.0)
+        goal.dock_pose.pose.orientation.w = math.cos(self._dock["yaw"] / 2.0)
         goal.navigate_to_staging_pose = False      # staged and turned already
         goal.max_staging_time = float(self._max_staging_time)
 
@@ -330,6 +416,7 @@ class BatterySupervisor(Node):
             KeyValue(key="source", value=sup.monitor.source),
             KeyValue(key="value", value=f"{sup.monitor.value:.3f}"),
             KeyValue(key="nav_lock", value=str(sup.lock)),
+            KeyValue(key="home", value=self._home_source),
         ]
         array = DiagnosticArray()
         array.header.stamp = self.get_clock().now().to_msg()

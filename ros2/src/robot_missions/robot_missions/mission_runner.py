@@ -129,6 +129,9 @@ class MissionRunner(Node):
         # index -> the waypoint's target in `odom` ("chain" anchoring); emptied
         # whenever the mission stops running or is re-planned (re-anchor).
         self._targets: Dict[int, Any] = {}
+        # True only while a row's own FollowPath runs — never on the way to
+        # it. What a trimmer output will follow; ~/status "work".
+        self._cutting = False
         self._planning_lap: Optional[int] = None
         self._convert_tries = 0
 
@@ -292,9 +295,28 @@ class MissionRunner(Node):
             self._try_convert()
         timer = self.create_timer(self.get_parameter("convert_retry_s").value, again)
 
-    def _send(self, action: Send) -> None:
+    def _send(self, action: Send, waited: float = 0.0) -> None:
+        if action.token != self._policy.in_flight:
+            return                       # dropped while waiting for tf
         plan, index = self._plan, action.index
         waypoint = plan.waypoints[index]
+        if plan.precise and not self._tf_ready():
+            # ⚠️ Not a waypoint failure. A runner whose tf buffer is still
+            # empty (it just started) used to abort every goal on the spot —
+            # "frame does not exist" — and skip three waypoints in under 20 ms,
+            # which paused a mission that had never moved (seen twice in the
+            # mission tests before the logs showed why). Wait like for a server.
+            limit = self.get_parameter("server_wait_s").value
+            if waited >= limit:
+                self._run(self._policy.goal_result(action.token, Result.ABORTED, self._now()))
+                return
+            timer = None
+
+            def again():
+                timer.cancel()
+                self._send(action, waited + 0.5)
+            timer = self.create_timer(0.5, again)
+            return
         if not plan.precise:
             goal = NavigateToPose.Goal()
             goal.pose = self._pose("map", waypoint.x, waypoint.y, waypoint.yaw)
@@ -304,46 +326,64 @@ class MissionRunner(Node):
         if target is None:
             self._run(self._policy.goal_result(action.token, Result.ABORTED, self._now()))
             return
-        here = self._robot_in(self.get_parameter("odom_frame").value)
-        if here is None:
-            self._run(self._policy.goal_result(action.token, Result.ABORTED, self._now()))
-            return
+        token = action.token
         if waypoint.work and index > 0:
+            before = plan.waypoints[index - 1]
             start = self._targets.get(index - 1) or self._target(index - 1, fresh=True)
-            row = lambda: self._send_line(action.token,  # noqa: E731
-                                          start, target)
-            if math.hypot(start[0] - here[0], start[1] - here[1]) > \
-                    self.get_parameter("join_tolerance_m").value:
-                # Not at the row's start (a skipped transit, a resume
-                # elsewhere): get there first, then mow the row as drawn —
-                # never a slanted row from wherever the robot happens to be.
-                self._send_line(action.token, here, start, then=row)
-            else:
-                row()
-            return
-        # A transit to the next row's start: far -> navigate_to_pose (plans
-        # round obstacles, loose, in `map` like every other Nav2 goal), then
-        # always a precise straight JOIN in `odom`, so the row starts where
-        # it should — not wherever the loose goal checker stopped (up to 1 m
-        # off; measured as 0.77 m of cutting outside the lawn before the join).
-        if math.hypot(target[0] - here[0], target[1] - here[1]) > \
-                self.get_parameter("transit_skip_m").value:
-            goal = NavigateToPose.Goal()
-            goal.pose = self._pose("map", waypoint.x, waypoint.y, waypoint.yaw)
-            self._dispatch(self._nav, goal, action.token, "navigate_to_pose",
-                           then=lambda: self._join(action.token, target))
-            return
-        self._join(action.token, target)
 
-    def _join(self, token: int, target) -> None:
+            def row():
+                self._cutting = True
+                self._publish_status()
+                self._send_line(token, start, target)
+            # Not at the row's start (a skipped transit, back from the dock,
+            # a resume elsewhere): get there first, NOT cutting, then mow the
+            # row as drawn — never a slanted row from wherever the robot is.
+            self._approach(token, before, start, then=row)
+            return
+        # A transit to the next row's start.
+        self._approach(token, waypoint, target,
+                       then=lambda: self._run(self._policy.goal_result(
+                           token, Result.SUCCEEDED, self._now())))
+
+    def _approach(self, token: int, waypoint, target, then) -> None:
+        """Get to `target` (`waypoint` in odom) with the trimmer off, then run
+        `then`. Far (> transit_skip_m): navigate_to_pose first — it plans round
+        obstacles, which a straight line does not (back from the dock the
+        station body itself is in the way) — then a precise straight JOIN, so
+        the next row starts where it was drawn rather than wherever the loose
+        goal checker stopped (up to 1 m off: 0.77 m of cutting outside the
+        lawn, measured, before the join). Within join_tolerance_m: nothing."""
+        self._cutting = False
         here = self._robot_in(self.get_parameter("odom_frame").value)
         if here is None:
             self._run(self._policy.goal_result(token, Result.ABORTED, self._now()))
             return
-        if math.hypot(target[0] - here[0], target[1] - here[1]) < 0.05:
-            self._run(self._policy.goal_result(token, Result.SUCCEEDED, self._now()))
+        gap = math.hypot(target[0] - here[0], target[1] - here[1])
+        if gap <= self.get_parameter("join_tolerance_m").value:
+            then()
             return
-        self._send_line(token, here, target)
+
+        def join():
+            now = self._robot_in(self.get_parameter("odom_frame").value)
+            if now is None:
+                self._run(self._policy.goal_result(token, Result.ABORTED, self._now()))
+                return
+            if math.hypot(target[0] - now[0], target[1] - now[1]) < 0.05:
+                then()
+                return
+            self._send_line(token, now, target, then=then)
+
+        if gap > self.get_parameter("transit_skip_m").value:
+            goal = NavigateToPose.Goal()
+            goal.pose = self._pose("map", waypoint.x, waypoint.y, waypoint.yaw)
+            self._dispatch(self._nav, goal, token, "navigate_to_pose", then=join)
+            return
+        join()
+
+    def _tf_ready(self) -> bool:
+        odom = self.get_parameter("odom_frame").value
+        return (self._tf.can_transform(odom, "map", Time())
+                and self._tf.can_transform(odom, "base_link", Time()))
 
     def _map_to_odom(self):
         """(tx, ty, yaw) of map -> odom right now, or None."""
@@ -456,6 +496,8 @@ class MissionRunner(Node):
 
     def _on_result(self, future, token: int, then=None) -> None:
         self._handles.pop(token, None)
+        if then is None:
+            self._cutting = False        # a row (or any last stage) is over
         result = future.result()
         status = RESULTS.get(result.status if result else None, Result.ABORTED)
         if then is not None and status == Result.SUCCEEDED and token == self._policy.in_flight:
@@ -560,7 +602,10 @@ class MissionRunner(Node):
     def _publish_status(self) -> None:
         status = self._policy.status()
         if self._plan is not None and 0 <= status["index"] < len(self._plan.waypoints):
-            status["work"] = self._plan.waypoints[status["index"]].work
+            if self._plan.precise:
+                status["work"] = self._cutting and status["state"] == "RUNNING"
+            else:
+                status["work"] = self._plan.waypoints[status["index"]].work
         self._status_pub.publish(String(data=json.dumps(status)))
 
 

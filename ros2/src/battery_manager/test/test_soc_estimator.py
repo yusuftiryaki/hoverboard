@@ -59,6 +59,23 @@ def test_charge_complete_resets_to_full():
     assert estimator.just_reached_full
 
 
+def test_full_is_reported_even_when_counting_already_reached_one():
+    # A small capacity counts the charge in fast: the counted SoC clamps to 1.0
+    # long before the charger tapers. The taper must still announce FULL —
+    # once — or the supervisor never leaves CHARGING.
+    estimator = make(capacity_ah=0.01, full_voltage_per_cell=4.15, taper_current_a=0.3,
+                     full_hold_s=30.0)
+    estimator.initialize_from_rest_voltage(40.0)
+    for _ in range(60):
+        estimator.update(2.0, 41.0, 1.0)         # CC: counts past full
+    assert estimator.soc == pytest.approx(1.0) and not estimator.just_reached_full
+    fired = []
+    for _ in range(60):
+        estimator.update(0.2, 41.6, 1.0)         # CV taper, held
+        fired.append(estimator.just_reached_full)
+    assert fired.count(True) == 1 and fired.index(True) == 29
+
+
 def test_brief_taper_does_not_reset():
     estimator = make(full_hold_s=30.0)
     estimator.initialize_from_rest_voltage(38.0)

@@ -684,8 +684,12 @@ Alanlar hem **masada haritadan çizilecek** hem **öğret-kaydet** ile kaydedile
   doğrudan `follow_path` ile (neden: missions.md tablosu). Yeni CI aşaması
   `mission`. ⚠️ nav2.yaml'da artık iki goal checker → bütün BT'ler checker
   adını vermeli (`behavior_trees/`, `test_nav2_profiles.py`).
-- **Sıradaki: 3b** (istasyon pozu sahadan, docks.yaml yerine) ve **3c**
-  (tampon temas haritası).
+- ✅ **3b — ev = sahanın istasyonu** (supervisor `site_file`, `/fromLLArray`;
+  DockRobot pozla). Kabul testi `test_mission_dock.py`: biç → LOW → sahanın
+  istasyonu → şarj → FULL → undock → devam → DONE. ⚠️ Yolda: SoC tahmincisi
+  sayılan SoC 1.0'a dayanmışsa FULL'ü hiç bildirmiyordu → robot istasyonda
+  sonsuza kadar kalırdı (gerçek robotta da; düzeltildi).
+- **Sıradaki: 3c** (tampon temas haritası), sonra 4 (web arayüzü).
 
 ### A5 (CI) — çalışıyor, ve ilk koşuda gerçek bir hata yakaladı
 `scripts/ci.sh` her şeyi koşturur, `.github/workflows/ci.yml` sadece onu

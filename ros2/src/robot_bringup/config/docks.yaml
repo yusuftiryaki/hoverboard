@@ -6,19 +6,23 @@
 # GPS datum, exactly like the obstacle map (handoff decision 12). yaw is the
 # heading the robot drives in on (forward: the camera faces the marker).
 #
-# ⚠️ TODO(site survey): this is a placeholder at the map origin. A survey
-# error here is tolerable — the marker corrects it on the final approach —
-# but only within the camera's view from the staging pose (1.5 m back):
-# roughly a metre sideways at most. Beyond that the marker is never seen
-# and docking fails with FAILED_TO_DETECT_DOCK.
+# ⚠️ ON A SITE, THIS POSE IS NOT USED (docs/missions.md 3b). A site file with
+# a station named like battery_supervisor's dock_id ("home") replaces it: the
+# supervisor converts that lat/lon through navsat_transform at runtime and docks
+# by pose. `map` is anchored on the first GPS fix (ekf.yaml), so a fixed pose
+# here is right only for a robot that boots ON the dock, facing this way.
+# This file still gives docking_server its dock TYPE, and the pose for runs
+# without a site (the docking tests, map pinned to odom).
 #
-# ⚠️ THE STATION ITSELF MUST ALSO BE ON THE SURVEY (OBSTACLE) MAP, at this same
-# pose. Measured (test_docking_sweep.py, contrast run): left off the map, a
-# robot heading for a point beyond the station drove straight into it — onto
-# its own contacts — and the jam then took the EKF 3 m off for every later
-# trip. In simulation sim_node draws it (dock_in_survey); on the real robot
-# nothing publishes /obstacle_map yet, so this is a TODO for whoever builds
-# the survey map.
+# A survey error in whichever pose is used is tolerable — the marker corrects
+# it on the final approach — but only within the camera's view from the
+# staging pose (1.5 m back): roughly a metre sideways at most.
+#
+# ⚠️ THE STATION MUST ALSO BE ON THE SURVEY (OBSTACLE) MAP. Measured
+# (test_docking_sweep.py, contrast run): left off the map, a robot heading for
+# a point beyond the station drove straight into it — onto its own contacts.
+# A site station is drawn by site_map_server; one only in this file is not
+# (site_map_server warns on /diagnostics).
 docks:
   home:
     type: charging_dock
