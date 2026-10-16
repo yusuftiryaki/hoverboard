@@ -5,16 +5,20 @@
 
   // host networking so ROS 2 DDS can discover nodes running on the Pi over the LAN
   "runArgs": [
-    "--network=host"
-    // --- WSL2 USB flashing ---------------------------------------------------
-    // Flashing from the container needs the device inside the container. On WSL2:
-    //   1) (Windows PowerShell, admin)  usbipd list
-    //   2)                              usbipd bind    --busid <b-id>
-    //   3)                              usbipd attach  --wsl --busid <b-id>
-    //   4) uncomment the matching device line below and rebuild the container:
+    "--network=host",
+    // --- USB for ST-Link (libusb, no tty) ------------------------------------
+    // ST-Link V2 (0483:3748) is driven through libusb, i.e. /dev/bus/usb — it
+    // never creates a /dev/ttyACM*. A bind mount + cgroup rule for the USB
+    // char major (189) keeps hotplug working: a --device snapshot would miss a
+    // programmer plugged in after the container started.
+    "-v", "/dev/bus/usb:/dev/bus/usb",
+    "--device-cgroup-rule=c 189:* rmw"
+    // --- USB serial (ESP32 /dev/ttyUSB*, GPS FTDI) ----------------------------
+    // tty nodes live directly in /dev, so the bind mount above does not cover
+    // them. --device is a snapshot: the adapter must be plugged in BEFORE the
+    // container starts. Uncomment and rebuild:
     // ,"--device=/dev/ttyUSB0"   // ESP32 (CP2102/CH340)
-    // ,"--device=/dev/ttyACM0"   // ST-Link V2
-    // Easier alternative: build the .bin here, flash from the Pi. See docs/devcontainer.md
+    // Or skip it: build the .bin here, flash from the Pi. See docs/devcontainer.md
   ],
 
   // Node.js so we can install the Claude Code CLI inside the container.
@@ -22,7 +26,7 @@
     "ghcr.io/devcontainers/features/node:1": { "version": "lts" }
   },
 
-  // Reuse the host WSL Claude login instead of re-authenticating in the container.
+  // Reuse the host's Claude login instead of re-authenticating in the container.
   // Host user (yusuf, uid 1000) matches the container 'ubuntu' user (uid 1000),
   // so the 0600 credentials file is readable with no permission juggling.
   //   .claude/          -> OAuth token (.credentials.json), settings, session state

@@ -40,6 +40,19 @@ Firmware: `EFeru/hoverboard-firmware-hack-FOC` (PlatformIO).
 **⚠️ SWD pad sırası sabit değil.** Pad'leri çipe kadar izle:
 `SWDIO = PA13`, `SWCLK = PA14`. Renge/sıraya güvenme.
 
+**✅ Kart 1'de ölçüldü (2026-10-16, multimetre süreklilik):** SWD = **`J4`**,
+çipin sol üstündeki 3 yuvarlak pad (C19/C24'ün üstü). 3V3 dışarı verilmemiş.
+
+| J4 pad (çipe bakarken) | Çip bacağı | Sinyal | ST-Link pini |
+|---|---|---|---|
+| sol | sol kenar en üst = **49** | SWCLK (PA14) | 6 |
+| orta | — (batarya eksisiyle bip) | GND | 3 veya 4 |
+| sağ | üst kenar soldan 3. = **46** | SWDIO (PA13) | 2 |
+
+Yan ürün: **pin 1 = çip gövdesindeki noktalı köşe (sol alt)**. PCB'deki
+sol üst köşe beyaz üçgeni pin 1 değil — bacak sayarken ona güvenme.
+Sol-üst bacağın 49 çıkması bunu kanıtlıyor (diğer yorumda o bacak VBAT olurdu).
+
 ---
 
 ## 2. Okuma korumasını (RDP) kaldır
