@@ -102,7 +102,8 @@ Laptop tarayıcı (uydu haritası)        Pi
 1. ✅ **Saha dosyası + `site_map_server` → `/obstacle_map`** (bu dal). Sahada
    Nav2'yi sessizce öldürecek açığı (gerçek robotta haritayı yayınlayan kimse
    yoktu) kapatır.
-2. **Planlayıcı**: coverage, patrol, route, goto. ROS'suz, elle hesaplanmış testler.
+2. ✅ **Planlayıcı**: coverage, patrol, route, goto. ROS'suz, elle hesaplanmış
+   testler (aşağıda).
 3. **mission_runner**: yürütme, ilerlemeyi diske yazma, şarjdan sonra devam;
    istasyon pozunu docks.yaml yerine sahadan alma; **tampon temas haritası**
    (aşağıda). Sim'de uçtan uca: alan →
@@ -139,6 +140,49 @@ Laptop tarayıcı (uydu haritası)        Pi
   doğru 0.15 m kaymış, sonraki her fix robotla dönen 0.15 m hatalı. Aynı
   süpürme hatayla **0.105–0.182 m** okuyordu; eşik (0.12 m) bunun altında.
   Düzeltme: GPS anteni tf'ten okuyor (kamera montajı gibi).
+
+## 2. aşama: planlayıcı (`planner.py`, `mission.py`)
+Görev tanımı (JSON; web formu 4. aşamada bunu üretecek):
+```json
+{"type": "coverage", "area": "bahce", "params": {"overlap": 0.3, "angle_deg": 90}}
+{"type": "patrol",   "area": "bahce", "params": {"mode": "random", "laps": 0}}
+{"type": "route",    "route": "tur",  "params": {"repeat": 2, "back_and_forth": true}}
+{"type": "goto",     "target": [29.0001, 41.0002], "params": {"heading_deg": 90}}
+```
+- **Görev tipleri kayıtlı** (`TASK_TYPES`): her tip neyin üstünde koştuğunu
+  (alan / rota / nokta), parametrelerini (varsayılan, tip, sınır) ve planlayıcısını
+  bildirir. Yeni tip = tek kayıt. ⚠️ **Bilinmeyen parametre hata:**
+  `"overlab": 0.3` sessizce yutulsa görev varsayılanla koşar ve istendiği gibi
+  koşmuş görünürdü.
+- **Makine görevden ayrı:** `cut_width`, `robot_radius`, `obstacle_margin`
+  `RobotSpec`'te (⚠️ `cut_width` 0.30 yer tutucu, B4'te ölçülecek). Görev bunları
+  değiştiremez; şerit aralığı `cut_width × (1 − overlap)`.
+- **Serbest bölge tek yerde:** alan `boundary_margin` kadar (varsayılan
+  `cut_width/2`; köşeler kare kalsın diye mitre) daraltılır; keepout, engel ve
+  istasyon gövdesi `robot_radius + obstacle_margin` büyütülüp çıkarılır. Her tip
+  bunu kullanır — kendi "serbest" fikrini çizen bir planlayıcı Nav2'ye engelin
+  şişirmesi içinde hedef verirdi.
+- **Kaplama:** satırlar bölgenin minimum döndürülmüş dikdörtgeninin uzun
+  kenarı boyunca (en az dönüş) ya da verilen pusula açısında; satırlar ortalı
+  (iki kenar boşluğu eşit). Engelin böldüğü satırlar parçalanır, parçalar en
+  yakın uçtan zincirlenir (dikdörtgende tam yılankavi). Sonda isteğe bağlı
+  **kenar turu** (dış sınır + her deliğin çevresi).
+- **Devriye:** bölgenin çevresi (saat yönü tersine, robota en yakın köşeden,
+  kapalı) ya da tohumlu rastgele noktalar (ardışık noktalar `min_separation`
+  ayrı). **Rota:** gidiş ya da gidiş-dönüş. `repeat`/`laps` = 0 → durdurulana kadar.
+- Her waypoint `work` bayrağı taşır: varan bacak iş mi (biçme), geçiş mi.
+  3. aşamada misina buna göre açılır, ilerleme iş bacaklarıyla sayılır.
+- **Ölçülen (elle hesaplanan şekiller, ızgara örneklemesiyle):** 20 × 6 m alan
+  12 farklı eğimde: merkez çizgisi bölgesinin %100'ü süpürülüyor. Üçgen çimde
+  kenar turu kaplamayı **%95.7 → %99.9**'a çıkarıyor. Ağaçlı 10 × 10 m çim:
+  %97.4 → %98.8 (kalan, ağacın etrafında robotun giremediği halka).
+- ⚠️ **Yolda bulunan:** kenar turu için halkalar sadeleştiriliyor (her köşe bir
+  Nav2 hedefi olur). Sadeleştirme deliğin halkasında kirişleri **engele doğru**
+  kesiyor: 0.1 m toleransla robotun gövdesi ağaca 2 cm'e kadar yaklaşıyordu.
+  Tolerans 0.02 m (`obstacle_margin` 0.1'in çok içinde); test bunu tutuyor.
+- ⚠️ Kaplama ölçümünde shapely'nin birleşimi kenar paylaşan şeritleri float
+  gürültüsüyle düşürüyordu (tamamını kaplayan planda 112.3 m²'nin 82.7'si).
+  Ölçüm artık ızgara örneklemesi.
 
 ## Robotun kendi tespit ettiği engeller (2026-10-16, kullanıcı onayı)
 Bugünkü donanımda menzil sensörü yok (handoff karar 8): survey edilmemiş bir

@@ -39,7 +39,7 @@ jobs:
       - uses: actions/checkout@v7
       # The distro's own pytest, on the distro's own Python: the same pair the
       # dev container (also noble) runs.
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends python3-pytest python3-yaml
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends python3-pytest python3-yaml python3-shapely
       - run: ./scripts/ci.sh unit
 
   firmware:

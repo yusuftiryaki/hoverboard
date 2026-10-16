@@ -674,8 +674,12 @@ Alanlar hem **masada haritadan çizilecek** hem **öğret-kaydet** ile kaydedile
   gitti, main'e değil (main'de SP3–SP5, süpürme, watchdog yoktu). PR #9 hepsini
   main'e getiriyor. Ders: yığınlı PR'da bir önceki birleşince sonrakinin
   tabanını main'e çevir (GitHub bunu ancak taban dalı SİLİNİRSE kendisi yapar).
-- **Sıradaki: 2. aşama — planlayıcı** (coverage boustrophedon, patrol, route,
-  goto; ROS'suz). Shapely gerekecekse `unit` CI aşamasına apt paketi eklenmeli.
+- ✅ **2. aşama — planlayıcı** (coverage boustrophedon + kenar turu, patrol,
+  route, goto; kayıtlı görev tipleri). `python3-shapely` Dockerfile'a ve `unit`
+  CI aşamasına eklendi. Ayrıntı ve ölçümler missions.md.
+- **Sıradaki: 3. aşama — `mission_runner`** (Nav2'ye yürütme, ilerleme diskte,
+  şarjdan sonra devam, istasyon sahadan, tampon temas haritası; sim'de GPS
+  gürültüsüyle kaplama yüzdesi ve sınır ihlali ölçümü).
 
 ### A5 (CI) — çalışıyor, ve ilk koşuda gerçek bir hata yakaladı
 `scripts/ci.sh` her şeyi koşturur, `.github/workflows/ci.yml` sadece onu
