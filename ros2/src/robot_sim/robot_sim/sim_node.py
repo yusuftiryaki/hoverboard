@@ -120,6 +120,11 @@ class SimNode(Node):
         self.declare_parameter("unsurveyed_obstacle_radii", Parameter.Type.DOUBLE_ARRAY)
         # Keep in step with nav2.yaml's costmap robot_radius — see world.py.
         self.declare_parameter("robot_radius", 0.4)
+        # false = the robot's own site_map_server publishes /obstacle_map from
+        # a site file instead (robot.launch.py use_site_map). There must be
+        # exactly one publisher: two latched maps on one topic do not error,
+        # the costmap just keeps whichever arrived last.
+        self.declare_parameter("publish_obstacle_map", True)
 
         # ---- Battery (SP5) -----------------------------------------------------
         # The pack the robot really has. battery_monitor's capacity_ah is what
@@ -308,6 +313,7 @@ class SimNode(Node):
         self._tag_noise = p("dock_detection_noise_per_m").value
         self._tag_angle_noise = p("dock_detection_angle_noise").value
         self._camera: CameraMount | None = None
+        self._gps_offset: tuple[float, float] | None = None
 
         self._truth_pub = self.create_publisher(Odometry, "ground_truth", 10)
         # ⚠️ An ORACLE, like /ground_truth: the real robot has nothing that can
@@ -344,7 +350,8 @@ class SimNode(Node):
         # this became unconditional. An empty grid is the honest a priori map
         # of a field with nothing surveyed in it, which is what the costmaps
         # already assumed before A3c.
-        self._publish_obstacle_map()
+        if self.get_parameter("publish_obstacle_map").value:
+            self._publish_obstacle_map()
 
         self._last_tick = None
         self.create_timer(TX_PERIOD_S, self._tick)
@@ -469,6 +476,26 @@ class SimNode(Node):
         if self._station is not None:
             self._contact_pub.publish(Bool(data=contact))
 
+    def _gps_mount(self) -> tuple[float, float] | None:
+        """Where the antenna sits in base_link (x, y), off tf like the camera.
+
+        ⚠️ The fix must be the ANTENNA's position, not base_link's. The real
+        NEO-6M measures where it is — on the mast, 0.15 m behind base_link
+        (robot.urdf.xacro) — and navsat_transform subtracts that offset to
+        recover base_link. Reporting base_link here (as this sim did until the
+        site-map stack test caught it) made navsat_transform subtract an offset
+        that was never there: `map` came out shifted 0.15 m along the robot's
+        heading at the first fix, and every later fix was off by 0.15 m in a
+        direction that turned with the robot.
+        """
+        if self._gps_offset is None:
+            try:
+                tf = self._tf_buffer.lookup_transform("base_link", "gps_link", Time())
+            except TransformException:
+                return None            # robot_state_publisher not up yet
+            self._gps_offset = (tf.transform.translation.x, tf.transform.translation.y)
+        return self._gps_offset
+
     def _camera_mount(self) -> CameraMount | None:
         if self._camera is None:
             try:
@@ -563,6 +590,9 @@ class SimNode(Node):
         self._mag_pub.publish(msg)
 
     def _publish_gps(self) -> None:
+        mount = self._gps_mount()
+        if mount is None:
+            return                     # no fix yet rather than a wrong one
         dt = 1.0 / self.get_parameter("gps_rate_hz").value
         # Ornstein-Uhlenbeck: pulls back toward zero over gps_wander_tau, with
         # the driving noise scaled so the steady-state std lands on wander_sigma.
@@ -572,8 +602,11 @@ class SimNode(Node):
             bias += -bias / self._gps_wander_tau * dt + drive * math.sqrt(dt) * self._rng.gauss(0, 1)
             setattr(self, attr, bias)
 
-        east = self._world.pose.x + self._gps_bias_x + self._rng.gauss(0, self._gps_noise_sigma)
-        north = self._world.pose.y + self._gps_bias_y + self._rng.gauss(0, self._gps_noise_sigma)
+        pose = self._world.pose
+        antenna_x = pose.x + mount[0] * math.cos(pose.yaw) - mount[1] * math.sin(pose.yaw)
+        antenna_y = pose.y + mount[0] * math.sin(pose.yaw) + mount[1] * math.cos(pose.yaw)
+        east = antenna_x + self._gps_bias_x + self._rng.gauss(0, self._gps_noise_sigma)
+        north = antenna_y + self._gps_bias_y + self._rng.gauss(0, self._gps_noise_sigma)
 
         msg = NavSatFix()
         msg.header.stamp = self.get_clock().now().to_msg()

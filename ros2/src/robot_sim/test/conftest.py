@@ -176,6 +176,8 @@ STACK_PATTERNS = (
     "lib/battery_manager/battery_monitor",
     "robot_localization/ekf_node",
     "robot_localization/navsat_transform_node",
+    # latches /obstacle_map: an orphan's map would be the next stack's survey
+    "lib/robot_missions/site_map_server",
 )
 
 
@@ -260,8 +262,12 @@ class SimStack:
                         f"esp32_port:={self.LINK}", *self.launch_args())
             time.sleep(STACK_STARTUP_S)
 
+    # sim_node publishes /obstacle_map; the robot's site_map_server must not
+    # publish a second one (robot.launch.py). SiteStack turns this around.
+    SITE_ARGS = ("use_site_map:=false",)
+
     def launch_args(self):
-        return self.LAUNCH_ARGS
+        return (*self.LAUNCH_ARGS, *self.SITE_ARGS)
 
     @contextlib.contextmanager
     def _closing_on_failure(self):
@@ -350,6 +356,47 @@ def global_stack(ros):
         stack.close()
 
 
+class SiteStack(GlobalStack):
+    """GlobalStack whose survey map comes from a SITE FILE, the way the real
+    robot's does: site.geojson -> site_map_server -> navsat_transform's
+    /fromLLArray -> /obstacle_map. sim_node's own map is switched off, so there
+    is still exactly one publisher.
+
+    `features` are GeoJSON features (docs/missions.md); `sim_args` are "-p",
+    "name:=value" pairs for sim_node.
+    """
+
+    def __init__(self, workdir, features, *sim_args):
+        self.site_file = write_site(workdir, features)
+        super().__init__("--ros-args", "-p", "publish_obstacle_map:=false", *sim_args)
+
+    def launch_args(self):
+        return (*self.LAUNCH_ARGS, "use_site_map:=true", f"site_file:={self.site_file}")
+
+
+def write_site(workdir, features):
+    import json
+
+    path = os.path.join(workdir, "site.geojson")
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump({"type": "FeatureCollection", "features": list(features)}, handle)
+    return path
+
+
+@pytest.fixture
+def site_stack(ros, tmp_path):
+    made = []
+
+    def _make(features, *sim_args):
+        stack = SiteStack(str(tmp_path), features, *sim_args)
+        made.append(stack)
+        return stack
+
+    yield _make
+    for stack in made:
+        stack.close()
+
+
 class Nav2Stack(SimStack):
     """The sim stack plus Nav2, with map pinned to odom.
 
@@ -367,24 +414,30 @@ class Nav2Stack(SimStack):
     def __init__(self, *sim_args):
         super().__init__(*sim_args)
         with self._closing_on_failure():
-            self._spawn("ros2", "run", "tf2_ros", "static_transform_publisher",
-                        "--frame-id", "map", "--child-frame-id", "odom")
-            nav2 = self._spawn("ros2", "launch", "robot_bringup", "nav2.launch.py",
-                               *self.nav2_args())
-            try:
-                self._await_nav2(NAV2_FIRST_TRY_S)
-            except AssertionError as stuck:
-                import warnings
-                warnings.warn(f"Nav2 bring-up hung, restarting it once: {stuck}")
-                self._procs.remove(nav2)
-                os.killpg(os.getpgid(nav2.pid), signal.SIGKILL)
-                nav2.wait(timeout=15)
-                deadline = time.monotonic() + 30.0
-                while pids_matching(*NAV2_PATTERNS) and time.monotonic() < deadline:
-                    time.sleep(0.25)
-                self._spawn("ros2", "launch", "robot_bringup", "nav2.launch.py",
-                            *self.nav2_args())
-                self._await_nav2(NAV2_READY_S)
+            self._pin_map()
+            self._start_nav2()
+
+    def _pin_map(self):
+        self._spawn("ros2", "run", "tf2_ros", "static_transform_publisher",
+                    "--frame-id", "map", "--child-frame-id", "odom")
+
+    def _start_nav2(self):
+        nav2 = self._spawn("ros2", "launch", "robot_bringup", "nav2.launch.py",
+                           *self.nav2_args())
+        try:
+            self._await_nav2(NAV2_FIRST_TRY_S)
+        except AssertionError as stuck:
+            import warnings
+            warnings.warn(f"Nav2 bring-up hung, restarting it once: {stuck}")
+            self._procs.remove(nav2)
+            os.killpg(os.getpgid(nav2.pid), signal.SIGKILL)
+            nav2.wait(timeout=15)
+            deadline = time.monotonic() + 30.0
+            while pids_matching(*NAV2_PATTERNS) and time.monotonic() < deadline:
+                time.sleep(0.25)
+            self._spawn("ros2", "launch", "robot_bringup", "nav2.launch.py",
+                        *self.nav2_args())
+            self._await_nav2(NAV2_READY_S)
 
     def nav2_args(self):
         return ()
@@ -475,6 +528,43 @@ def nav2_stack(ros):
         stack.close()
 
 
+class SiteNav2Stack(Nav2Stack):
+    """Nav2 on the REAL `map`: GPS, madgwick, ekf_global and navsat_transform
+    (GlobalStack's half), with the survey map from a site file (SiteStack's).
+
+    Nav2Stack pins map == odom to keep GPS out of the navigation tests; this
+    one does not, because the thing under test is exactly that chain: a
+    lat/lon drawn on a map at a desk, through navsat_transform, into the
+    costmap the planner routes around.
+    """
+
+    LAUNCH_ARGS = GlobalStack.LAUNCH_ARGS
+
+    def __init__(self, workdir, features, *sim_args):
+        self.site_file = write_site(workdir, features)
+        super().__init__("--ros-args", "-p", "publish_obstacle_map:=false", *sim_args)
+
+    def launch_args(self):
+        return (*self.LAUNCH_ARGS, "use_site_map:=true", f"site_file:={self.site_file}")
+
+    def _pin_map(self):
+        """No pin: ekf_global publishes map->odom."""
+
+
+@pytest.fixture
+def site_nav2_stack(ros, tmp_path):
+    made = []
+
+    def _make(features, *sim_args):
+        stack = SiteNav2Stack(str(tmp_path), features, *sim_args)
+        made.append(stack)
+        return stack
+
+    yield _make
+    for stack in made:
+        stack.close()
+
+
 class DockStack(Nav2Stack):
     """The Nav2 stack with a charging station and a pack that drains in
     seconds (SP3-SP5).
@@ -511,7 +601,7 @@ class DockStack(Nav2Stack):
         super().__init__(*sim_args)
 
     def launch_args(self):
-        return (*self.LAUNCH_ARGS, "fake_battery:=true",
+        return (*super().launch_args(), "fake_battery:=true",
                 f"battery_config:={self._battery_config}")
 
     def nav2_args(self):

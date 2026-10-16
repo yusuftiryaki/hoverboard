@@ -9,12 +9,17 @@ milliseconds.
 
 import math
 import os
+import sys
 
 import yaml
 
 from robot_sim.dock_model import DockStation
 
 CONFIG = os.path.join(os.path.dirname(__file__), "..", "..", "robot_bringup", "config")
+# robot_missions is ROS-free too, but a sibling package: import it from the
+# source tree so this stays a milliseconds, no-ROS test (the `unit` stage).
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "robot_missions"))
+from robot_missions.site_map import STATION_BODY_OFFSET, STATION_BODY_RADIUS  # noqa: E402
 
 
 def load(name):
@@ -78,3 +83,14 @@ def test_the_battery_lock_stops_nav2_and_never_teleop():
 def test_return_comes_before_critical():
     assert 0.0 <= SUPERVISOR["critical_soc"] < SUPERVISOR["return_soc"] <= 1.0
     assert 0.0 < SUPERVISOR["critical_cell_v"] < SUPERVISOR["return_cell_v"]
+
+
+def test_the_site_map_draws_the_station_body_where_the_sim_has_it():
+    """site_map_server draws the station from the site file; sim_node from
+    DockStation. One body, two files: if they part, the map's station is not
+    the one the robot stops against (docs/missions.md)."""
+    radius = NAV2["global_costmap"]["global_costmap"]["ros__parameters"]["robot_radius"]
+    body = DockStation(0.0, 0.0, 0.0).stop_obstacle(radius)
+    assert math.isclose(body.x, STATION_BODY_OFFSET, abs_tol=1e-9)
+    assert math.isclose(body.y, 0.0, abs_tol=1e-9)
+    assert body.radius == STATION_BODY_RADIUS

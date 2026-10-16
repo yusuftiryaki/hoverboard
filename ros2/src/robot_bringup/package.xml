@@ -29,6 +29,7 @@
   <!-- SP4: the final approach onto the charging contacts. -->
   <exec_depend>opennav_docking</exec_depend>
   <exec_depend>battery_manager</exec_depend>
+  <exec_depend>robot_missions</exec_depend>
 
   <!-- Sensor drivers. Not hard deps: each is behind a launch argument so the
        stack still comes up while the hardware is still in a box.

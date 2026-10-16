@@ -7,7 +7,7 @@
 #   unit      every package's tests with NO ROS on the path        (seconds)
 #   firmware  pio run                                              (~1 min)
 #   stack     colcon build + every test except the four below      (~4 min)
-#   nav2      colcon build + the Nav2 stacks                       (~4 min)
+#   nav2      colcon build + the Nav2 stacks (map pinned, and on GPS) (~7 min)
 #   gazebo    colcon build + the Gazebo physics worlds             (~5 min)
 #   dock      colcon build + battery -> return -> dock stacks      (~5 min)
 #   sweep     colcon build + docking from every side, one stack    (~12 min)
@@ -23,7 +23,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WS="${REPO}/ros2"
 REPORTS="${WS}/log/ci"          # ros2/log/ is already gitignored
 
-NAV2_TESTS=(src/robot_sim/test/test_nav2.py)
+NAV2_TESTS=(src/robot_sim/test/test_nav2.py src/robot_sim/test/test_site_nav2.py)
 GAZEBO_TESTS=(src/robot_sim/test/test_gazebo_physics.py
               src/robot_sim/test/test_gazebo_localization.py)
 DOCK_TESTS=(src/robot_sim/test/test_docking.py)
