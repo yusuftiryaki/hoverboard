@@ -57,7 +57,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 
 
@@ -82,6 +82,7 @@ def generate_launch_description():
     use_site_map = LaunchConfiguration("use_site_map")
     site_file = LaunchConfiguration("site_file")
     dock_database = LaunchConfiguration("dock_database")
+    use_missions = LaunchConfiguration("use_missions")
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -138,6 +139,10 @@ def generate_launch_description():
             "site_file", default_value="",
             description="The site (docs/missions.md), e.g. ~/site.geojson. Empty: "
                         "an all-free survey map.",
+        ),
+        DeclareLaunchArgument(
+            "use_missions", default_value="true",
+            description="Run mission_runner (with use_nav2). docs/missions.md.",
         ),
         DeclareLaunchArgument(
             "dock_database",
@@ -242,6 +247,18 @@ def generate_launch_description():
             parameters=[{"site_file": site_file,
                          "dock_database": dock_database,
                          "use_sim_time": use_sim_time}],
+        ),
+
+        # Missions on the site: ~/start, ~/pause, ~/resume, ~/abort, ~/status.
+        # Only with Nav2 — it is what drives the waypoints.
+        Node(
+            package="robot_missions",
+            executable="mission_runner",
+            name="mission_runner",
+            output="screen",
+            condition=IfCondition(PythonExpression(
+                ["'", use_nav2, "' == 'true' and '", use_missions, "' == 'true'"])),
+            parameters=[{"site_file": site_file, "use_sim_time": use_sim_time}],
         ),
 
         IncludeLaunchDescription(

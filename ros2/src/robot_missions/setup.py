@@ -20,6 +20,7 @@ setup(
     entry_points={
         "console_scripts": [
             "site_map_server = robot_missions.site_map_server:main",
+            "mission_runner = robot_missions.mission_runner:main",
         ],
     },
 )

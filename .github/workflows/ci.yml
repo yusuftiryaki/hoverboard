@@ -76,7 +76,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        stage: [stack, nav2, gazebo, dock, sweep]
+        stage: [stack, nav2, gazebo, dock, sweep, mission]
     name: ${{ matrix.stage }}
     steps:
       - uses: actions/checkout@v7

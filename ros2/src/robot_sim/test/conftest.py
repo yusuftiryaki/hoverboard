@@ -178,6 +178,8 @@ STACK_PATTERNS = (
     "robot_localization/navsat_transform_node",
     # latches /obstacle_map: an orphan's map would be the next stack's survey
     "lib/robot_missions/site_map_server",
+    # sends navigate_to_pose goals: an orphan would drive the next stack
+    "lib/robot_missions/mission_runner",
 )
 
 

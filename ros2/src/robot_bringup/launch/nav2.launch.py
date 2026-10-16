@@ -85,6 +85,7 @@ def _on_watchdog_exit(event, _context):
 def generate_launch_description():
     pkg = get_package_share_directory("robot_bringup")
     params = os.path.join(pkg, "config", "nav2.yaml")
+    trees = os.path.join(pkg, "behavior_trees")
 
     use_sim_time = LaunchConfiguration("use_sim_time")
     autostart = LaunchConfiguration("autostart")
@@ -170,7 +171,13 @@ def generate_launch_description():
             executable="bt_navigator",
             name="bt_navigator",
             output="screen",
-            parameters=common,
+            # ⚠️ Our trees, not the stock ones: they name the goal checker,
+            # which controller_server needs now that it has two (nav2.yaml).
+            parameters=[*common, {
+                "default_nav_to_pose_bt_xml": os.path.join(trees, "navigate_to_pose.xml"),
+                "default_nav_through_poses_bt_xml":
+                    os.path.join(trees, "navigate_through_poses.xml"),
+            }],
         ),
         # Serves both FollowWaypoints and FollowGPSWaypoints. The GPS variant
         # converts lat/lon via navsat_transform's /fromLL service, which is why
