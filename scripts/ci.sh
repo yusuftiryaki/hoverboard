@@ -6,12 +6,13 @@
 #
 #   unit      every package's tests with NO ROS on the path        (seconds)
 #   firmware  pio run                                              (~1 min)
-#   stack     colcon build + every test except the two below       (~4 min)
+#   stack     colcon build + every test except the three below     (~4 min)
 #   nav2      colcon build + the Nav2 stacks                       (~4 min)
 #   gazebo    colcon build + the Gazebo physics worlds             (~5 min)
+#   dock      colcon build + battery -> return -> dock stacks      (~5 min)
 #   all       the lot, in that order
 #
-# stack + nav2 + gazebo together are the whole suite: `stack` is defined as
+# stack + nav2 + gazebo + dock together are the whole suite: `stack` is defined as
 # "everything that is not in HEAVY", so a new test file lands there by default
 # and cannot fall between the jobs.
 
@@ -24,7 +25,8 @@ REPORTS="${WS}/log/ci"          # ros2/log/ is already gitignored
 NAV2_TESTS=(src/robot_sim/test/test_nav2.py)
 GAZEBO_TESTS=(src/robot_sim/test/test_gazebo_physics.py
               src/robot_sim/test/test_gazebo_localization.py)
-HEAVY=("${NAV2_TESTS[@]}" "${GAZEBO_TESTS[@]}")
+DOCK_TESTS=(src/robot_sim/test/test_docking.py)
+HEAVY=("${NAV2_TESTS[@]}" "${GAZEBO_TESTS[@]}" "${DOCK_TESTS[@]}")
 
 packages_with_tests() {
   local dir
@@ -78,7 +80,9 @@ build_workspace() {
 # was fed and what it said, and the workflow uploads it when the stage fails.
 RECORDED_TOPICS=(/odom /imu/data_raw /imu/data /odometry/filtered/local /cmd_vel_nav
                  /odometry/filtered/global /ground_truth /gazebo/ground_truth
-                 /cmd_vel /cmd_vel_teleop /cmd_vel_nav_gated /diagnostics /tf /tf_static /bumper /collision_truth)
+                 /cmd_vel /cmd_vel_teleop /cmd_vel_nav_gated /diagnostics
+                 /battery /battery_raw /sim/battery_current /nav_lock
+                 /detected_dock_pose /dock_contact_truth /battery_supervisor/state /tf /tf_static /bumper /collision_truth)
 RECORDER_PID=
 start_recorder() {
   [[ -n "${CI_BAG:-}" ]] || return 0
@@ -173,12 +177,19 @@ stage_gazebo() {
   run_tests gazebo "${GAZEBO_TESTS[@]}"
 }
 
-[[ $# -gt 0 ]] || { sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2; }
+stage_dock() {
+  build_workspace
+  start_recorder dock
+  echo ">> dock"
+  run_tests dock "${DOCK_TESTS[@]}"
+}
+
+[[ $# -gt 0 ]] || { sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2; }
 
 for stage in "$@"; do
   case "${stage}" in
-    unit|firmware|stack|nav2|gazebo) "stage_${stage}" ;;
-    all) stage_unit; stage_firmware; stage_stack; stage_nav2; stage_gazebo ;;
+    unit|firmware|stack|nav2|gazebo|dock) "stage_${stage}" ;;
+    all) stage_unit; stage_firmware; stage_stack; stage_nav2; stage_gazebo; stage_dock ;;
     *) echo "unknown stage: ${stage}" >&2; exit 2 ;;
   esac
 done

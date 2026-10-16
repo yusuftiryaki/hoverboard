@@ -46,20 +46,24 @@ import math
 import random
 
 import rclpy
-from geometry_msgs.msg import Quaternion, TransformStamped
+from geometry_msgs.msg import PoseStamped, Quaternion, TransformStamped
 from nav_msgs.msg import OccupancyGrid, Odometry
 from rclpy.exceptions import ParameterUninitializedException
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.qos import DurabilityPolicy, QoSProfile
+from rclpy.time import Time
 from sensor_msgs.msg import Imu, MagneticField, NavSatFix, NavSatStatus
-from std_msgs.msg import Bool
-from tf2_ros import TransformBroadcaster
+from std_msgs.msg import Bool, Float64
+from tf2_ros import Buffer, TransformBroadcaster, TransformException, TransformListener
 
 from hoverboard_bridge.esp32_sim import TX_PERIOD_S, Esp32Sim, PtyLink, step_once
 from mpu6050_driver.mpu6050 import GYRO_LSB_PER_DPS, gyro_full_scale_rad_s
 from qmc5883l_driver import earth_field
+from robot_sim.battery_model import PackModel
+from robot_sim.dock_model import (CameraMount, DockStation, mat_mul, matrix_from_quaternion,
+                                  quaternion_from_matrix)
 from robot_sim.gazebo_backend import GazeboBackend
 from robot_sim.obstacle_map import DEFAULT_GRID, build_obstacle_grid, parse_obstacle_params
 from robot_sim.world import KinematicWorld
@@ -116,6 +120,29 @@ class SimNode(Node):
         self.declare_parameter("unsurveyed_obstacle_radii", Parameter.Type.DOUBLE_ARRAY)
         # Keep in step with nav2.yaml's costmap robot_radius — see world.py.
         self.declare_parameter("robot_radius", 0.4)
+
+        # ---- Battery (SP5) -----------------------------------------------------
+        # The pack the robot really has. battery_monitor's capacity_ah is what
+        # the Pi BELIEVES; a test that wants a fast-draining pack sets both.
+        self.declare_parameter("battery_capacity_ah", 4.4)
+        self.declare_parameter("battery_initial_soc", 0.8)
+        # The mainboard's standby draw (battery_model.py). 0.0 in tests that
+        # need the SoC at mission start not to depend on how long Nav2 took.
+        self.declare_parameter("battery_idle_current_a", 0.2)
+
+        # ---- Charging station (SP3/SP4) ------------------------------------------
+        # [x, y, yaw] in sim_world: where base_link sits when docked. Unset = no
+        # station. Declared by type for the same reason as the obstacles.
+        self.declare_parameter("dock_pose", Parameter.Type.DOUBLE_ARRAY)
+        # false = the marker is there but the camera never decodes it (dirt,
+        # glare, night): the failure path the design names.
+        self.declare_parameter("dock_tag_visible", True)
+        # What image_proc's track_marker_node manages on a Pi 4 at 640x480.
+        self.declare_parameter("dock_detection_rate_hz", 15.0)
+        # Position noise grows with range (pixels per metre shrink); the angle
+        # noise is the marker's yaw, the term that steers the final approach.
+        self.declare_parameter("dock_detection_noise_per_m", 0.01)
+        self.declare_parameter("dock_detection_angle_noise", 0.02)
 
         # ---- Fake IMU --------------------------------------------------------
         # This publishes what mpu6050_driver WOULD PUBLISH, not what the chip
@@ -176,6 +203,16 @@ class SimNode(Node):
             self._unset_as_empty("unsurveyed_obstacle_centers"),
             self._unset_as_empty("unsurveyed_obstacle_radii"),
         )
+        dock = self._unset_as_empty("dock_pose")
+        self._station = None
+        if dock:
+            if len(dock) != 3:
+                raise ValueError(f"dock_pose must be [x, y, yaw], got {dock}")
+            self._station = DockStation(*dock)
+            # The station body is physically there and on nobody's survey:
+            # it stops a robot that drives in too far (dock_model.py).
+            self._unsurveyed = self._unsurveyed + (
+                self._station.stop_obstacle(p("robot_radius").value),)
         if p("backend").value == "gazebo":
             if p("slip_factor").value:
                 # Slip is what this backend is FOR — it comes out of friction,
@@ -248,6 +285,15 @@ class SimNode(Node):
         self._mag_residual = [v * 1e-6 for v in p("mag_residual_hard_iron_ut").value]
         self._mag_noise = p("mag_noise_ut").value * 1e-6
 
+        self._pack = PackModel(capacity_ah=p("battery_capacity_ah").value,
+                               soc=p("battery_initial_soc").value,
+                               idle_current_a=p("battery_idle_current_a").value)
+        self._esp.bat_voltage = round(self._pack.open_circuit_voltage * 100.0)
+        self._tag_visible = bool(p("dock_tag_visible").value)
+        self._tag_noise = p("dock_detection_noise_per_m").value
+        self._tag_angle_noise = p("dock_detection_angle_noise").value
+        self._camera: CameraMount | None = None
+
         self._truth_pub = self.create_publisher(Odometry, "ground_truth", 10)
         # ⚠️ An ORACLE, like /ground_truth: the real robot has nothing that can
         # publish this. Nothing in the robot stack may subscribe to it — it
@@ -264,6 +310,17 @@ class SimNode(Node):
         map_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self._obstacle_map_pub = self.create_publisher(OccupancyGrid, "obstacle_map", map_qos)
         self._tf = TransformBroadcaster(self)
+        # Pack current, for battery_monitor's fake INA228 (fake_battery:=true).
+        self._current_pub = self.create_publisher(Float64, "sim/battery_current", 10)
+        # What image_proc's track_marker_node would publish (nav2.launch.py
+        # wires that node's tracked_pose to the same name on the robot).
+        self._dock_pose_pub = self.create_publisher(PoseStamped, "detected_dock_pose", 10)
+        # ⚠️ An ORACLE like /collision_truth: are the contacts touching.
+        self._contact_pub = self.create_publisher(Bool, "dock_contact_truth", 10)
+        # The camera mount is read off tf rather than copied: robot.urdf.xacro
+        # is the one description of where the camera is.
+        self._tf_buffer = Buffer()
+        self._tf_listener = TransformListener(self._tf_buffer, self)
 
         # ⚠️ ALWAYS, even with no obstacles. Nav2's StaticLayer waits for a map
         # before it will let its costmap become usable, so a simulator that
@@ -279,6 +336,8 @@ class SimNode(Node):
         self.create_timer(1.0 / p("imu_rate_hz").value, self._publish_imu)
         self.create_timer(1.0 / p("mag_rate_hz").value, self._publish_mag)
         self.create_timer(1.0 / p("gps_rate_hz").value, self._publish_gps)
+        if self._station is not None:
+            self.create_timer(1.0 / p("dock_detection_rate_hz").value, self._publish_dock)
 
     # ---- The world -----------------------------------------------------------
     def _unset_as_empty(self, name: str) -> list:
@@ -329,6 +388,7 @@ class SimNode(Node):
         dt = TX_PERIOD_S if self._last_tick is None else now - self._last_tick
         self._last_tick = now
         step_once(self._esp, self._world, self._link, now, dt)
+        self._step_battery(dt)
         self._publish_truth()
         # Both backends carry a real `collision`: KinematicWorld sets it when
         # the circle test refuses a step, GazeboBackend from hoverbot.sdf's
@@ -381,6 +441,65 @@ class SimNode(Node):
         tf.transform.translation.y = pose.y
         tf.transform.rotation = yaw_to_quaternion(pose.yaw)
         self._tf.sendTransform(tf)
+
+    def _step_battery(self, dt: float) -> None:
+        contact = (self._station is not None
+                   and getattr(self._world, "ground_truth_seen", True)
+                   and self._station.in_contact(self._world.pose))
+        voltage, current = self._pack.step(dt, self._world.v, self._world.omega, contact)
+        # Reported on the next feedback frame — the board samples, the ESP32
+        # forwards, a 20 ms lag nobody downstream can see.
+        self._esp.bat_voltage = round(voltage * 100.0)
+        self._current_pub.publish(Float64(data=current))
+        if self._station is not None:
+            self._contact_pub.publish(Bool(data=contact))
+
+    def _camera_mount(self) -> CameraMount | None:
+        if self._camera is None:
+            try:
+                tf = self._tf_buffer.lookup_transform("base_link", "camera_optical_link",
+                                                      Time())
+            except TransformException:
+                return None            # robot_state_publisher not up yet
+            t, q = tf.transform.translation, tf.transform.rotation
+            self._camera = CameraMount(translation=(t.x, t.y, t.z),
+                                       rotation=matrix_from_quaternion(q.x, q.y, q.z, q.w))
+        return self._camera
+
+    def _publish_dock(self) -> None:
+        """The marker's pose in the camera's optical frame, when it is in view.
+
+        ⚠️ Computed from the TRUE pose. That is the point: it is a relative
+        measurement, so docking_server turns it into odom through the EKF's
+        transform and the dock lands where the robot's own estimate says —
+        which is how the survey error of the dock database gets corrected."""
+        if not self._tag_visible or not getattr(self._world, "ground_truth_seen", True):
+            return
+        mount = self._camera_mount()
+        if mount is None:
+            return
+        seen = self._station.tag_in_camera(self._world.pose, mount)
+        if seen is None:
+            return
+        (x, y, z), (qx, qy, qz, qw) = seen
+        distance = math.sqrt(x * x + y * y + z * z)
+        sigma = self._tag_noise * distance
+        rotation = matrix_from_quaternion(qx, qy, qz, qw)
+        # Yaw error of the marker about the camera's vertical (optical y).
+        a = self._rng.gauss(0.0, self._tag_angle_noise)
+        about_y = ((math.cos(a), 0.0, math.sin(a)), (0.0, 1.0, 0.0),
+                   (-math.sin(a), 0.0, math.cos(a)))
+        qx, qy, qz, qw = quaternion_from_matrix(mat_mul(about_y, rotation))
+
+        msg = PoseStamped()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = "camera_optical_link"
+        msg.pose.position.x = x + self._rng.gauss(0.0, sigma)
+        msg.pose.position.y = y + self._rng.gauss(0.0, sigma)
+        msg.pose.position.z = z + self._rng.gauss(0.0, sigma)
+        msg.pose.orientation.x, msg.pose.orientation.y = qx, qy
+        msg.pose.orientation.z, msg.pose.orientation.w = qz, qw
+        self._dock_pose_pub.publish(msg)
 
     # ---- Fake sensors --------------------------------------------------------
     def _publish_imu(self) -> None:

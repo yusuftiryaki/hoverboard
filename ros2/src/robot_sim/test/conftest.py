@@ -143,6 +143,9 @@ STACK_PATTERNS = (
     "lib/hoverboard_bridge/nav_cmd_gate",
     # the one publisher of /cmd_vel when robot.launch.py runs
     "lib/twist_mux/twist_mux",
+    # cancel goals and hold nav_lock: an orphan would stop the next stack
+    "lib/battery_manager/battery_supervisor",
+    "lib/battery_manager/battery_monitor",
     "robot_localization/ekf_node",
     "robot_localization/navsat_transform_node",
 )
@@ -226,8 +229,11 @@ class SimStack:
         with self._closing_on_failure():
             self._start_world(sim_args)
             self._spawn("ros2", "launch", "robot_bringup", "robot.launch.py",
-                        f"esp32_port:={self.LINK}", *self.LAUNCH_ARGS)
+                        f"esp32_port:={self.LINK}", *self.launch_args())
             time.sleep(STACK_STARTUP_S)
+
+    def launch_args(self):
+        return self.LAUNCH_ARGS
 
     @contextlib.contextmanager
     def _closing_on_failure(self):
@@ -335,8 +341,12 @@ class Nav2Stack(SimStack):
         with self._closing_on_failure():
             self._spawn("ros2", "run", "tf2_ros", "static_transform_publisher",
                         "--frame-id", "map", "--child-frame-id", "odom")
-            self._spawn("ros2", "launch", "robot_bringup", "nav2.launch.py")
+            self._spawn("ros2", "launch", "robot_bringup", "nav2.launch.py",
+                        *self.nav2_args())
             self._await_nav2()
+
+    def nav2_args(self):
+        return ()
 
     def _await_nav2(self):
         """Block until the lifecycle manager says every server is ACTIVE.
@@ -416,6 +426,64 @@ def nav2_stack(ros):
 
     def _make(*sim_args):
         stack = Nav2Stack(*sim_args)
+        made.append(stack)
+        return stack
+
+    yield _make
+    for stack in made:
+        stack.close()
+
+
+class DockStack(Nav2Stack):
+    """The Nav2 stack with a charging station and a pack that drains in
+    seconds (SP3-SP5).
+
+    Three things differ from Nav2Stack, all through files and arguments the
+    real launch files take, not test-only switches:
+      * fake_battery:=true — battery_monitor's fake INA228 carries the current
+        robot_sim's pack model says flows (sim/battery_current).
+      * battery_config — a copy of battery_manager.yaml with a tiny capacity on
+        BOTH sides (the sim's pack and the monitor's belief) and the test's
+        thresholds for the supervisor.
+      * dock_database — the test's own docks.yaml, which may deliberately
+        disagree with where sim_node really put the station (survey error).
+    """
+
+    def __init__(self, workdir, sim_args, monitor=None, supervisor=None, dock_pose=None):
+        import yaml
+        from ament_index_python.packages import get_package_share_directory
+
+        source = os.path.join(get_package_share_directory("robot_bringup"),
+                              "config", "battery_manager.yaml")
+        with open(source, encoding="utf-8") as handle:
+            config = yaml.safe_load(handle)
+        config["battery_monitor"]["ros__parameters"].update(monitor or {})
+        config["battery_supervisor"]["ros__parameters"].update(supervisor or {})
+        self._battery_config = os.path.join(workdir, "battery_manager.yaml")
+        with open(self._battery_config, "w", encoding="utf-8") as handle:
+            yaml.safe_dump(config, handle)
+        self._dock_database = os.path.join(workdir, "docks.yaml")
+        with open(self._dock_database, "w", encoding="utf-8") as handle:
+            yaml.safe_dump({"docks": {"home": {
+                "type": "charging_dock", "frame": "map",
+                "pose": [float(v) for v in dock_pose]}}}, handle)
+        super().__init__(*sim_args)
+
+    def launch_args(self):
+        return (*self.LAUNCH_ARGS, "fake_battery:=true",
+                f"battery_config:={self._battery_config}")
+
+    def nav2_args(self):
+        return (f"battery_config:={self._battery_config}",
+                f"dock_database:={self._dock_database}")
+
+
+@pytest.fixture
+def dock_stack(ros, tmp_path):
+    made = []
+
+    def _make(sim_args, **kwargs):
+        stack = DockStack(str(tmp_path), sim_args, **kwargs)
         made.append(stack)
         return stack
 

@@ -1,0 +1,18 @@
+# The charging station(s) — opennav_docking's dock database, and the SAME file
+# battery_supervisor reads to find home (both via nav2.launch.py's
+# dock_database argument), so the two cannot disagree about where it is.
+#
+# pose: [x, y, yaw] of base_link WHEN DOCKED, in `map` — i.e. surveyed in the
+# GPS datum, exactly like the obstacle map (handoff decision 12). yaw is the
+# heading the robot drives in on (forward: the camera faces the marker).
+#
+# ⚠️ TODO(site survey): this is a placeholder at the map origin. A survey
+# error here is tolerable — the marker corrects it on the final approach —
+# but only within the camera's view from the staging pose (1.5 m back):
+# roughly a metre sideways at most. Beyond that the marker is never seen
+# and docking fails with FAILED_TO_DETECT_DOCK.
+docks:
+  home:
+    type: charging_dock
+    frame: map
+    pose: [0.0, 0.0, 0.0]
