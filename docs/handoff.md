@@ -69,6 +69,10 @@ riskler fizik/elektrik/RF tarafında. Ek bütçe ~2-3 bin TL.
    ancak **çarpınca** fark eder — ve çarpma vetosu sadece ileriyi keser,
    sıkışmayı da yığın göremiyor (A3c tuzak 3). Numara, başka yerlerdeki
    "karar 8" atıfları bozulmasın diye korundu.
+   *(2026-10-16)* Ara çözüm onaylandı: **tampon temas haritası + insan
+   etiketi** (`docs/missions.md` "Robotun kendi tespit ettiği engeller").
+   Menzil sensörü kararı ilk saha denemelerinden sonra; kullanıcı ileride
+   **derinlik kamerasını** değerlendirecek.
 9. **GPS → USB-TTL**, tercihen **FTDI** (ESP32'nin çipiyle VID:PID çakışmasın).
 10. ⚠️ **Sahte sensörler elle türetilmiş fiziğe çivilenir, kendi matematiğine
     değil** (2026-07-17, A6'dan sonra alındı). Bir fikstürü kendi formülüyle
