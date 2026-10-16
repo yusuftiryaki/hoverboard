@@ -61,6 +61,15 @@ class BatteryMonitorNode(Node):
         self._is_full = False
 
         self.create_subscription(BatteryState, "battery_raw", self._on_raw, 10)
+        if bool(get_parameter("use_fake_bus").value) and self._bus is not None:
+            # Simulation only: robot_sim's pack model says what current flows,
+            # and the fake chip's registers carry it — so the INA228 driver and
+            # the estimator are still the ones turning it into a SoC. Unheard,
+            # the fake keeps fake_current_a, as it always did.
+            from std_msgs.msg import Float64
+
+            self.create_subscription(Float64, "sim/battery_current",
+                                     self._on_sim_current, 10)
         self._battery_pub = self.create_publisher(BatteryState, "battery", 10)
         self._diag_pub = self.create_publisher(DiagnosticArray, "/diagnostics", 10)
         self._dt = 1.0 / float(get_parameter("rate_hz").value)
@@ -103,6 +112,9 @@ class BatteryMonitorNode(Node):
         except (ImportError, OSError, ValueError) as exc:
             self._ina = None
             self.get_logger().warn(f"INA228 yok ({exc}) - voltaj-yalnız mod")
+
+    def _on_sim_current(self, msg) -> None:
+        self._bus.true_current_a = float(msg.data)
 
     def _on_raw(self, msg: BatteryState) -> None:
         self._raw_voltage = msg.voltage

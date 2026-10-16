@@ -92,7 +92,13 @@ def generate_launch_description():
             remappings=[("fix", "gps/fix")],
         ),
 
-        # Pi Camera V2 over CSI, for ground segmentation (roadmap step 7).
+        # Pi Camera V2 over CSI: the charging-station marker (SP3) and, later,
+        # ground segmentation (roadmap step 7).
+        # ⚠️ CALIBRATE the intrinsics first (ros2 run camera_calibration
+        # cameracalibrator, saved where camera_info_manager looks:
+        # ~/.ros/camera_info/). The marker's pose is solved from camera_info's
+        # K and D; uncalibrated, they are zeros and every detected dock pose
+        # is garbage — confidently.
         Node(
             package="camera_ros",
             executable="camera_node",
@@ -106,7 +112,33 @@ def generate_launch_description():
                 "frame_id": "camera_optical_link",
                 "use_sim_time": use_sim_time,
             }],
-            remappings=[("~/image_raw", "camera/image_raw")],
+            remappings=[("~/image_raw", "camera/image_raw"),
+                        ("~/camera_info", "camera/camera_info")],
+        ),
+
+        # SP3: the station's marker -> /detected_dock_pose, which docking_server
+        # (nav2.launch.py) reads. In simulation robot_sim publishes that topic
+        # itself, in the same convention (robot_sim/dock_model.py).
+        # Lazy: it only subscribes to the camera while someone subscribes to it.
+        Node(
+            package="image_proc",
+            executable="track_marker_node",
+            name="dock_marker",
+            output="screen",
+            condition=IfCondition(use_camera),
+            parameters=[{
+                # cv::aruco::DICT_APRILTAG_36h11. The design's "AprilTag":
+                # Jazzy has no aruco_opencv, and OpenCV's aruco decodes 36h11.
+                "dictionary": 20,
+                "marker_id": 0,
+                # Edge of the printed black square, metres. CALIBRATE: every
+                # range the camera reports scales with this number.
+                "marker_size": 0.10,
+                "use_sim_time": use_sim_time,
+            }],
+            remappings=[("image", "camera/image_raw"),
+                        ("camera_info", "camera/camera_info"),
+                        ("tracked_pose", "detected_dock_pose")],
         ),
 
         # Magnetometer on the mast (0x0D, same I2C bus as the IMU). The robot's

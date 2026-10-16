@@ -28,6 +28,14 @@ deliberately not gated: it reaches twist_mux (robot.launch.py) on
 /cmd_vel_teleop at a HIGHER priority, so a human can take the wheels during a
 goal, and while the gate is blocking, instead of racing Nav2's commands.
 
+Also here, because they need Nav2's actions (SP4/SP5):
+  * docking_server (opennav_docking) — the final approach onto the charging
+    contacts, steered by the marker on /detected_dock_pose. Its cmd_vel goes
+    through nav_cmd_gate like the other two: it drives on ekf_local too.
+  * battery_supervisor (battery_manager) — /battery LOW: cancel the mission,
+    stage, face the dock, dock; CRITICAL: cancel everything and hold
+    twist_mux's nav_lock. Both read dock_database, so home is defined once.
+
 Deliberately not launched (and why):
   * velocity_smoother — the ESP32 sends at 50 Hz and the board ramps its own
     output. Worth revisiting if the real robot jerks (roadmap B5).
@@ -50,6 +58,7 @@ LIFECYCLE_NODES = [
     "behavior_server",
     "bt_navigator",
     "waypoint_follower",
+    "docking_server",
 ]
 
 
@@ -59,6 +68,8 @@ def generate_launch_description():
 
     use_sim_time = LaunchConfiguration("use_sim_time")
     autostart = LaunchConfiguration("autostart")
+    battery_config = LaunchConfiguration("battery_config")
+    dock_database = LaunchConfiguration("dock_database")
 
     common = [params, {"use_sim_time": use_sim_time}]
 
@@ -67,6 +78,15 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "autostart", default_value="true",
             description="Let the lifecycle manager bring the Nav2 nodes up on start.",
+        ),
+        DeclareLaunchArgument(
+            "battery_config",
+            default_value=os.path.join(pkg, "config", "battery_manager.yaml"),
+        ),
+        DeclareLaunchArgument(
+            "dock_database",
+            default_value=os.path.join(pkg, "config", "docks.yaml"),
+            description="Where the charging station is (surveyed, `map`).",
         ),
 
         Node(
@@ -120,6 +140,30 @@ def generate_launch_description():
             name="waypoint_follower",
             output="screen",
             parameters=common,
+        ),
+
+        Node(
+            package="opennav_docking",
+            executable="opennav_docking",
+            name="docking_server",
+            output="screen",
+            parameters=[*common, {"dock_database": dock_database}],
+            remappings=[
+                ("cmd_vel", "cmd_vel_nav"),          # through nav_cmd_gate
+                # SimpleChargingDock reads `battery_state`; ours is /battery.
+                ("battery_state", "battery"),
+            ],
+        ),
+        # Plain node, not lifecycle: it must watch the battery from the start.
+        Node(
+            package="battery_manager",
+            executable="battery_supervisor",
+            name="battery_supervisor",
+            output="screen",
+            parameters=[battery_config, {"dock_database": dock_database,
+                                         "use_sim_time": use_sim_time}],
+            respawn=True,
+            respawn_delay=2.0,
         ),
 
         Node(

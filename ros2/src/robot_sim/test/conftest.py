@@ -30,10 +30,18 @@ STACK_STARTUP_S = 8.0     # robot_state_publisher + bridge + EKF
 # a large number costs nothing except on a real failure.
 NAV2_READY_S = 180.0
 # One is_active call's budget. It BLOCKS while the manager transitions its
-# servers (measured: 4.3 s on an idle box), so this has to cover a slow
-# activation — but stay small enough that the whole wait fits several rounds,
-# because a round is also how a client bound to a dead endpoint gets replaced.
-NAV2_CALL_S = 20.0
+# servers (measured: 4.3 s on an idle box) — but a call that times out
+# mid-activation costs nothing: the next round asks again and a live manager
+# answers. What a LONG budget costs is real: a request sent before the new
+# manager was discovered (only the previous test's killed one was) is never
+# answered, and every such round burns the whole budget. MEASURED in CI
+# (PR #6, from the bag): Nav2's first command came 14, 32, 52, 72 s after the
+# stack started — a base plus steps of ~20 s, which is what whole burned
+# budgets look like (inferred: the fixture did not log its rounds then).
+# On the 72 s one the gyro's
+# 0.1 deg/s residual had turned the EKF 7 deg while the robot stood still, so
+# the "straight line" test drove 0.69 m off it. 5 s keeps the misses cheap.
+NAV2_CALL_S = 5.0
 # Gazebo is waited FOR rather than slept past — see GazeboStack.
 GAZEBO_READY_S = 60.0
 
@@ -143,6 +151,9 @@ STACK_PATTERNS = (
     "lib/hoverboard_bridge/nav_cmd_gate",
     # the one publisher of /cmd_vel when robot.launch.py runs
     "lib/twist_mux/twist_mux",
+    # cancel goals and hold nav_lock: an orphan would stop the next stack
+    "lib/battery_manager/battery_supervisor",
+    "lib/battery_manager/battery_monitor",
     "robot_localization/ekf_node",
     "robot_localization/navsat_transform_node",
 )
@@ -226,8 +237,11 @@ class SimStack:
         with self._closing_on_failure():
             self._start_world(sim_args)
             self._spawn("ros2", "launch", "robot_bringup", "robot.launch.py",
-                        f"esp32_port:={self.LINK}", *self.LAUNCH_ARGS)
+                        f"esp32_port:={self.LINK}", *self.launch_args())
             time.sleep(STACK_STARTUP_S)
+
+    def launch_args(self):
+        return self.LAUNCH_ARGS
 
     @contextlib.contextmanager
     def _closing_on_failure(self):
@@ -335,8 +349,12 @@ class Nav2Stack(SimStack):
         with self._closing_on_failure():
             self._spawn("ros2", "run", "tf2_ros", "static_transform_publisher",
                         "--frame-id", "map", "--child-frame-id", "odom")
-            self._spawn("ros2", "launch", "robot_bringup", "nav2.launch.py")
+            self._spawn("ros2", "launch", "robot_bringup", "nav2.launch.py",
+                        *self.nav2_args())
             self._await_nav2()
+
+    def nav2_args(self):
+        return ()
 
     def _await_nav2(self):
         """Block until the lifecycle manager says every server is ACTIVE.
@@ -416,6 +434,64 @@ def nav2_stack(ros):
 
     def _make(*sim_args):
         stack = Nav2Stack(*sim_args)
+        made.append(stack)
+        return stack
+
+    yield _make
+    for stack in made:
+        stack.close()
+
+
+class DockStack(Nav2Stack):
+    """The Nav2 stack with a charging station and a pack that drains in
+    seconds (SP3-SP5).
+
+    Three things differ from Nav2Stack, all through files and arguments the
+    real launch files take, not test-only switches:
+      * fake_battery:=true — battery_monitor's fake INA228 carries the current
+        robot_sim's pack model says flows (sim/battery_current).
+      * battery_config — a copy of battery_manager.yaml with a tiny capacity on
+        BOTH sides (the sim's pack and the monitor's belief) and the test's
+        thresholds for the supervisor.
+      * dock_database — the test's own docks.yaml, which may deliberately
+        disagree with where sim_node really put the station (survey error).
+    """
+
+    def __init__(self, workdir, sim_args, monitor=None, supervisor=None, dock_pose=None):
+        import yaml
+        from ament_index_python.packages import get_package_share_directory
+
+        source = os.path.join(get_package_share_directory("robot_bringup"),
+                              "config", "battery_manager.yaml")
+        with open(source, encoding="utf-8") as handle:
+            config = yaml.safe_load(handle)
+        config["battery_monitor"]["ros__parameters"].update(monitor or {})
+        config["battery_supervisor"]["ros__parameters"].update(supervisor or {})
+        self._battery_config = os.path.join(workdir, "battery_manager.yaml")
+        with open(self._battery_config, "w", encoding="utf-8") as handle:
+            yaml.safe_dump(config, handle)
+        self._dock_database = os.path.join(workdir, "docks.yaml")
+        with open(self._dock_database, "w", encoding="utf-8") as handle:
+            yaml.safe_dump({"docks": {"home": {
+                "type": "charging_dock", "frame": "map",
+                "pose": [float(v) for v in dock_pose]}}}, handle)
+        super().__init__(*sim_args)
+
+    def launch_args(self):
+        return (*self.LAUNCH_ARGS, "fake_battery:=true",
+                f"battery_config:={self._battery_config}")
+
+    def nav2_args(self):
+        return (f"battery_config:={self._battery_config}",
+                f"dock_database:={self._dock_database}")
+
+
+@pytest.fixture
+def dock_stack(ros, tmp_path):
+    made = []
+
+    def _make(sim_args, **kwargs):
+        stack = DockStack(str(tmp_path), sim_args, **kwargs)
         made.append(stack)
         return stack
 

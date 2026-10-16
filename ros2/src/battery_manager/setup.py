@@ -14,12 +14,13 @@ setup(
     zip_safe=True,
     maintainer="Enes",
     maintainer_email="enesis@entes.com.tr",
-    description="Battery monitoring and state-of-charge estimation.",
+    description="Battery monitoring, state-of-charge estimation and return-to-dock.",
     license="MIT",
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
             "battery_monitor = battery_manager.battery_monitor_node:main",
+            "battery_supervisor = battery_manager.battery_supervisor_node:main",
         ],
     },
 )

@@ -141,3 +141,25 @@ fizik/elektrik riskini azaltmaz.
 - Temas pedleri/yaylı kontak malzemesi (~100-200 TL)
 - Röle modülü (~50 TL)
 - AprilTag baskısı (~0), huni malzemesi (hurda olabilir)
+
+## Uygulama notları (2026-10-16 — SP3/SP4/SP5 yazıldı)
+
+Ayrıntı ve ölçülen sayılar `docs/handoff.md` → "SP3–SP5". Bu dokümandan
+bilinçli sapmalar:
+
+- **İşaretçi algılayıcı:** `image_proc` `track_marker_node` (OpenCV aruco,
+  `DICT_APRILTAG_36h11`) — apt'te hazır, doğrudan `PoseStamped` yayınlıyor;
+  ayrı adaptör düğümü gerekmedi. Nav2'nin `external_detection_rotation_*`
+  varsayılanları bu konvansiyon için.
+- **Staging + dönme supervisor'da**, `DockRobot(navigate_to_staging_pose=false)`:
+  Nav2'nin gevşek goal checker'ı (1 m, her yön) ile DockRobot'un kendi staging'i
+  işaretçiye sırtı dönük bitebiliyor ve initial perception retry'sız düşüyor.
+- **"Sıfır cmd_vel" = görev iptali + twist_mux kilidi** (öncelik 50; Nav2 10,
+  teleop 100). Motor yoluna kapı eklenmedi; teleop kilidin üstünde.
+- **KRİTİK, CHARGING/DOCKED_IDLE'da durdurmaz** (robot zaten hareket etmiyor
+  ve şarj oluyor).
+- **DOCKED_IDLE'dan çıkış:** `battery_supervisor/resume` servisi → UndockRobot →
+  NORMAL. Göreve otomatik dönüş hâlâ kapsam dışı.
+- Sim istasyonu (`robot_sim/dock_model.py`): işaretçi dock'lu base_link'in
+  0.55 m önünde, 0.20 m yüksekte; staging 1.5 m. SP6 bu ölçülerle
+  başlayabilir; değişirse `nav2.yaml` ile birlikte değişir.

@@ -1,18 +1,29 @@
 # Alım listesi
 
-*(son güncelleme: 2026-10-08 — kullanıcıyla kalem kalem gözden geçirildi)*
+*(son güncelleme: 2026-10-16 — sipariş geldi: ST-Link, GY-271, FT232RL)*
 
 Elektronik kalemler **tek tedarikçiden** alınacak. Seçilen: **Motorobit**.
 Gerekçesi aşağıda. Fiyat ve stok **doğrulanmadı** — Motorobit sayfaları bunları
 tarayıcıda yüklüyor, dışarıdan okunamadı. Sepete eklerken kontrol et.
 
-## Bu siparişte alınacaklar
+## ✅ Bu sipariş — GELDİ (2026-10-16)
+
+Üçü de elde. Doğrulama durumu en sağ sütunda; tablo tarihçe olarak duruyor.
 
 | # | Kalem | Aciliyet | Neyi açıyor | Dikkat |
 |---|---|---|---|---|
 | 1 | **ST-Link V2 klon** | 1 | B1: flash — tüm donanım izinin kilidi | Klonlarda kasadaki pin yazısı yanlış olabiliyor; bağlamadan önce doğrula. Sadece GND + SWDIO + SWCLK bağlanır, 3V3 bağlanmaz. |
 | 2 | **QMC5883L (GY-271)** | 3 | Mutlak yön (B6) | ⚠️ Aynı kart **HMC5883L** ile de satılıyor. Sürücümüz 0x0D'deki QMC'yi bekler; HMC (0x1E) gelirse çalışmaz. Gelince `i2cdetect -y 1` ile bak. |
 | 3 | **FT232RL USB-TTL modülü** | 3 | GPS (B6) | **Modül** olmalı (USB girişli kart), çıplak entegre değil. ESP32'nin USB çipinden farklı olmalı, yoksa udev ikisini ayıramaz (`deployment.md` adım 4). 3.3V seçilebilir olsun. |
+
+Gelişte doğrulanacaklar:
+- [ ] ST-Link: kasa yazısı (2 SWDIO, 3/4 GND, 6 SWCLK, 7/8 3.3V) — GND pinini
+      USB gövdesine süreklilikle doğrula; `st-info --probe` kartsız bile
+      programlayıcıyı görmeli.
+- [x] GY-271 çip yazısı: `5883` → HMC5883L değil (2026-10-16).
+- [ ] GY-271 adresi: `i2cdetect -y 1` → **0x0D** olmalı (0x2C = QMC5883P,
+      0x0C = VCM5883L; ikisinde de yazmaçlar farklı, sürücümüz çalışmaz).
+- [ ] FT232RL: VCCIO jumper'ı **3.3V**; `lsusb` → `0403:6001`.
 
 Aciliyet 1 = yokluğu şu an her şeyi durduruyor. Sipariş tek seferde verildiği
 için hepsi aynı sepete girer.

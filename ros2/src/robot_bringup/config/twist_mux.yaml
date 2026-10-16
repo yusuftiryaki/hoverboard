@@ -49,3 +49,16 @@ twist_mux:
         topic: cmd_vel_nav_gated
         timeout: 0.5
         priority: 10
+
+    locks:
+      # battery_supervisor (SP5) holds this TRUE in SAFE_STOP, CHARGING and
+      # DOCKED_IDLE. Priority 50: it masks the Nav2 input (10) and NOT teleop
+      # (100) — a robot stopped for a flat battery can still be driven home by
+      # hand. timeout 0: no liveness check — a supervisor that dies while
+      # locked stays locked (its last word stands) until it respawns, starts
+      # over in NORMAL and re-judges the battery; one never launched locks
+      # nothing.
+      battery:
+        topic: nav_lock
+        timeout: 0.0
+        priority: 50

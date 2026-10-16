@@ -32,6 +32,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ros-jazzy-image-transport ros-jazzy-camera-info-manager \
       ros-jazzy-tf2-ros ros-jazzy-tf2-tools \
       ros-jazzy-twist-mux \
+      ros-jazzy-image-proc ros-jazzy-camera-ros \
     && rm -rf /var/lib/apt/lists/*
 
 # --- PlatformIO (ESP32 firmware build + flash) -------------------------------
