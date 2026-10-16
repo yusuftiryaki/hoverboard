@@ -25,10 +25,19 @@ As hardware lands, turn things on:
     ros2 launch robot_bringup robot.launch.py esp32_port:=/tmp/fake_esp32 \\
         use_localization:=true use_imu:=true fake_imu:=true
 
-    # the simulated world, with Nav2 on top (robot_sim publishes /imu/data itself)
+    # the simulated world, with Nav2 on top (robot_sim publishes /imu/data and,
+    # unless told otherwise, /obstacle_map itself — hence use_site_map:=false)
     ros2 run robot_sim sim_node
     ros2 launch robot_bringup robot.launch.py esp32_port:=/tmp/fake_esp32 \\
-        use_localization:=true use_gps:=true use_imu:=false use_nav2:=true
+        use_localization:=true use_gps:=true use_imu:=false use_nav2:=true \\
+        use_site_map:=false
+
+⚠️ THE SURVEY MAP: site_map_server publishes /obstacle_map from `site_file`
+(docs/missions.md), and Nav2's costmaps never ready without it (A3c trap 1). It
+runs by default, with no site file too — then the map is all free. Exactly one
+publisher of /obstacle_map: in simulation that is sim_node, so pass
+use_site_map:=false there (or sim_node's publish_obstacle_map:=false and a
+site_file here).
 
 ⚠️ DRIVING BY HAND ALONGSIDE THIS: publish /cmd_vel_teleop, not /cmd_vel.
 
@@ -70,6 +79,9 @@ def generate_launch_description():
     fake_battery = LaunchConfiguration("fake_battery")
     use_sim_time = LaunchConfiguration("use_sim_time")
     battery_config = LaunchConfiguration("battery_config")
+    use_site_map = LaunchConfiguration("use_site_map")
+    site_file = LaunchConfiguration("site_file")
+    dock_database = LaunchConfiguration("dock_database")
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -116,6 +128,22 @@ def generate_launch_description():
             description="battery_monitor's (and, via nav2.launch.py, the "
                         "supervisor's) parameter file. Tests point it at a "
                         "small-capacity copy so a pack drains in seconds.",
+        ),
+        DeclareLaunchArgument(
+            "use_site_map", default_value="true",
+            description="Run site_map_server, the one publisher of /obstacle_map. "
+                        "false in simulation, where sim_node publishes it.",
+        ),
+        DeclareLaunchArgument(
+            "site_file", default_value="",
+            description="The site (docs/missions.md), e.g. ~/site.geojson. Empty: "
+                        "an all-free survey map.",
+        ),
+        DeclareLaunchArgument(
+            "dock_database",
+            default_value=os.path.join(pkg, "config", "docks.yaml"),
+            description="The charging station for Nav2's docking server, the "
+                        "supervisor and site_map_server's cross-check.",
         ),
         DeclareLaunchArgument(
             "esp32_port", default_value="/dev/esp32",
@@ -202,10 +230,25 @@ def generate_launch_description():
                               "use_sim_time": use_sim_time}.items(),
         ),
 
+        # The survey map, from lat/lon through navsat_transform's /fromLLArray.
+        # Without GPS a site WITH geometry waits forever (logged): there is no
+        # `map` to draw it in anyway.
+        Node(
+            package="robot_missions",
+            executable="site_map_server",
+            name="site_map_server",
+            output="screen",
+            condition=IfCondition(use_site_map),
+            parameters=[{"site_file": site_file,
+                         "dock_database": dock_database,
+                         "use_sim_time": use_sim_time}],
+        ),
+
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(os.path.join(launch_dir, "nav2.launch.py")),
             condition=IfCondition(use_nav2),
             launch_arguments={"use_sim_time": use_sim_time,
-                              "battery_config": battery_config}.items(),
+                              "battery_config": battery_config,
+                              "dock_database": dock_database}.items(),
         ),
     ])

@@ -321,6 +321,7 @@ docs/wiring-map.md          Kaba bağlantı haritası (güç + Pi + ESP32 + MCU 
 docs/devcontainer.md        Dev ortamı + USB/flashing (ST-Link container'dan, ESP32 container ya da Pi'dan)
 docs/deployment.md          Pi deployment planı (8 adım)
 docs/handoff.md             bu dosya
+docs/missions.md            görev katmanı: saha dosyası, görev tipleri, aşamalar (TEK kaynak)
 firmware/esp32_bridge/      platformio.ini + src/main.cpp  (pio run ile derlenir)
 ros2/src/hoverboard_bridge/ ESP32 seri köprü düğümü (Python) + protokol + ESP32 beyni
 ros2/src/mpu6050_driver/    IMU sürücüsü (Jazzy'de yok, kendimiz yazdık) + sahte I2C
@@ -328,6 +329,7 @@ ros2/src/robot_sim/         iki dünya (kinematik + Gazebo fiziği) + ground tru
 ros2/src/robot_sim/gazebo/  empty.sdf (dünya + fizik), hoverbot.sdf (model), bridge.yaml (ROS-GZ eşlemesi)
 ros2/src/qmc5883l_driver/   manyetometre sürücüsü + sahte I2C (mutlak yönün tek kaynağı)
 ros2/src/ina228_driver/     INA228 register seviyesi akım sürücüsü + sahte I2C
+ros2/src/robot_missions/    saha dosyası (site.geojson) okuyucu + site_map_server → /obstacle_map
 ros2/src/battery_manager/   SoC tahmini + yetkili /battery yayıncısı + SP5 battery_supervisor (eve dön / dock / şarj)
 ros2/src/robot_bringup/     launch + ekf.yaml + urdf
 .devcontainer/              Dockerfile + devcontainer.json
@@ -645,8 +647,31 @@ kalır ve gerçek yığın her iki dünyada da devrededir.
 > `test_yaw_drifts_without_a_magnetometer` bunu kalıcı olarak belgeliyor.
 
 ## ŞU AN NEREDEYIZ / SIRADAKİ İŞ
-*(son güncelleme: 2026-10-16 — twist_mux (PR #5) ve SP3–SP5; altındaki
-"A5'ten önceki durum" sayıları 2026-09-08'den)*
+*(son güncelleme: 2026-10-16 — görev katmanı 1. aşama; twist_mux (PR #5) ve
+SP3–SP5; altındaki "A5'ten önceki durum" sayıları 2026-09-08'den)*
+
+### 🆕 Görev katmanı (2026-10-16) — tasarım + 1. aşama: `docs/missions.md`
+Kullanıcı istekleri: laptoptan haritada alan seçip **alan kaplama** (çim
+biçme, çoğunlukla bu) ya da **devriye** görevi vermek; görev tipleri çoğalacak.
+Alanlar hem **masada haritadan çizilecek** hem **öğret-kaydet** ile kaydedilecek.
+**RTK yok** (kullanıcı kararı: NEO-6M'in hatasına katlanılacak); kesim aparatı
+**misinalı**, `cut_width` parametrik. Tasarım, kararlar ve 5 aşama
+`docs/missions.md`'de — orası tek kaynak, burada tekrarlanmıyor.
+- ✅ **1. aşama:** `robot_missions` paketi + `site_map_server`. Gerçek robotta
+  `/obstacle_map`'i yayınlayan **hiçbir şey yoktu** → sahada Nav2 her hedefi
+  sessizce abort ederdi (A3c tuzak 1). Artık site.geojson → `/fromLLArray` →
+  harita; ölçüldü (gerçek navsat_transform ile ≤ 0.074 m, Nav2 lat/lon'la
+  çizilmiş yasak bölgeyi dolanıyor).
+- ⚠️ **`/fromLL` dönüşüm hazır değilken hata VERMİYOR:** (0,0,0) /
+  boş dizi dönüyor (robot_localization 3.8.3 kaynağından). missions.md karar 5.
+- ⚠️ **Sim GPS'i antenin değil base_link'in konumunu bildiriyordu** (0.15 m,
+  robotla dönen hata). Düzeltildi; ayrıntı missions.md.
+- ⚠️ **Yığınlı PR tuzağı:** #6–#8 arka arkaya birleştirilince taban dallarına
+  gitti, main'e değil (main'de SP3–SP5, süpürme, watchdog yoktu). PR #9 hepsini
+  main'e getiriyor. Ders: yığınlı PR'da bir önceki birleşince sonrakinin
+  tabanını main'e çevir (GitHub bunu ancak taban dalı SİLİNİRSE kendisi yapar).
+- **Sıradaki: 2. aşama — planlayıcı** (coverage boustrophedon, patrol, route,
+  goto; ROS'suz). Shapely gerekecekse `unit` CI aşamasına apt paketi eklenmeli.
 
 ### A5 (CI) — çalışıyor, ve ilk koşuda gerçek bir hata yakaladı
 `scripts/ci.sh` her şeyi koşturur, `.github/workflows/ci.yml` sadece onu
