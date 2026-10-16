@@ -29,6 +29,16 @@ As hardware lands, turn things on:
     ros2 run robot_sim sim_node
     ros2 launch robot_bringup robot.launch.py esp32_port:=/tmp/fake_esp32 \\
         use_localization:=true use_gps:=true use_imu:=false use_nav2:=true
+
+⚠️ DRIVING BY HAND ALONGSIDE THIS: publish /cmd_vel_teleop, not /cmd_vel.
+
+    ros2 run teleop_twist_keyboard teleop_twist_keyboard \\
+        --ros-args -r cmd_vel:=cmd_vel_teleop
+
+twist_mux (config/twist_mux.yaml) is the one publisher of /cmd_vel here, and
+teleop outranks Nav2 in it. A keyboard publishing /cmd_vel directly is not an
+error — it just interleaves with the mux, which is the race the mux removed.
+(teleop.launch.py is different: bridge only, no Nav2, so it has nothing to mux.)
 """
 
 import os
@@ -146,6 +156,11 @@ def generate_launch_description():
             # has already stopped the motors, and coming back up is what we want.
             respawn=True,
             respawn_delay=2.0,
+        ),
+
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(os.path.join(launch_dir, "twist_mux.launch.py")),
+            launch_arguments={"use_sim_time": use_sim_time}.items(),
         ),
 
         Node(

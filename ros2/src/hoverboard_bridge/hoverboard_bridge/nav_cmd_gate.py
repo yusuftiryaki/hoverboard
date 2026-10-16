@@ -1,9 +1,12 @@
 """Nav2's velocity commands reach /cmd_vel only while the local EKF is sane.
 
     controller_server ─┐
-                       ├─► /cmd_vel_nav ─► nav_cmd_gate ─► /cmd_vel ─► hoverboard_bridge
+                       ├─► /cmd_vel_nav ─► nav_cmd_gate ─► /cmd_vel_nav_gated ─► twist_mux ─► /cmd_vel
     behavior_server  ──┘                        ▲
                        /odometry/filtered/local ┘
+
+(The node itself publishes `cmd_vel`; nav2.launch.py remaps it onto twist_mux's
+Nav2 input, robot_bringup/config/twist_mux.yaml.)
 
 Why: Nav2 steers by odom->base_link, which ekf_local publishes, and nothing in
 the stack checked that estimate. In CI ekf_local went to 1e148 m within 33 ms of
@@ -22,6 +25,8 @@ the merely inaccurate one.
 
 Teleop does NOT go through here, on purpose: driving by hand needs no
 localization, and a broken EKF must not take manual control away with it.
+It enters twist_mux at a higher priority than this gate's output, so while the
+gate is sending zeros a human still gets the wheels.
 """
 
 from __future__ import annotations

@@ -371,7 +371,7 @@ ros2_control `SystemInterface`'i onun üstüne sarılır, düğüm teleop aracı
 | `hoverboard_bridge/protocol.py` | `PiCommand` (10 B) / `EspFeedback` (16 B) pack/unpack + checksum + resync eden çerçeve ayrıştırıcı. `main.cpp` ile **byte-byte aynı olduğu doğrulandı** (struct'lar firmware'den söküldü, gcc referans byte'larıyla karşılaştırıldı). ⚠️ uint8 bayraklar checksum'da **ikişerli** 16-bit kelimeye katlanıyor → yeni bayrak eklerken yanına pad gerekir. |
 | `hoverboard_bridge/bridge_node.py` | `/cmd_vel` → ters kinematik → seri; `EspFeedback` → `/odom`, `/joint_states`, `/battery`, `/diagnostics`. `~/clear_estop` servisi (std_srvs/Trigger). |
 | `hoverboard_bridge/command_limits.py` | ROS'suz: NaN → dur, SI tavanları (v/ω birlikte ölçeklenir), teker başına ham sınır. Her girdide toplam (taşma, ≤0/NaN sınır → dur). |
-| `hoverboard_bridge/nav_cmd_gate.py` | `/cmd_vel_nav` → `/cmd_vel`, yalnızca `ekf_local` sağlıklıyken; karar `estimate_problem()` ROS'suz. |
+| `hoverboard_bridge/nav_cmd_gate.py` | `/cmd_vel_nav` → `/cmd_vel_nav_gated` (→ twist_mux → `/cmd_vel`), yalnızca `ekf_local` sağlıklıyken; karar `estimate_problem()` ROS'suz. |
 | `hoverboard_bridge/esp32_sim.py` | **ESP32'nin beyni**, tekerleksiz: protokol + watchdog + E-stop + çarpma vetosu + mixer. Arka uç takılabilir (`Backend` protokolü). ROS'suz. |
 | `hoverboard_bridge/fake_esp32.py` | ince CLI: `esp32_sim` + `LagBackend`. Dünyası/pozu yok — "çerçeveler ve güvenlik doğru mu" sorusunu cevaplar. `ros2 run hoverboard_bridge fake_esp32` |
 | `robot_sim/world.py` | ROS'suz kinematik dünya: tekerlek komutu → ölçülen rpm + **ground truth poz**. Arc entegrasyonu (Euler değil). Fizik YOK. |
@@ -703,11 +703,41 @@ Bilinçli kararlar:
   Nav2 1.3.13, robot_localization 3.8.3 rebuild). Bir sonraki rebuild zaten
   bunu getirecekti.
 
+### ✅ twist_mux (2026-10-16) — teleop, Nav2'den önce gelir
+```
+controller_server, behavior_server ─► /cmd_vel_nav ─► nav_cmd_gate ─► /cmd_vel_nav_gated (öncelik 10) ─┐
+teleop ───────────────────────────────────────────────────────────► /cmd_vel_teleop    (öncelik 100) ─┴─► twist_mux ─► /cmd_vel ─► köprü
+```
+- Önceden teleop ile kapı aynı `/cmd_vel`'e yazıyordu: hedef aktifken (ya da
+  kapı sıfır basarken) insan komutu Nav2'nin 20 Hz'iyle **iç içe geçiyordu**.
+  Artık zaman aşımına uğramamış en yüksek öncelikli giriş kazanır.
+- ⚠️⚠️ **`use_stamped: false` ŞART.** twist_mux 4.5 parametre yoksa
+  **TwistStamped'e varsayılanlıyor** (sadece INFO logu). Tip uyuşmazlığı ROS 2'de
+  hata değil: abonelikler hiç eşleşmez, hiçbir şey iletilmez, robot her düğüm
+  sağlıklı görünürken durur. `test_twist_mux` bunu yakalıyor (karşıt test
+  yapıldı: satır silinince patlıyor).
+- Mux **kendi sıfırını asla basmaz**: kazanan giriş susarsa iletmeyi keser,
+  tekerleği köprünün 0.5 s `cmd_timeout` deadman'i durdurur. Deadman, ESP32
+  watchdog'u, E-stop ve tampon vetosu mux'un **altında**, dokunulmadı.
+- Teleop susunca (0.5 s) Nav2 hedefe **kaldığı yerden** devam eder — devralma
+  iptal değildir. 20 s'den uzun tutmak progress checker'la hedefi düşürür.
+- ⚠️ `robot.launch.py` ile elle sürerken **`/cmd_vel_teleop`'a yayınla**
+  (`-r cmd_vel:=cmd_vel_teleop`). `/cmd_vel`'e doğrudan yayınlamak hata vermez,
+  mux'la yarışır — kaldırılan yarışın aynısı. `teleop.launch.py` (sadece köprü,
+  Nav2 yok) hâlâ doğrudan `/cmd_vel`'e yazar; orada karıştırılacak bir şey yok.
+- Testler: `test_twist_mux.py` (stack, ~17 sn: düz Twist, devralma, teleop
+  sıfırı, 0.5 s sonra geri dönüş) + `test_nav2`'de canlı hedefte 4 sn tutma
+  (Nav2 kendi girişinde hâlâ sürerken robot **kıpırdamıyor**, sonra hedef
+  SUCCEEDED). İkisinin de karşıt testi yapıldı (teleop önceliği 5 → patlıyor;
+  Nav2 testinde robot tutma sırasında 1.71 m gitti). `test_nav2` artık
+  `/cmd_vel`'in tek yayıncısının `twist_mux` olduğunu assert ediyor.
+
 ### ✅ Motor komut yolu güvenliği (2026-10-15, PR #3)
 ```
 controller_server, behavior_server ─► /cmd_vel_nav ─► nav_cmd_gate ─► /cmd_vel ─► hoverboard_bridge
 teleop ──────────────────────────────────────────────────────────────► /cmd_vel   (kapısız, bilerek)
 ```
+*(2026-10-16: kapının çıkışı artık `/cmd_vel_nav_gated` → twist_mux; yukarıda.)*
 - **NaN/inf `/cmd_vel` = DUR**, düğüm yaşar, `/diagnostics`'te ayrı ERROR.
   Önceden `int(round(nan))` köprüyü öldürüyordu; sürüş katmanı yeniden
   başlatılana kadar ölü kalıyordu.
@@ -733,8 +763,8 @@ teleop ────────────────────────�
   buldu. Varyans artık yalnızca patlama dedektörü (1e100). **Ders:** sağlık
   eşiğini "makul görünen" bir sayıyla değil, sağlıklı sistemin ölçülen uzun
   koşu davranışıyla seç; testlerin süresi de bir kapsama sınırıdır.
-- `test_nav2` artık `/cmd_vel`'in tek yayıncısının `nav_cmd_gate` olduğunu
-  assert ediyor: remap'lerden biri silinirse robot kapısız sürer ve başka
+- `test_nav2` artık `/cmd_vel`'in tek yayıncısının `nav_cmd_gate` (2026-10-16'dan
+  beri: `twist_mux`) olduğunu assert ediyor: remap'lerden biri silinirse robot kapısız sürer ve başka
   hiçbir test bunu fark etmez.
 - Dokunulmayanlar: firmware, 200 ms watchdog, `cmd_timeout` deadman, E-stop,
   tampon vetosu.
@@ -801,8 +831,7 @@ Sıradaki iş seçenekleri (2026-10-15 itibarıyla):
 - ✅ ~~**Motor komut yolu güvenliği**~~ — **yapıldı (2026-10-15, PR #3)**, yukarıda.
 - ✅ ~~**A3e'yi kapatmak**~~ + ~~**`ax`'ın bedelini ölçmek**~~ — **yapıldı
   (2026-10-15)**, yukarıda.
-- **`twist_mux`** — Nav2 hedefi aktifken ve kapı engellerken teleop'un öncelik
-  alabilmesi için (şu an kapının sıfırlarıyla yarışır; güvenli tarafa düşer).
+- ✅ ~~**`twist_mux`**~~ — **yapıldı (2026-10-16)**, aşağıda.
 - **Sıkışma tespiti** — A3c tuzak 3; donanıma bağlı (GPS, INA228, tampon).
 - **SP3 → SP5** — batarya/docking zinciri; SP1'in ölçüm katmanı hazır.
 

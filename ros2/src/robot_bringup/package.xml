@@ -24,6 +24,8 @@
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
+  <!-- The one publisher of /cmd_vel: teleop above Nav2 (config/twist_mux.yaml). -->
+  <exec_depend>twist_mux</exec_depend>
 
   <!-- Sensor drivers. Not hard deps: each is behind a launch argument so the
        stack still comes up while the hardware is still in a box.

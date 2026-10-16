@@ -78,7 +78,7 @@ build_workspace() {
 # was fed and what it said, and the workflow uploads it when the stage fails.
 RECORDED_TOPICS=(/odom /imu/data_raw /imu/data /odometry/filtered/local /cmd_vel_nav
                  /odometry/filtered/global /ground_truth /gazebo/ground_truth
-                 /cmd_vel /diagnostics /tf /tf_static /bumper /collision_truth)
+                 /cmd_vel /cmd_vel_teleop /cmd_vel_nav_gated /diagnostics /tf /tf_static /bumper /collision_truth)
 RECORDER_PID=
 start_recorder() {
   [[ -n "${CI_BAG:-}" ]] || return 0
