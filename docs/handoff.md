@@ -318,7 +318,7 @@ Tam zincir: `/cmd_vel` → `hoverboard_bridge` → pty → `Esp32Sim` →
 ```
 docs/bringup-checklist.md   STM32 kartı flash prosedürü (multimetre doğrulama noktalarıyla)
 docs/wiring-map.md          Kaba bağlantı haritası (güç + Pi + ESP32 + MCU + sensörler)
-docs/devcontainer.md        Dev ortamı + flashing iş akışı (WSL2 usbipd vs Pi'dan flash)
+docs/devcontainer.md        Dev ortamı + USB/flashing (ST-Link container'dan, ESP32 container ya da Pi'dan)
 docs/deployment.md          Pi deployment planı (8 adım)
 docs/handoff.md             bu dosya
 firmware/esp32_bridge/      platformio.ini + src/main.cpp  (pio run ile derlenir)
@@ -442,8 +442,8 @@ olarak yayınlıyor; montaj yönü **URDF'teki `imu_joint` rpy'ında** tarif edi
 - ROS 2 **Jazzy native** (apt), container değil.
 - Dev döngüsü: **Pi'da git pull + colcon build** (`scripts/deploy.sh`).
 - Dev makine ↔ Pi **aynı DDS ağı** (`ROS_DOMAIN_ID=42`).
-  ⚠️ **WSL2 tuzağı:** WSL2 NAT arkasında; `--network=host` YETMEZ.
-  Windows `.wslconfig` → `networkingMode=mirrored` + `wsl --shutdown` şart.
+  Dev makine **native Ubuntu** (2026-10-16'dan beri, WSL2 değil):
+  `--network=host` doğrudan LAN'da, eski WSL2 mirrored-networking adımı gereksiz.
 - ⚠️ udev ile sabit isim: `/dev/esp32`, `/dev/gps` (ikisi de USB-serial,
   numaraları kayar). Aynı çip kullanırlarsa VID:PID çakışır → farklı çip al.
 
@@ -848,9 +848,12 @@ logu: `failed to send response to /controller_server/change_state (timeout):
 client will not receive response` (rmw_fastrtps). nav2_util'in
 `change_state(transition)`'ı **zaman aşımı olmadan** bekliyor → cevap
 düşerse yönetici sonsuza kadar bekler. A3e notundaki "nav2 koşusu 3 saat asılı
-kaldı" büyük ihtimalle bu. **Gerçek robotta da olabilir** (Pi açılışında Nav2
-hiç aktifleşmez). Düzeltilmedi: test tarafında fixture'ın Nav2'yi bir kez
-yeniden başlatması, robot tarafında açılış izleyicisi — kullanıcıya soruldu.
+kaldı" büyük ihtimalle bu. Aynı gün CI'da da (#7, `nav2` aşaması) aynı satırla
+patladı. **Test tarafı:** `Nav2Stack` ilk denemeye 75 sn veriyor, aktifleşmezse
+Nav2 launch'ını öldürüp **bir kez** yeniden başlatıyor ve pytest uyarısı
+basıyor (yol, eşik 1 sn'ye indirilerek denendi: uyarı + test geçti).
+⚠️ **Robot tarafı AÇIK:** Pi açılışında Nav2 aynı şekilde hiç aktifleşmeyebilir
+ve bunu söyleyen bir şey yok — açılış izleyicisi (systemd / launch) gerekli.
 
 Sim parçaları (`robot_sim`, ROS'suz, elle hesaplanmış testlerle — karar 10):
 - `battery_model.py`: 10S paket, **kendi** OCV tablosu (tahmincininkiyle
@@ -1239,7 +1242,7 @@ Artık repodalar.
   Pi Camera V2'yi (IMX219) tanıyor mu **doğrulanmadı** — tanımazsa
   raspberrypi/libcamera fork'u gerekir. İlk kamera işinde bak.
 - Gazebo: `ros-jazzy-ros-gz` 1.0.22 apt'te **var** → A3 için engel yok.
-  Makine: 4 çekirdek / 7 GB RAM (WSL2) — fizik simülasyonu koşar ama hızlı değil.
+  Makine: 8 çekirdek / 7 GB RAM (native Ubuntu; 2026-10-16'dan önce WSL2'ydi, 4 çekirdek) — fizik simülasyonu koşar ama hızlı değil.
 - ✅ ~~**Devcontainer rebuild bekliyor.**~~ — **yapıldı, doğrulandı (2026-07-17)**:
   `sudo -n true` ✓, `import smbus2` ✓, `imu_filter_madgwick` ✓ (/opt/ros/jazzy).
   İmajdakiler: `python3-smbus2` (IMU sürücüsü), **parolasız sudo**
