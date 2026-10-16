@@ -33,7 +33,7 @@ import pytest
 pytest.importorskip("rclpy", reason="ROS 2 not sourced")
 
 import rclpy                                        # noqa: E402
-from geometry_msgs.msg import PoseStamped           # noqa: E402
+from geometry_msgs.msg import PoseStamped, Twist    # noqa: E402
 from nav2_msgs.action import NavigateToPose         # noqa: E402
 from nav_msgs.msg import Odometry                   # noqa: E402
 from rclpy.action import ActionClient               # noqa: E402
@@ -133,6 +133,15 @@ class Navigator(Node):
         return p.x, p.y
 
     def go(self, x, y, timeout=120.0):
+        result = self.start(x, y)
+        deadline = time.monotonic() + timeout
+        while not result.done() and time.monotonic() < deadline:
+            rclpy.spin_once(self, timeout_sec=0.1)
+        assert result.done(), f"Nav2 did not finish within {timeout} s"
+        return result.result().status
+
+    def start(self, x, y):
+        """Send the goal and return its result future without waiting on it."""
         goal = NavigateToPose.Goal()
         goal.pose = PoseStamped()
         goal.pose.header.frame_id = "map"
@@ -144,13 +153,7 @@ class Navigator(Node):
         assert self.client.wait_for_server(timeout_sec=20.0), \
             "navigate_to_pose action server never came up"
         handle = self._send_until_accepted(goal)
-
-        result = handle.get_result_async()
-        deadline = time.monotonic() + timeout
-        while not result.done() and time.monotonic() < deadline:
-            rclpy.spin_once(self, timeout_sec=0.1)
-        assert result.done(), f"Nav2 did not finish within {timeout} s"
-        return result.result().status
+        return handle.get_result_async()
 
     def _send_until_accepted(self, goal, ready_timeout=45.0):
         """Send the goal, retrying while Nav2 is still coming up.
@@ -196,19 +199,24 @@ def navigator(ros):
     node.destroy_node()
 
 
+VELOCITY_TOPICS = ("/cmd_vel_nav", "/cmd_vel_nav_gated", "/cmd_vel")
+
+
 def velocity_routing(node, timeout=15.0):
-    """{topic: sorted publisher node NAMES} for the two velocity topics, read
-    once both Nav2 servers have been discovered on /cmd_vel_nav (or timeout).
-    A set: behavior_server opens one publisher per behavior plugin (spin,
-    backup, drive_on_heading, wait), so it appears four times."""
+    """{topic: sorted publisher node NAMES} for the velocity topics, read once
+    both Nav2 servers have been discovered on /cmd_vel_nav and twist_mux on
+    /cmd_vel (or timeout). A set: behavior_server opens one publisher per
+    behavior plugin (spin, backup, drive_on_heading, wait), so it appears
+    four times."""
     def publishers(topic):
         return sorted({i.node_name for i in node.get_publishers_info_by_topic(topic)})
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         rclpy.spin_once(node, timeout_sec=0.2)
-        if {"controller_server", "behavior_server"} <= set(publishers("/cmd_vel_nav")):
+        if ({"controller_server", "behavior_server"} <= set(publishers("/cmd_vel_nav"))
+                and publishers("/cmd_vel")):
             break
-    return {topic: publishers(topic) for topic in ("/cmd_vel_nav", "/cmd_vel")}
+    return {topic: publishers(topic) for topic in VELOCITY_TOPICS}
 
 
 def test_nav2_drives_the_robot_to_a_goal(nav2_stack, navigator):
@@ -217,13 +225,15 @@ def test_nav2_drives_the_robot_to_a_goal(nav2_stack, navigator):
     assert navigator.truth is not None, "no /ground_truth — is sim_node up?"
 
     # ⚠️ Nav2 must reach the wheels ONLY through nav_cmd_gate (nav2.launch.py
-    # remaps both servers). Drop either remap and every other test here still
-    # passes — the robot drives fine, just ungated — so this is the check.
+    # remaps both servers), and the gate only through twist_mux. Drop any one
+    # remap and every other test here still passes — the robot drives fine,
+    # just ungated, or racing teleop again — so this is the check.
     routing = velocity_routing(navigator)
     assert routing == {
         "/cmd_vel_nav": ["behavior_server", "controller_server"],
-        "/cmd_vel": ["nav_cmd_gate"],
-    }, f"Nav2 velocity commands bypass the localization gate: {routing}"
+        "/cmd_vel_nav_gated": ["nav_cmd_gate"],
+        "/cmd_vel": ["twist_mux"],
+    }, f"Nav2 velocity commands bypass the localization gate or the mux: {routing}"
     start = navigator.position
 
     status = navigator.go(GOAL_X, GOAL_Y)
@@ -354,3 +364,79 @@ def test_an_unsurveyed_obstacle_jams_the_robot_and_nav2_claims_success(
     assert status == 4, (
         f"Nav2 reported {status} instead of a bogus SUCCEEDED — if it now "
         f"detects being stuck, delete this assertion and update the handoff")
+
+
+# ---- twist_mux: a human takes the wheels from a LIVE goal -------------------
+TAKEOVER_GOAL_X = 8.0
+TELEOP_HOLD_S = 4.0
+# The kinematic world stops on the next wheel command; allow the bridge's
+# 50 Hz tick and the ESP32 simulator's lag to drain before measuring.
+TELEOP_SETTLE_S = 0.5
+HELD_STILL_M = 0.05
+
+
+def test_teleop_holds_the_robot_during_a_goal_and_nav2_resumes(nav2_stack, navigator):
+    """twist_mux acceptance: a human's zero beats a running Nav2 goal, and the
+    goal survives it.
+
+    Three claims:
+      1. While teleop sends zero, ground truth does not move — WHILE Nav2 is
+         demonstrably still commanding motion on its own input. Without the
+         second half this would also pass with Nav2 merely idle.
+      2. The goal is still running when the human lets go (taking over is not
+         cancelling; that is what the progress checker's 20 s is for).
+      3. Nav2 then finishes the goal on its own.
+    """
+    nav2_stack()
+    navigator.spin(3.0)
+    assert navigator.truth is not None, "no /ground_truth — is sim_node up?"
+
+    nav_speeds = []
+    navigator.create_subscription(
+        Twist, "/cmd_vel_nav_gated",
+        lambda m: nav_speeds.append(abs(m.linear.x)), 10)
+    teleop = navigator.create_publisher(Twist, "/cmd_vel_teleop", 10)
+
+    start_x, start_y = navigator.position
+    result = navigator.start(TAKEOVER_GOAL_X, 0.0)
+    deadline = time.monotonic() + 60.0
+    while (math.hypot(navigator.position[0] - start_x,
+                      navigator.position[1] - start_y) < 1.0
+           and time.monotonic() < deadline):
+        rclpy.spin_once(navigator, timeout_sec=0.05)
+    assert not result.done(), "the goal finished before the takeover could start"
+    assert time.monotonic() < deadline, "Nav2 never started driving the robot"
+
+    held = []
+    hold_start = time.monotonic()
+    while time.monotonic() - hold_start < TELEOP_HOLD_S:
+        teleop.publish(Twist())
+        if time.monotonic() - hold_start > TELEOP_SETTLE_S:
+            held.append(navigator.position)
+            if len(held) == 1:
+                nav_speeds.clear()
+        navigator.spin(0.05)
+
+    drift = math.hypot(held[-1][0] - held[0][0], held[-1][1] - held[0][1])
+    assert max(nav_speeds, default=0.0) > 0.05, (
+        "Nav2 was not commanding motion during the hold, so the hold proves "
+        f"nothing about priority (max |v| on /cmd_vel_nav_gated: "
+        f"{max(nav_speeds, default=0.0):.3f})")
+    assert drift < HELD_STILL_M, (
+        f"the robot moved {drift:.3f} m while teleop was sending zero — Nav2 is "
+        f"not being overridden")
+    assert not result.done(), (
+        f"the goal ended (status {result.result().status}) during a "
+        f"{TELEOP_HOLD_S:g} s teleop hold — a takeover must not cancel it")
+
+    deadline = time.monotonic() + 120.0
+    while not result.done() and time.monotonic() < deadline:
+        rclpy.spin_once(navigator, timeout_sec=0.1)
+    assert result.done(), "Nav2 never finished the goal after teleop let go"
+    status = result.result().status
+    navigator.spin(1.0)
+    x, y = navigator.position
+    error = math.hypot(x - TAKEOVER_GOAL_X, y)
+    assert status == 4, f"Nav2 reported status {status} (4 = SUCCEEDED)"
+    assert error < ARRIVAL_TOLERANCE, (
+        f"Nav2 says it arrived, but ground truth is {error:.2f} m from the goal")

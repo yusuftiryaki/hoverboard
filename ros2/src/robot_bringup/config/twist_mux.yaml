@@ -1,0 +1,51 @@
+# twist_mux — the ONE publisher of /cmd_vel when robot.launch.py runs.
+#
+#   teleop ───────────────────────────────────────► /cmd_vel_teleop     (100) ─┐
+#   controller_server, behavior_server ─► /cmd_vel_nav ─► nav_cmd_gate          ├─► twist_mux ─► /cmd_vel ─► hoverboard_bridge
+#                                                  ─► /cmd_vel_nav_gated  (10) ─┘
+#
+# Why: teleop and Nav2 used to publish /cmd_vel side by side, so a human trying
+# to take over during a goal was interleaved with Nav2's 20 Hz commands — and
+# while nav_cmd_gate was blocking (broken EKF) with the gate's 20 Hz zeros.
+# Both "fail safe" in the sense that the robot jerks rather than runs away; but
+# a person reaching for manual control must GET it. Now the highest-priority
+# input that has spoken within its timeout wins, and the others are dropped.
+#
+# What the mux does NOT do (read before relying on it):
+#   * It never publishes a zero of its own. When the winning input goes quiet
+#     or gets locked out, the mux simply stops forwarding, and it is the
+#     bridge's cmd_timeout deadman (0.5 s, hoverboard_bridge.yaml) that stops
+#     the wheels. That deadman, the ESP32's 200 ms watchdog, the E-stop and the
+#     bumper veto all sit BELOW this node and are untouched by it.
+#   * When teleop goes quiet, Nav2 gets the wheels back on its next command —
+#     the goal was never cancelled. Holding teleop still for longer than the
+#     progress checker's movement_time_allowance (20 s, nav2.yaml) makes Nav2
+#     abort the goal itself, which is the right outcome for "a human stopped it".
+#
+# Keep /cmd_vel to this node alone: test_nav2 asserts it is the only publisher.
+# Anything that publishes /cmd_vel directly races the mux exactly the way
+# teleop used to race Nav2.
+
+twist_mux:
+  ros__parameters:
+    # ⚠️⚠️ REQUIRED. twist_mux 4.5 DEFAULTS TO TwistStamped when this is absent
+    # (it only logs an INFO line saying so). Every publisher here and the
+    # bridge speak plain Twist, and a type mismatch is not an error in ROS 2:
+    # the subscriptions simply never match, nothing is forwarded, and the robot
+    # sits still with every node looking healthy. test_twist_mux catches it.
+    use_stamped: false
+
+    topics:
+      # A human at the keyboard / joystick. Must outrank everything autonomous.
+      teleop:
+        topic: cmd_vel_teleop
+        # A key-repeat gap is ~30-100 ms; 0.5 s matches the bridge deadman, so
+        # control returns to Nav2 at the same moment the wheels would have
+        # stopped anyway.
+        timeout: 0.5
+        priority: 100
+      # Nav2's controller and recoveries, AFTER the localization gate.
+      navigation:
+        topic: cmd_vel_nav_gated
+        timeout: 0.5
+        priority: 10

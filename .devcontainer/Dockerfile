@@ -31,6 +31,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ros-jazzy-nmea-navsat-driver \
       ros-jazzy-image-transport ros-jazzy-camera-info-manager \
       ros-jazzy-tf2-ros ros-jazzy-tf2-tools \
+      ros-jazzy-twist-mux \
     && rm -rf /var/lib/apt/lists/*
 
 # --- PlatformIO (ESP32 firmware build + flash) -------------------------------

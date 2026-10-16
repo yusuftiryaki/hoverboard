@@ -141,6 +141,8 @@ STACK_PATTERNS = (
     "lib/hoverboard_bridge/fake_esp32",
     # publishes /cmd_vel: an orphan would drive the next stack's robot
     "lib/hoverboard_bridge/nav_cmd_gate",
+    # the one publisher of /cmd_vel when robot.launch.py runs
+    "lib/twist_mux/twist_mux",
     "robot_localization/ekf_node",
     "robot_localization/navsat_transform_node",
 )
