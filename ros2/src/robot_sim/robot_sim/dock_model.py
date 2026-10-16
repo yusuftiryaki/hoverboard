@@ -5,7 +5,7 @@ ROS-free, pure Python (the `unit` CI stage has no numpy).
 
     station seen from above (dock yaw = 0, robot drives east into it):
 
-        staging ───1.5 m───►  base_link ─0.47─► body │ tag (0.55 ahead,
+        staging ───1.5 m───►  base_link ─0.57─► body │ tag (0.55 ahead,
         pose                  when docked     stop    │  0.20 m up, facing
                                                        │  back at the robot)
 
@@ -135,11 +135,12 @@ class DockStation:
                 and abs(lateral) <= self.contact_lateral
                 and abs(yaw_error) <= self.contact_yaw)
 
-    def stop_obstacle(self, robot_radius: float, radius: float = 0.05) -> CircularObstacle:
-        """The station body as a KinematicWorld obstacle, placed so a robot
-        driving straight in is stopped `body_overrun` past the docked pose.
-        UNSURVEYED by intent: the costmaps do not know the station, exactly as
-        they would not on a field nobody mapped it into."""
+    def stop_obstacle(self, robot_radius: float, radius: float = 0.15) -> CircularObstacle:
+        """The station body as a circle, placed so a robot driving straight in
+        is stopped `body_overrun` past the docked pose. 0.30 m across: the
+        design's V-funnel and contact plate, a GUESS until SP6 builds it.
+        sim_node collides with it and, unless told otherwise, also draws it on
+        the survey map (dock_in_survey)."""
         reach = robot_radius + radius + self.body_overrun
         return CircularObstacle(self.x + reach * math.cos(self.yaw),
                                 self.y + reach * math.sin(self.yaw), radius)

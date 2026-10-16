@@ -221,3 +221,20 @@ def test_stale_battery_is_unknown_and_harmless():
 def test_nonsense_thresholds_are_refused(kwargs):
     with pytest.raises(ValueError):
         Thresholds(**kwargs)
+
+
+# ---- on request ---------------------------------------------------------------------
+def test_return_home_on_request_runs_the_low_battery_sequence():
+    sup = Supervisor(T)
+    feed(sup, soc(0.80), 0.0, 1.0)
+    ok, _, steps = sup.return_home()
+    assert ok and steps == [Step.CANCEL_MISSIONS] and sup.phase == Phase.RETURNING
+    assert sup.on_result(Step.CANCEL_MISSIONS, True) == [Step.GO_TO_STAGING]
+    # A healthy battery does not call it off half way.
+    feed(sup, soc(0.80), 2.0, 5.0)
+    assert sup.phase == Phase.RETURNING and sup.pending == Step.GO_TO_STAGING
+
+
+def test_return_home_is_refused_unless_normal():
+    sup = low_battery_until_docking()
+    assert sup.return_home()[0] is False and sup.phase == Phase.DOCKING

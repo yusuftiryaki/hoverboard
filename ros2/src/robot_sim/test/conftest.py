@@ -29,6 +29,26 @@ STACK_STARTUP_S = 8.0     # robot_state_publisher + bridge + EKF
 # be running Gazebo at the same time; it returns the moment Nav2 is active, so
 # a large number costs nothing except on a real failure.
 NAV2_READY_S = 180.0
+# ⚠️ ...but the FIRST bring-up gets less, and then one fresh try. MEASURED
+# (locally, then twice in CI on 2026-10-16): the lifecycle manager stuck on
+# "Configuring controller_server" forever, because controller_server logged
+#   failed to send response to /controller_server/change_state (timeout):
+#   client will not receive response
+# (rmw_fastrtps answering before it has matched the client's reader) and
+# nav2_util's change_state(transition) waits for that response with NO
+# timeout. Nav2 never activates; waiting longer cannot help. A healthy bring-up
+# here takes 2-30 s. So after this long the Nav2 launch is killed and started
+# again, once, with a warning — the tests are about navigation and docking,
+# not about this. ⚠️ The REAL ROBOT has the same hang and no such retry: see
+# docs/handoff.md.
+NAV2_FIRST_TRY_S = 75.0
+NAV2_PATTERNS = (
+    "nav2_controller/controller_server", "nav2_planner/planner_server",
+    "nav2_behaviors/behavior_server", "nav2_bt_navigator/bt_navigator",
+    "nav2_waypoint_follower/waypoint_follower", "opennav_docking/opennav_docking",
+    "nav2_lifecycle_manager/lifecycle_manager", "hoverboard_bridge/nav_cmd_gate",
+    "battery_manager/battery_supervisor",
+)
 # One is_active call's budget. It BLOCKS while the manager transitions its
 # servers (measured: 4.3 s on an idle box) — but a call that times out
 # mid-activation costs nothing: the next round asks again and a live manager
@@ -349,14 +369,27 @@ class Nav2Stack(SimStack):
         with self._closing_on_failure():
             self._spawn("ros2", "run", "tf2_ros", "static_transform_publisher",
                         "--frame-id", "map", "--child-frame-id", "odom")
-            self._spawn("ros2", "launch", "robot_bringup", "nav2.launch.py",
-                        *self.nav2_args())
-            self._await_nav2()
+            nav2 = self._spawn("ros2", "launch", "robot_bringup", "nav2.launch.py",
+                               *self.nav2_args())
+            try:
+                self._await_nav2(NAV2_FIRST_TRY_S)
+            except AssertionError as stuck:
+                import warnings
+                warnings.warn(f"Nav2 bring-up hung, restarting it once: {stuck}")
+                self._procs.remove(nav2)
+                os.killpg(os.getpgid(nav2.pid), signal.SIGKILL)
+                nav2.wait(timeout=15)
+                deadline = time.monotonic() + 30.0
+                while pids_matching(*NAV2_PATTERNS) and time.monotonic() < deadline:
+                    time.sleep(0.25)
+                self._spawn("ros2", "launch", "robot_bringup", "nav2.launch.py",
+                            *self.nav2_args())
+                self._await_nav2(NAV2_READY_S)
 
     def nav2_args(self):
         return ()
 
-    def _await_nav2(self):
+    def _await_nav2(self, ready_s=NAV2_READY_S):
         """Block until the lifecycle manager says every server is ACTIVE.
 
         ⚠️ This replaced a fixed 20 s sleep, and the sleep was a real flake. A3c
@@ -380,7 +413,7 @@ class Nav2Stack(SimStack):
         import rclpy
         from std_srvs.srv import Trigger
 
-        deadline = time.monotonic() + NAV2_READY_S
+        deadline = time.monotonic() + ready_s
         rounds = unanswered = reported_inactive = 0
         while time.monotonic() < deadline:
             # ⚠️ A FRESH NODE AND CLIENT EVERY ROUND. The previous test's Nav2
@@ -421,7 +454,7 @@ class Nav2Stack(SimStack):
         # answered at all (discovery, not Nav2). Guessing between them cost a
         # full suite run.
         raise AssertionError(
-            f"Nav2 was not ACTIVE within {NAV2_READY_S:.0f} s: {rounds} rounds, "
+            f"Nav2 was not ACTIVE within {ready_s:.0f} s: {rounds} rounds, "
             f"{reported_inactive} answered 'not active', {unanswered} never "
             f"answered. Mostly 'not active' means a server would not transition "
             f"— read nav2.launch.py's output. Mostly unanswered means the "

@@ -58,6 +58,9 @@ CAPACITY_AH = 0.05
 SIM_ARGS_COMMON = (
     "--ros-args",
     "-p", f"dock_pose:=[{DOCK_X}, {DOCK_Y}, {DOCK_YAW}]",
+    # The survey map draws the station where docks.yaml (the same survey)
+    # wrongly puts it; the physics keeps the real one.
+    "-p", "dock_surveyed_pose:=[{}, {}, {}]".format(*SURVEYED_DOCK),
     "-p", f"battery_capacity_ah:={CAPACITY_AH}",
     "-p", "battery_initial_soc:=0.32",
     "-p", "battery_idle_current_a:=0.0",
