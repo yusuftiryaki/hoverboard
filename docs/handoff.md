@@ -532,7 +532,7 @@ olarak yayınlıyor; montaj yönü **URDF'teki `imu_joint` rpy'ında** tarif edi
   Detay "ŞU AN NEREDEYIZ" altında.
 
 ### İz B — Donanım (sıra atlanmaz)
-1. **ST-Link al → anakartı flash'la** (STM32, EFeru FOC) — **tüm izin kilidi**, en riskli adım
+1. **~~ST-Link al~~ (geldi 2026-10-16) → anakartı flash'la** (STM32, EFeru FOC) — **tüm izin kilidi**, en riskli adım
 2. **ESP32 tezgah testi** — protokol + çarpma refleksi gerçek kartla
 3. **Şasi** — en sıkıcı, en uzun
 4. **KALİBRASYON** — `cmd_per_rpm`, `steer_sign`, `invert_left/right`,
@@ -777,6 +777,16 @@ Kararlar ve tasarım dokümanından sapmalar (gerekçeli):
   ediyor ("Current goal was not completed successfully"). Yani kontak zaten
   ayrılmışken `resume` → UNDOCK başarısız → SAFE_STOP; bir `resume` daha
   NORMAL'e alır. Sim'de tetiklenmedi.
+
+- ⚠️ **CI'da bir kez `test_without_the_wall…` 0.69 m saptı** (sınır 0.5). Bag'den:
+  Nav2'nin ilk komutu yığın başladıktan **14 / 32 / 52 / 72 sn** sonra geldi
+  (testten teste); 72 sn'lik olanda robot dururken jiro'nun 0.1°/s artığı EKF'i
+  **7°** döndürmüştü → "düz çizgi" 9° yanlış yönde sürüldü. ~20 sn'lik
+  basamaklar `_await_nav2`'nin `is_active` çağrı bütçesinin (20 sn) boşa
+  yanmasına benziyor (çıkarım: fixture turlarını loglamıyordu) — eski
+  yöneticiye giden istek cevapsız kalıyor. `NAV2_CALL_S` 20 → **5 sn**. Not:
+  bu, durarak beklenen her saniyenin yaw'a mal olduğu bir yığın; Nav2 testleri
+  başlangıç süresine bu yüzden duyarlı.
 
 Sim parçaları (`robot_sim`, ROS'suz, elle hesaplanmış testlerle — karar 10):
 - `battery_model.py`: 10S paket, **kendi** OCV tablosu (tahmincininkiyle
@@ -1136,12 +1146,20 @@ Artık repodalar.
 
 ## Bilinen blokerler / bekleyen alımlar
 **Güncel alım listesi ve gerekçeleri: `docs/purchase-list.md`** (2026-10-08).
-- **ST-Link V2 klon** — adım 1 için şart, henüz alınmadı
-- **Magnetometer QMC5883L** — listedeki en yüksek getirili harcama. ⚠️ GY-271
-  kartı HMC5883L ile de satılıyor; sürücümüz 0x0D'deki QMC'yi bekler.
+- ✅ **ST-Link V2 klon** — **geldi (2026-10-16)**, mor alüminyum kasa. Kasa
+  yazısı: 1 RST, 2 SWDIO, 3/4 GND, 5 SWIM, 6 SWCLK, 7/8 3.3V, 9/10 5.0V.
+  Klon yazısına güvenilmez → bağlamadan önce GND'yi USB gövdesine süreklilikle
+  doğrula. **B1'in alım blokeri kalktı**; sırada multimetreyle SWD pad'leri.
+- ✅ **Magnetometer GY-271** — **geldi (2026-10-16)**, çip üstü `5883`
+  → HMC5883L **değil** (o `L883` yazar). Kesin kimlik yine `i2cdetect -y 1`:
+  **0x0D** = QMC5883L ✓. Aynı aileden 0x2C (QMC5883P) ya da 0x0C (VCM5883L)
+  çıkarsa yazmaçlar farklı, sürücümüz çalışmaz.
 - ❌ Buck — tasarımdan çıktı (karar 13); Pi powerbank'ten beslenir.
   Powerbank (5V ≥3A) elde yoksa alınacak.
-- **FT232RL USB-TTL** — GPS için, ESP32'nin çipinden farklı olsun diye
+- ✅ **FT232RL USB-TTL** — **geldi (2026-10-16)**, kırmızı mini-USB modül,
+  VCCIO jumper'lı. NEO-6M'e bağlamadan önce jumper **3.3V**'ta olmalı.
+  Takınca `lsusb`'de `0403:6001` görünmeli (udev kuralı buna göre,
+  `deployment.md` adım 4); çip klon çıkabilir, Linux'ta sorun değil.
 - ✅ INA228 — **elde**, üzerinde 2 mΩ şönt; harici şönt gerekmiyor
 - ✅ Sigorta — **elde**, 20 A / 60 V, yuvalı (plan 30–40 A diyordu; firmware
   akım limitleri buna göre ayarlanacak, `bringup-checklist.md` adım 3)

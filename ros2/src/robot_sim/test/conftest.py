@@ -30,10 +30,18 @@ STACK_STARTUP_S = 8.0     # robot_state_publisher + bridge + EKF
 # a large number costs nothing except on a real failure.
 NAV2_READY_S = 180.0
 # One is_active call's budget. It BLOCKS while the manager transitions its
-# servers (measured: 4.3 s on an idle box), so this has to cover a slow
-# activation — but stay small enough that the whole wait fits several rounds,
-# because a round is also how a client bound to a dead endpoint gets replaced.
-NAV2_CALL_S = 20.0
+# servers (measured: 4.3 s on an idle box) — but a call that times out
+# mid-activation costs nothing: the next round asks again and a live manager
+# answers. What a LONG budget costs is real: a request sent before the new
+# manager was discovered (only the previous test's killed one was) is never
+# answered, and every such round burns the whole budget. MEASURED in CI
+# (PR #6, from the bag): Nav2's first command came 14, 32, 52, 72 s after the
+# stack started — a base plus steps of ~20 s, which is what whole burned
+# budgets look like (inferred: the fixture did not log its rounds then).
+# On the 72 s one the gyro's
+# 0.1 deg/s residual had turned the EKF 7 deg while the robot stood still, so
+# the "straight line" test drove 0.69 m off it. 5 s keeps the misses cheap.
+NAV2_CALL_S = 5.0
 # Gazebo is waited FOR rather than slept past — see GazeboStack.
 GAZEBO_READY_S = 60.0
 
