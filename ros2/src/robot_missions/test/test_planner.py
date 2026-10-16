@@ -97,6 +97,7 @@ def test_a_rectangle_is_the_classic_serpentine():
     assert [round(w.yaw, 6) for w in plan.waypoints] == pytest.approx(
         [0, 0, math.pi, math.pi, 0, 0, math.pi, math.pi])
     assert plan.info["rows"] == 4 and plan.info["row_length_m"] == pytest.approx(40.0)
+    assert plan.precise                 # rows need the precise Nav2 profile
 
 
 def test_start_decides_the_corner_the_serpentine_begins_in():
@@ -198,6 +199,7 @@ def test_perimeter_patrol_by_hand():
     assert plan.waypoints[0].work is False and all(w.work for w in plan.waypoints[1:])
     assert plan.repeat == 3
     assert plan.info["lap_m"] == pytest.approx(28.0)
+    assert not plan.precise
 
 
 def test_random_patrol_is_inside_spread_and_repeatable():

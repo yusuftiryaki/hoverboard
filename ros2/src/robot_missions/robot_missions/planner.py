@@ -65,6 +65,10 @@ class Plan:
     # How many times to run the waypoints: 1 = once, 0 = until stopped.
     repeat: int = 1
     info: Dict[str, float] = field(default_factory=dict)
+    # Drive work legs as rows: straight FollowPath goals in `odom` on the
+    # precise profile (mission_runner.py), not loose navigate_to_pose goals.
+    # Coverage needs it — rows 0.2-0.4 m apart; patrol and routes do not.
+    precise: bool = False
 
 
 # --- the free region ------------------------------------------------------------
@@ -194,7 +198,7 @@ def coverage(region: BaseGeometry, spacing: float, angle: Optional[float] = None
             waypoints.extend(edge)
             info["perimeter_m"] = sum(p.exterior.length + sum(i.length for i in p.interiors)
                                       for p in polygons_of(region))
-    return Plan("coverage", tuple(_wrap_yaws(waypoints)), repeat=1, info=info)
+    return Plan("coverage", tuple(_wrap_yaws(waypoints)), repeat=1, info=info, precise=True)
 
 
 # --- patrol ---------------------------------------------------------------------

@@ -677,9 +677,15 @@ Alanlar hem **masada haritadan çizilecek** hem **öğret-kaydet** ile kaydedile
 - ✅ **2. aşama — planlayıcı** (coverage boustrophedon + kenar turu, patrol,
   route, goto; kayıtlı görev tipleri). `python3-shapely` Dockerfile'a ve `unit`
   CI aşamasına eklendi. Ayrıntı ve ölçümler missions.md.
-- **Sıradaki: 3. aşama — `mission_runner`** (Nav2'ye yürütme, ilerleme diskte,
-  şarjdan sonra devam, istasyon sahadan, tampon temas haritası; sim'de GPS
-  gürültüsüyle kaplama yüzdesi ve sınır ihlali ölçümü).
+- ✅ **3a — `mission_runner`** (yürütme, disk, şarjdan sonra devam, kaplama
+  ölçümü). Ölçülen: sessiz GPS'te 4 × 3 m çimin **%95–96**'sı, 0.00 m dışarı;
+  NEO-6M'le **%19–70** (desen başlangıçtaki GPS hatası kadar kayıyor — karar
+  1'in bedeli). Kaplama satırları `navigate_to_pose` ile DEĞİL, `odom`'da
+  doğrudan `follow_path` ile (neden: missions.md tablosu). Yeni CI aşaması
+  `mission`. ⚠️ nav2.yaml'da artık iki goal checker → bütün BT'ler checker
+  adını vermeli (`behavior_trees/`, `test_nav2_profiles.py`).
+- **Sıradaki: 3b** (istasyon pozu sahadan, docks.yaml yerine) ve **3c**
+  (tampon temas haritası).
 
 ### A5 (CI) — çalışıyor, ve ilk koşuda gerçek bir hata yakaladı
 `scripts/ci.sh` her şeyi koşturur, `.github/workflows/ci.yml` sadece onu

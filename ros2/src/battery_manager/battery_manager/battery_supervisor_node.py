@@ -4,7 +4,7 @@ The decisions are supervisor_policy.py's (ROS-free, unit-tested); this node only
 feeds it and carries out its Steps with Nav2's own actions:
 
     CANCEL_MISSIONS  cancel-all on follow_gps_waypoints, follow_waypoints,
-                     navigate_through_poses, navigate_to_pose
+                     navigate_through_poses, navigate_to_pose, follow_path
     GO_TO_STAGING    navigate_to_pose -> the dock's staging pose (map frame)
     FACE_DOCK        spin, by however much turns base_link towards the dock
     DOCK             dock_robot (opennav_docking), navigate_to_staging_pose=False
@@ -56,8 +56,12 @@ from battery_manager.supervisor_policy import (BatterySample, Phase, Step, Super
 
 # Mission-level first: a waypoint follower whose current navigate_to_pose is
 # cancelled under it just moves on to its next waypoint.
+# follow_path last: mission_runner drives coverage rows by calling the
+# controller directly (no bt_navigator), so cancelling navigate_* alone would
+# leave a row being mowed while the robot is meant to be heading home — and
+# the staging goal's own FollowPath would then preempt it mid-row.
 MISSION_ACTIONS = ("follow_gps_waypoints", "follow_waypoints",
-                   "navigate_through_poses", "navigate_to_pose")
+                   "navigate_through_poses", "navigate_to_pose", "follow_path")
 OWN_ACTIONS = ("spin", "dock_robot", "undock_robot")
 CANCEL_WAIT_S = 3.0
 SERVER_WAIT_S = 10.0

@@ -1,0 +1,9 @@
+# Start a mission on the current site (docs/missions.md, "Görev tanımı").
+#   mission: the mission as JSON, e.g.
+#     {"type": "coverage", "area": "bahce", "params": {"overlap": 0.3}}
+string mission
+---
+# false = refused (malformed, unknown area, a mission already running, the
+# battery supervisor not in NORMAL, ...); message says why.
+bool accepted
+string message

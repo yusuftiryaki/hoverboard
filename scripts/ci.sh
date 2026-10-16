@@ -11,9 +11,10 @@
 #   gazebo    colcon build + the Gazebo physics worlds             (~5 min)
 #   dock      colcon build + battery -> return -> dock stacks      (~5 min)
 #   sweep     colcon build + docking from every side, one stack    (~12 min)
+#   mission   colcon build + coverage missions on ground truth     (~10 min)
 #   all       the lot, in that order
 #
-# stack + nav2 + gazebo + dock + sweep together are the whole suite: `stack` is defined as
+# stack + nav2 + gazebo + dock + sweep + mission together are the whole suite: `stack` is defined as
 # "everything that is not in HEAVY", so a new test file lands there by default
 # and cannot fall between the jobs.
 
@@ -28,7 +29,9 @@ GAZEBO_TESTS=(src/robot_sim/test/test_gazebo_physics.py
               src/robot_sim/test/test_gazebo_localization.py)
 DOCK_TESTS=(src/robot_sim/test/test_docking.py)
 SWEEP_TESTS=(src/robot_sim/test/test_docking_sweep.py)
-HEAVY=("${NAV2_TESTS[@]}" "${GAZEBO_TESTS[@]}" "${DOCK_TESTS[@]}" "${SWEEP_TESTS[@]}")
+MISSION_TESTS=(src/robot_sim/test/test_mission_coverage.py)
+HEAVY=("${NAV2_TESTS[@]}" "${GAZEBO_TESTS[@]}" "${DOCK_TESTS[@]}" "${SWEEP_TESTS[@]}"
+       "${MISSION_TESTS[@]}")
 
 packages_with_tests() {
   local dir
@@ -84,7 +87,8 @@ RECORDED_TOPICS=(/odom /imu/data_raw /imu/data /odometry/filtered/local /cmd_vel
                  /odometry/filtered/global /ground_truth /gazebo/ground_truth
                  /cmd_vel /cmd_vel_teleop /cmd_vel_nav_gated /diagnostics
                  /battery /battery_raw /sim/battery_current /nav_lock
-                 /detected_dock_pose /dock_contact_truth /battery_supervisor/state /tf /tf_static /bumper /collision_truth)
+                 /detected_dock_pose /dock_contact_truth /battery_supervisor/state /tf /tf_static /bumper /collision_truth
+                 /mission_runner/status /obstacle_map)
 RECORDER_PID=
 start_recorder() {
   [[ -n "${CI_BAG:-}" ]] || return 0
@@ -186,6 +190,14 @@ stage_dock() {
   run_tests dock "${DOCK_TESTS[@]}"
 }
 
+stage_mission() {
+  build_workspace
+  start_recorder mission
+  echo ">> mission"
+  # -s: the coverage numbers are the result worth reading, pass or fail.
+  run_tests mission -s "${MISSION_TESTS[@]}"
+}
+
 stage_sweep() {
   build_workspace
   start_recorder sweep
@@ -198,9 +210,9 @@ stage_sweep() {
 
 for stage in "$@"; do
   case "${stage}" in
-    unit|firmware|stack|nav2|gazebo|dock|sweep) "stage_${stage}" ;;
+    unit|firmware|stack|nav2|gazebo|dock|sweep|mission) "stage_${stage}" ;;
     all) stage_unit; stage_firmware; stage_stack; stage_nav2; stage_gazebo; stage_dock
-         stage_sweep ;;
+         stage_sweep; stage_mission ;;
     *) echo "unknown stage: ${stage}" >&2; exit 2 ;;
   esac
 done

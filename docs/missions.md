@@ -104,7 +104,9 @@ Laptop tarayıcı (uydu haritası)        Pi
    yoktu) kapatır.
 2. ✅ **Planlayıcı**: coverage, patrol, route, goto. ROS'suz, elle hesaplanmış
    testler (aşağıda).
-3. **mission_runner**: yürütme, ilerlemeyi diske yazma, şarjdan sonra devam;
+3. **mission_runner** — 3a ✅ (yürütme, disk, şarjdan sonra devam, ölçüm);
+   kalan 3b (istasyon sahadan) ve 3c (tampon temas haritası). Kapsam:
+   yürütme, ilerlemeyi diske yazma, şarjdan sonra devam;
    istasyon pozunu docks.yaml yerine sahadan alma; **tampon temas haritası**
    (aşağıda). Sim'de uçtan uca: alan →
    düşük batarya → dock → devam. **Kaplama yüzdesi ve sınır ihlali** ground
@@ -183,6 +185,77 @@ Görev tanımı (JSON; web formu 4. aşamada bunu üretecek):
 - ⚠️ Kaplama ölçümünde shapely'nin birleşimi kenar paylaşan şeritleri float
   gürültüsüyle düşürüyordu (tamamını kaplayan planda 112.3 m²'nin 82.7'si).
   Ölçüm artık ızgara örneklemesi.
+
+## 3a: `mission_runner` (yürütme, şarj dönüşü, ölçüm)
+```
+~/start (StartMission: görev JSON)   ~/pause ~/resume ~/abort (Trigger)   ~/status (JSON, latched)
+battery_supervisor/state ──► NORMAL / RETURNING / ... / DOCKED_IDLE / SAFE_STOP
+battery_supervisor/resume ◄── robot dolunca bir kez (undock)
+navigate_to_pose ◄── devriye, rota, nokta, uzun geçişler        follow_path ◄── kaplama satırları (odom'da)
+```
+- **Kararlar ROS'suz** `runner_policy.py`'de (olay olay test), düğüm yapıştırıcı.
+- ⚠️ **İptal edilen hedef asla kendiliğinden yeniden gönderilmez.** Supervisor
+  eve dönmeden önce tüm görev hedeflerini iptal ediyor ve kendi staging hedefi
+  aynı `navigate_to_pose` sunucusuna gidiyor — yeni hedef çalışanı *preempt*
+  eder. "İptal → tekrar gönder" diyen bir runner şarja gidişi kaçırırdı.
+  Supervisor'ın açıklamadığı bir iptal (3 sn) görevi PAUSED'a alır.
+- Hedef yalnızca supervisor'ın son sözü NORMAL iken gönderilir. Robot dolunca
+  (DOCKED_IDLE, CHARGING'de değil) runner supervisor'dan **bir kez** undock
+  ister; NORMAL'e dönünce kesilen waypoint'ten devam eder.
+- Ulaşılamayan waypoint 1 kez tekrar, sonra **atlanır** ve kaydedilir. ⚠️ Ama
+  **üst üste 3 atlama görevi durdurur**: bu bir waypoint sorunu değil, Nav2
+  sürmüyor demek. Gerçekten görüldü: Nav2 sunucularını henüz keşfetmemiş bir
+  runner 23 waypoint'lik çimi **1 saniyede** "bitirdi" (hepsi atlandı, DONE).
+  Artık sunucu 15 sn beklenir, sonra sayılır.
+- **Disk:** her adımda `~/.robot/mission_state.json` (atomik yazım): görev,
+  index, tur, atlananlar, turun planlandığı başlangıç (lat/lon, `/toLL` —
+  `map` yeniden açılışta değişir, plan başlangıca bağlı). Yeniden açılışta
+  görev **PAUSED** gelir — kimseye söylemeden kendiliğinden sürmeye başlayan bir
+  robot kimsenin kazara alması gereken bir varsayılan değil. `~/resume` aynı
+  başlangıçtan yeniden planlar ve kaydedilen index'ten devam eder.
+- ⚠️ `/toLL` de dönüşüm hazır değilken (0, 0) döndürüyor — aynı tuzak.
+
+### Kaplama satırları neden `navigate_to_pose` ile sürülmüyor (ölçüldü)
+4 × 3 m çim, 0.5 m kesim, ground truth (`test_mission_coverage.py`):
+
+| tasarım | sessiz GPS | NEO-6M |
+|---|---|---|
+| `navigate_to_pose`, genel profil (1.0 m tolerans) | **%63.4**, 0.71 m dışarı | — |
+| `navigate_to_pose`, 0.15 m tolerans | %90.9–92.7, 0.00 m | ❌ bir satır sonunu **15 dk** kovaladı |
+| `follow_path` satırları, tüm çime tek `map→odom` | %90.0, 0.36 m (satırlar ~15° eğik) | %56–58 |
+| `follow_path`, **chain** (varsayılan) | **%95.0–96.2, 0.00 m** | %18.6 / %69.5 |
+| `follow_path`, leg (her satır yeni `map→odom`) | %97.4, 0.77 m (birleşme çizgisinden önce) | %44.9–47.8, 3.6–4.7 m dışarı |
+
+- **Genel profil**: 1 m tolerans her satır sonundan bir metre önce "varıyor",
+  0.4 m'lik satır geçişi ise robot kıpırdamadan toleransın içinde.
+- **Sıkı tolerans `map`'te**: bt_navigator hedefi `map`'te sabitliyor ve GPS
+  gezinmesi `map`'i robotun altında 0.15 m'den fazla oynatıyor → hedef hep
+  kayıyor.
+- Bu yüzden **satır = controller_server'a doğrudan `follow_path`**: satırın
+  başından sonuna düz bir çizgi, gönderildiği an `odom`'a çevrilir
+  (FollowRow + precise_goal_checker, nav2.yaml). `odom` sıçramaz; GPS
+  düzeltmesi iki satır arasına düşer, satırın içine değil. Satır başına uzak
+  geçişler `navigate_to_pose` ile (engel dolanır), ardından her zaman hassas
+  bir **birleşme** çizgisi — gevşek hedefin bıraktığı yerden değil, satırın
+  çizildiği yerden başlansın diye (birleşme yokken 0.77 m dışarı kesiyordu).
+- **chain:** her waypoint = bir öncekinin `odom` hedefi + plandaki adım,
+  `map→odom`'un **o anki yaw'ıyla** döndürülmüş. Desen kendi geometrisini
+  korur (satırlar tam bir aralık ayrı), sadece yön `map`'ten (manyetometre)
+  gelir — `odom`'un yalnız-jiro yaw'ı jiro bias'ıyla kayıyor (tek snapshot
+  200 sn'de satırları ~15° eğdi). GPS konumu her (yeniden) başlangıçta **bir
+  kez** girer.
+- ⚠️ **NEO-6M'in bedeli (karar 1), açıkça:** chain'de satırlar birbirine
+  doğru, ama bütün desen görev başladığında GPS `map`'i nereye koyduysa oraya
+  düşüyor; 4 × 3 m'lik bir çimde o kayma çimin çoğu (%18.6 ile %69.5 arası,
+  şansa bağlı). leg daha istikrarlı ama hiçbir zaman iyi değil ve metrelerce
+  dışarı kesiyor. Büyük alanlarda kayma sadece kenar şeritlerini götürür —
+  ama hassas kaplama bu GPS'le mümkün değil; büyük alan ölçümü yapılmadı.
+- `supervisor` artık `follow_path`'i de iptal ediyor (`MISSION_ACTIONS`):
+  doğrudan controller'a giden bir satır eve dönüşte biçilmeye devam ederdi.
+- ⚠️ İki goal checker olunca **boş `goal_checker_id` FollowPath'i düşürüyor**
+  (controller_server.cpp); stok BT'ler boş bırakıyor. `robot_bringup/
+  behavior_trees/` stok ağaçların kopyaları + checker adı, bt_navigator
+  varsayılanları onlara bakıyor. `test_nav2_profiles.py` kuralları tutuyor.
 
 ## Robotun kendi tespit ettiği engeller (2026-10-16, kullanıcı onayı)
 Bugünkü donanımda menzil sensörü yok (handoff karar 8): survey edilmemiş bir
