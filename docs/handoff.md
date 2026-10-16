@@ -748,6 +748,9 @@ Kararlar ve tasarım dokümanından sapmalar (gerekçeli):
   oraya hassas gidiyor ve ikinci deneme oturuyor. ~10 sn'ye mal oluyor; daha
   iyisi ya ayrı hassas goal checker (iki checker = her BT'de
   `goal_checker_id` şart) ya da daha uzak staging. Şimdilik bilinçli kabul.
+- **docking_server da kapıdan geçer** (`cmd_vel` → `/cmd_vel_nav`): son
+  yaklaşmayı ekf_local'e göre sürüyor. `test_nav2`'nin rota assert'i artık üç
+  sunucuyu bekliyor — ilk yerel koşuda bu assert yeni yayıncıyı yakaladı.
 - **"Dur" = görev iptali + twist_mux kilidi**, motor yoluna yeni kapı yok
   (tasarımdaki "yeni kapı eklemez" korunuyor; kilit mux'ın kendi mekanizması).
   Kilit SAFE_STOP, CHARGING ve DOCKED_IDLE'da tutulur — istasyondaki robot
