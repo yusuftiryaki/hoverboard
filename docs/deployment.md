@@ -4,7 +4,7 @@ Kararlar: **sıfır Pi → Ubuntu Server 24.04 (64-bit)**, ROS 2 Jazzy **native*
 kod **Pi'da git pull + colcon build**, dev makine ↔ Pi **aynı DDS ağında**.
 
 ```
-[Dev makine / WSL2 devcontainer]         [Raspberry Pi 4 / Ubuntu 24.04]
+[Dev makine / Ubuntu devcontainer]       [Raspberry Pi 4 / Ubuntu 24.04]
   kod yaz, pio derle, colcon test          native ROS 2 Jazzy + gerçek donanım
   git push ──────────────────────────►     git pull + colcon build --symlink-install
   RViz / rqt / teleop  ◄── DDS (LAN) ──►    robot düğümleri (bringup)
@@ -123,23 +123,15 @@ PI_HOST=enes@robot.local ./scripts/deploy.sh
 Hızlı Python iterasyonunda (symlink-install sayesinde) çoğu zaman sadece düğümü
 yeniden başlatman yeterli, build bile gerekmez.
 
-## Adım 7 — ⚠️ ROS 2 DDS ağı: WSL2 tuzağı
+## Adım 7 — ROS 2 DDS ağı
 
-**Sorun:** WSL2 varsayılan olarak NAT arkasında; kendi sanal ağı var. Bu yüzden
-devcontainer'daki `--network=host` **yetmez** — WSL2 VM'inin kendisi LAN'daki
-Pi ile DDS multicast keşfi yapamaz. "Düğümler Pi'da çalışıyor ama dev makineden
-görünmüyor" bunun tipik belirtisidir.
+Dev makine native Ubuntu (2026-10-16'dan beri; WSL2 değil). Devcontainer
+`--network=host` ile host'un ağ arayüzlerini doğrudan kullanır, yani LAN'daki
+Pi ile DDS multicast keşfi ek ayar istemez. (WSL2 dönemindeki
+`.wslconfig` / `networkingMode=mirrored` adımı artık **gereksiz**.)
 
-**Çözüm — WSL2 mirrored networking** (Windows 11 22H2+):
-```ini
-# Windows: %USERPROFILE%\.wslconfig
-[wsl2]
-networkingMode=mirrored
-```
-```powershell
-wsl --shutdown   # sonra WSL'i yeniden aç
-```
-Bu, WSL2'yi host ağıyla paylaştırır; artık LAN'daki Pi ile DDS keşfi çalışır.
+Keşif yine de olmuyorsa ilk şüpheli host'un güvenlik duvarı: `sudo ufw status`
+— aktifse Pi'ın alt ağına izin ver (`sudo ufw allow from 192.168.x.0/24`).
 
 Sonra **iki tarafta da** aynı domain:
 ```bash
@@ -149,7 +141,7 @@ export ROS_DOMAIN_ID=42
 Test: Pi'da `ros2 run demo_nodes_cpp talker`, dev makinede `ros2 topic list` →
 `/chatter` görünmeli.
 
-> Mirrored networking yoksa/çalışmıyorsa alternatif: Fast DDS **Discovery Server**
+> Multicast keşfi yine de çalışmıyorsa (ör. multicast'i engelleyen bir router) alternatif: Fast DDS **Discovery Server**
 > (Pi'da sunucu, dev makine ona bağlanır) — multicast'e gerek kalmaz. Gerekirse
 > onu ayrıca kurarız.
 

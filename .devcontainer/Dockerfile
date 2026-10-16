@@ -4,7 +4,7 @@
 #   * ESP32 firmware compile (PlatformIO) + optional flash
 #   * STM32 flash tooling (st-flash / OpenOCD) for the hoverboard mainboard
 #
-# The container runs on the x86_64 dev machine (WSL2). The robot RUNTIME lives on
+# The container runs on the x86_64 dev machine (native Ubuntu). The robot RUNTIME lives on
 # the ARM64 Pi — hardware (serial, camera, GPIO) is not present here. This image
 # is for writing, compiling and unit-testing logic, not for talking to real motors.
 

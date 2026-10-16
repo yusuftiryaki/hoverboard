@@ -7,7 +7,7 @@ Tek container iki tarafı da karşılıyor:
 - **ESP32 firmware** derleme (PlatformIO) + opsiyonel flash.
 - **STM32 flash** araçları (`st-flash`, OpenOCD) — hoverboard anakartı için.
 
-Container **x86_64 dev makinesinde (WSL2)** çalışır. Robotun **çalışma zamanı
+Container **x86_64 dev makinesinde (native Ubuntu, WSL2 değil)** çalışır. Robotun **çalışma zamanı
 ARM64 Pi'da**; gerçek donanım (seri, kamera, GPIO) burada yok. Bu ortam kod
 **yazmak, derlemek ve mantığı test etmek** içindir — gerçek motorla konuşmak için değil.
 
@@ -55,7 +55,7 @@ gerçeği Dockerfile.
 
 ## Container içinde Claude Code (host login'i paylaşılıyor)
 
-Container'da tekrar login olmana gerek yok — host WSL'deki oturum mount ediliyor:
+Container'da tekrar login olmana gerek yok — host'taki oturum mount ediliyor:
 - Node.js `features` ile kuruluyor, `postCreateCommand` Claude Code'u
   (`@anthropic-ai/claude-code`) global kuruyor.
 - `~/.claude` (OAuth token + ayarlar) ve `~/.claude.json` (hesap/config)
@@ -72,13 +72,45 @@ iki tarafta da paylaşılır (aynı dosyalar).
 > - MCP sunucuları (Gmail/Calendar vb.) config'te taşınır ama bazıları
 >   interaktif auth istediğinden headless container'da çalışmayabilir — normaldir.
 
-## Flashing: WSL2 gerçeği
+## USB cihazları ve flashing (native Ubuntu host)
 
-WSL2 USB cihazlarını doğrudan görmez. İki yol var.
+Dev makine **doğrudan Ubuntu** çalıştırıyor (2026-10-16'dan beri; eskiden
+WSL2'ydi — usbipd, `.wslconfig` gibi adımlar artık **geçersiz**). Host USB'yi
+doğrudan görür; container'a geçirmek `devcontainer.json`'daki `runArgs` işi.
 
-### Yol A (önerilen) — Pi'ı flashing merkezi yap
-ESP32 zaten Pi'a USB ile bağlı; ST-Link'i de Pi'a takabilirsin. Yani:
+İki tür cihaz var ve container'a farklı yollardan girerler:
 
+| Cihaz | Linux'ta ne olarak görünür | Container'a nasıl girer |
+|---|---|---|
+| **ST-Link V2** (`0483:3748`) | `/dev/bus/usb/...` (libusb) — **tty oluşturmaz** | `-v /dev/bus/usb` bind + `--device-cgroup-rule=c 189:* rmw` → **hazır**, container açıkken tak-çıkar çalışır |
+| **ESP32** (CP2102/CH340), **GPS FTDI** | `/dev/ttyUSB*` | `--device=/dev/ttyUSB0` satırı yorumda; açarsan cihaz container başlamadan **önce** takılı olmalı |
+
+> ⚠️ `lsusb` cihazı gösteriyor ama `st-info` "Found 0 stlink programmers"
+> diyorsa (`libusb error: -4`): container'da `/dev/bus/usb` yok demektir.
+> `lsusb` sysfs'ten okur, açmak için düğüm gerekir. `runArgs` değişikliği
+> **Rebuild Container** ister.
+
+### İzinler
+Container'daki düğümlerin sahibi/izni **host'un udev'inden** gelir. Host'ta
+ST-Link kuralı yoksa düğüm `root:root 0664` olur ve container'da `sudo st-info
+--probe` gerekir (parolasız sudo var). Kalıcı çözüm, **host'ta** bir kez:
+```bash
+sudo apt install stlink-tools   # udev kuralını getirir: GROUP=plugdev
+```
+Ubuntu'da `plugdev` GID'i varsayılan olarak 46, container'da da 46 ve `ubuntu` kullanıcısı container'da
+`plugdev` + `dialout` grubunda → sudo'suz çalışır.
+
+### ST-Link (STM32 anakartı) — container'dan
+```bash
+st-info --probe                          # programlayıcı + hedef çip
+st-flash write firmware.bin 0x8000000    # flash
+```
+
+### ESP32 — iki yol
+**Container'dan:** `devcontainer.json`'da `--device=/dev/ttyUSB0` satırını aç,
+ESP32 takılıyken rebuild et, sonra `pio run -t upload`.
+
+**Pi'dan (sahada pratik):** ESP32 robotta zaten Pi'a USB ile bağlı.
 ```bash
 # container'da derle
 cd firmware/esp32_bridge && pio run
@@ -89,31 +121,9 @@ scp .pio/build/esp32dev/firmware.bin pi@<ip>:/tmp/
 ssh pi@<ip> 'esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 921600 \
     write_flash 0x1000 /tmp/firmware.bin'
 ```
-STM32 için de aynı mantık: ST-Link Pi'a takılı, `st-flash write firmware.bin 0x8000000`
-komutu Pi üzerinde çalışır. WSL USB passthrough derdi yok, sahada da kullanışlı.
-
-### Yol B — container'dan doğrudan flash (usbipd-win)
-Windows tarafında bir kez kurulum:
-
-```powershell
-# Windows PowerShell (yönetici)
-winget install usbipd            # bir kez
-usbipd list                      # ESP32 / ST-Link'in BUSID'sini bul
-usbipd bind   --busid <b-id>
-usbipd attach --wsl --busid <b-id>
-```
-Sonra WSL'de `/dev/ttyUSB0` (ESP32) veya `/dev/ttyACM0` (ST-Link) belirir.
-`devcontainer.json` içindeki ilgili `--device=` satırını aç, container'ı rebuild et.
-Artık:
-```bash
-pio run -t upload            # ESP32
-st-flash write firmware.bin 0x8000000   # STM32
-```
-
-> Cihazı her takışında `usbipd attach` tekrar gerekir (reboot sonrası da). Bu
-> tekrar eden sürtünme, Yol A'yı çoğu zaman daha pratik yapıyor.
+STM32 için de aynısı geçerli: ST-Link Pi'a takılıyken `st-flash` Pi'da koşar.
 
 ## Derleme her zaman donanımsız çalışır
-Hangi yolu seçersen seç, `pio run` (ESP32 derleme) ve `colcon build` (ROS 2)
+Nereden flash'larsan flash'la, `pio run` (ESP32 derleme) ve `colcon build` (ROS 2)
 hiçbir donanım olmadan container'da çalışır. Donanım yalnızca **flash** ve
 **gerçek çalıştırma** için gerekir.
