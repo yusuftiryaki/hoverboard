@@ -852,8 +852,27 @@ kaldı" büyük ihtimalle bu. Aynı gün CI'da da (#7, `nav2` aşaması) aynı s
 patladı. **Test tarafı:** `Nav2Stack` ilk denemeye 75 sn veriyor, aktifleşmezse
 Nav2 launch'ını öldürüp **bir kez** yeniden başlatıyor ve pytest uyarısı
 basıyor (yol, eşik 1 sn'ye indirilerek denendi: uyarı + test geçti).
-⚠️ **Robot tarafı AÇIK:** Pi açılışında Nav2 aynı şekilde hiç aktifleşmeyebilir
-ve bunu söyleyen bir şey yok — açılış izleyicisi (systemd / launch) gerekli.
+✅ **Robot tarafı: `nav2_watchdog` (2026-10-16).** `nav2.launch.py`'de koşuyor
+(autostart açıkken), `is_active`'i 2 sn'de bir soruyor; Nav2 **120 sn** aktif
+değilse (açılışta ya da sonradan) çıkış kodu **3** ile çıkıyor →
+launch'ın çıkış işleyicisi **Shutdown** → `ros2 launch` biter → systemd yeniden
+başlatır. Kararlar:
+- ⚠️ **`ros2 launch` Shutdown'dan sonra 0 ile çıkıyor (ölçüldü)** →
+  `robot.service` artık **`Restart=always`** (on-failure robotu kapalı
+  bırakırdı). deployment.md adım 8.
+- Sadece kod 3 kapatır: izleyicinin kendi çökmesi (kod 1) çalışan robotu
+  düşürmez, loglanır. Karşıt test: kod uyuşmayınca launch 90 sn sonra hâlâ
+  ayaktaydı.
+- Bütün yığın yeniden başlar (köprü, EKF dahil): Nav2 zaten sürmüyordu, köprü
+  düşünce ESP32 watchdog'u tekerleği durdurur. IMU açılış kalibrasyonu yine
+  robotun durgun olmasını ister — Nav2 asıldığında robot zaten duruyor.
+- Testler: `BringupWatch` (ROS'suz, 8) + `test_nav2_watchdog.py` (stack, ~20 sn):
+  cevapsız yönetici → kod 3; TF'siz (aktifleşemeyen) Nav2 + 4 sn eşik →
+  launch kendiliğinden kapanıyor, geride Nav2 süreci kalmıyor. Sağlıklı durum:
+  her Nav2 yığını izleyiciyle dakikalarca koşuyor, hiçbiri kapanmadı.
+- Sınır: **runtime'da** da (aktifken bir sunucu çökerse) 120 sn sonra
+  tüm robotu yeniden başlatır. Bilerek: aktif olmayan Nav2'yle robot zaten
+  otonom değil.
 
 Sim parçaları (`robot_sim`, ROS'suz, elle hesaplanmış testlerle — karar 10):
 - `battery_model.py`: 10S paket, **kendi** OCV tablosu (tahmincininkiyle

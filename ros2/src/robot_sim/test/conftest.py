@@ -47,7 +47,7 @@ NAV2_PATTERNS = (
     "nav2_behaviors/behavior_server", "nav2_bt_navigator/bt_navigator",
     "nav2_waypoint_follower/waypoint_follower", "opennav_docking/opennav_docking",
     "nav2_lifecycle_manager/lifecycle_manager", "hoverboard_bridge/nav_cmd_gate",
-    "battery_manager/battery_supervisor",
+    "battery_manager/battery_supervisor", "hoverboard_bridge/nav2_watchdog",
 )
 # One is_active call's budget. It BLOCKS while the manager transitions its
 # servers (measured: 4.3 s on an idle box) — but a call that times out
