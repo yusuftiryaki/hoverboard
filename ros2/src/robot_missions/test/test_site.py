@@ -179,3 +179,10 @@ def test_distance_matches_a_hand_computed_value():
     assert distance_m(LatLon(LAT0, LON0), LatLon(LAT0 + DLAT_10M, LON0)) == \
         pytest.approx(10.0, abs=1e-4)
     assert math.isclose(distance_m(LatLon(LAT0, LON0), LatLon(LAT0, LON0)), 0.0)
+
+
+def test_a_site_file_not_saved_yet_can_be_an_empty_site(tmp_path):
+    path = str(tmp_path / "later.geojson")
+    assert load_site(path, missing_ok=True).is_empty()
+    with pytest.raises(OSError):
+        load_site(path)                  # by default a missing file is still an error

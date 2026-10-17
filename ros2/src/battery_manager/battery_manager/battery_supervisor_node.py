@@ -233,7 +233,7 @@ class BatterySupervisor(Node):
     def _site_with_station(self, path: str):
         if not path:
             return None
-        site = load_site(path)
+        site = load_site(path, missing_ok=True)   # not saved yet = no station
         if any(st.name == self._dock_id for st in site.stations):
             return site
         self.get_logger().warn(

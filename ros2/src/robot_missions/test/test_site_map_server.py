@@ -281,3 +281,16 @@ def test_detections_survive_a_restart(context, tmp_path):
     finally:
         node.destroy_node()
         navsat.node.destroy_node()
+
+
+def test_a_site_file_not_saved_yet_is_an_all_free_map(context, tmp_path):
+    # The web page creates the file on its first save; until then the robot
+    # must still have a survey map (or Nav2 aborts every goal).
+    node = server(tmp_path, str(tmp_path / "not_yet.geojson"))
+    executor = SingleThreadedExecutor()
+    executor.add_node(node)
+    try:
+        (message,) = listen(executor, "obstacle_map", OccupancyGrid, LATCHED, bool)
+        assert set(message.data) == {0}
+    finally:
+        node.destroy_node()

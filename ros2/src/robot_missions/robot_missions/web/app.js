@@ -18,6 +18,7 @@ let armedKind = null;
 let taskTypes = {};
 let gotoTarget = null;          // [lon, lat]
 let gotoMarker = null;
+let centredOnRobot = false;     // an empty site: first fix centres the map
 
 // --- map ---------------------------------------------------------------------
 const map = L.map("map", { maxZoom: 22 }).setView([41.0, 29.0], 19);
@@ -369,6 +370,8 @@ async function pollStatus() {
     if (s.robot) {
       const at = L.latLng(s.robot.lat, s.robot.lon);
       robotMarker.setLatLng(at).addTo(map);
+      if (!centredOnRobot && !features.length) map.setView(at, 20);
+      centredOnRobot = true;
       if (s.robot.heading_deg !== null && s.robot.heading_deg !== undefined) {
         robotHeading.setLatLngs([at, offsetLatLng(at, s.robot.heading_deg, 1.0)]).addTo(map);
       }

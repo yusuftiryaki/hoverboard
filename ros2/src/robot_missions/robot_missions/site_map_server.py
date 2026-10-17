@@ -88,7 +88,7 @@ class SiteMapServer(Node):
 
         p = self.get_parameter
         path = p("site_file").value
-        self._site: Site = load_site(path) if path else Site()
+        self._site: Site = load_site(path, missing_ok=True) if path else Site()
         self._status = (DiagnosticStatus.WARN, "waiting for navsat_transform")
         self._problems: list[str] = []
         self._published = False
@@ -138,7 +138,7 @@ class SiteMapServer(Node):
     def _on_reload(self, _request, response):
         path = self.get_parameter("site_file").value
         try:
-            site = load_site(path) if path else Site()
+            site = load_site(path, missing_ok=True) if path else Site()
             self._store.load()
         except (OSError, ValueError) as exc:
             # A broken file leaves the map as it was — never half a site.
