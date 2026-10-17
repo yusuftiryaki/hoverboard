@@ -38,6 +38,15 @@ class FakeRobot:
         self.reloads += 1
         return True, "reloaded"
 
+    camera = True                       # False: no camera running
+    frames = 0
+
+    def camera_jpeg(self, wait_s=3.0, after=None):
+        if not self.camera:
+            return None
+        self.frames += 1
+        return self.frames, b"\xff\xd8JPEG" + bytes([self.frames % 256]) + b"\xff\xd9"
+
 
 def lawn():
     ring = [[LON0, LAT0], [LON0 + D, LAT0], [LON0 + D, LAT0 + D], [LON0, LAT0 + D], [LON0, LAT0]]
@@ -217,3 +226,46 @@ def test_an_empty_body_is_not_a_site(web):
 
 def test_the_static_dir_is_found_from_the_source_tree():
     assert os.path.isfile(os.path.join(default_static_dir(), "index.html"))
+
+
+def test_a_detection_photo_is_served_and_goes_with_the_detection(web, tmp_path):
+    call, robot, site, detected = web
+    images = tmp_path / "detected_images"
+    images.mkdir()
+    (images / "1700.jpg").write_bytes(b"\xff\xd8photo\xff\xd9")
+    write_detections(detected, dict(ROCK, image="1700.jpg"), dict(ROCK, lon=LON0))
+    status, body = call("GET", "/api/detected/0/image")
+    assert status == 200 and body == b"\xff\xd8photo\xff\xd9"
+    assert call("GET", "/api/detected/1/image")[0] == 404        # no photo
+    assert call("POST", "/api/detected/0/drop")[0] == 200
+    assert not (images / "1700.jpg").exists()                    # forgotten with it
+
+
+@pytest.mark.parametrize("name", ["../site.geojson", "/etc/passwd", ".x.jpg", "a.png"])
+def test_a_detection_cannot_point_its_photo_elsewhere(web, name):
+    call, robot, site, detected = web
+    write_detections(detected, dict(ROCK, image=name))
+    assert call("GET", "/api/detected/0/image")[0] == 404
+
+
+def test_the_camera_still_and_its_absence(web):
+    call, robot, *_ = web
+    status, body = call("GET", "/api/camera.jpg")
+    assert status == 200 and body.startswith(b"\xff\xd8")
+    robot.camera = False
+    status, body = call("GET", "/api/camera.jpg")
+    assert status == 503 and "camera" in body["error"]
+
+
+def test_the_live_stream_is_mjpeg_frame_after_frame(web):
+    call, robot, *_ = web
+    response = urllib.request.urlopen(call.base + "/api/camera/stream", timeout=5)
+    assert response.headers["Content-Type"].startswith("multipart/x-mixed-replace")
+    data = b""
+    while data.count(b"--frame") < 3:
+        data += response.read1(4096)
+    response.close()
+    parts = [p for p in data.split(b"--frame") if p.strip()]
+    assert all(b"Content-Type: image/jpeg" in p for p in parts[:2])
+    # Different frames, not the same one repeated.
+    assert parts[0].split(b"\r\n\r\n", 1)[1][:8] != parts[1].split(b"\r\n\r\n", 1)[1][:8]

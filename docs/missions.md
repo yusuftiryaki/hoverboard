@@ -357,6 +357,31 @@ Imagery; "Harita" katmanı OpenStreetMap).
   bölge `/obstacle_map`'te). Tarayıcıda (headless Chromium) elle de denendi:
   çizim → kaydet → robotun kendi okuyucusu kabul etti, JS hatası yok.
 
+## Kamera: tespit fotoğrafı ve canlı görüntü
+- **Tespit fotoğrafı:** tampon basılınca `site_map_server` kameranın son
+  karesini (≤ 2 sn eski) JPEG olarak tespitle birlikte saklar
+  (`detected_images/` tespit dosyasının yanında). Tespitler sekmesinde onay
+  kutusunun üstünde görünür — "taş mı, köpek mi" sorusunun cevabı. Fotoğraf
+  hata verirse tespit yine kaydedilir (fotoğraf engeli asla kaybettirmez).
+  Tespit silinince/onaylanınca fotoğraf da silinir.
+- **Canlı görüntü:** sayfadaki 📷 düğmesi → `/api/camera/stream` (MJPEG). `web_ui`
+  kameraya **yalnızca biri izlerken** abone olur ve ≤ 5 Hz kodlar; kutu
+  kapanınca akış kesilir (unutulan sekme 10 dk sonra kendiliğinden).
+- Ham `sensor_msgs/Image` okunuyor (`camera/image_raw`, rgb8/bgr8/rgba8/bgra8/
+  mono8), JPEG'e burada çevriliyor — image_transport'un compressed eklentisi
+  kurulu değil.
+- Robotta kamera `use_camera:=true` ile açılır. ⚠️ Pi'da Ubuntu libcamera'nın
+  Pi Camera V2'yi tanıdığı hâlâ doğrulanmadı.
+- **Simülatörde** (`sim_camera.py`): kinematik dünyanın render'ı yok, o yüzden
+  ucuz bir ışın izleyici — çim (dama), gök, engeller gri silindir; poz
+  URDF'ten (tf), görüş alanı Pi Camera V2. Yalnızca **görüntü hattını**
+  (fotoğraf, canlı görüntü) denemek için; hiçbir görüntü algoritması buna göre
+  ayarlanamaz. `camera_rate_hz` (varsayılan 0 = kapalı), demo 5 Hz açar.
+  Gazebo kamerayı destekliyor (Sensors sistemi + ros_gz_bridge), ama render
+  motoru (Ogre2) ister; bu container ve CI'da GPU yok, ve kurulumumuzda Gazebo
+  yalnızca fizik için. Gerçek render'lı bir Gazebo kamerası, `track_marker_node`'u
+  (AprilTag) ilk kez piksel üzerinde sınamak için ayrı bir iş olabilir.
+
 ## Simülatörde elle denemek (`scripts/sim_demo.sh`)
 ```bash
 ./scripts/sim_demo.sh                 # sonra tarayıcıda http://localhost:8080/

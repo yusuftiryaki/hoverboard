@@ -12,7 +12,10 @@
 # robot.launch.py exactly as on the Pi — bridge, EKFs, navsat_transform, Nav2,
 # battery supervisor, site_map_server, mission_runner, web_ui. The robot starts
 # at --lat/--lon facing east. Draw a lawn next to it on the page, save, start a
-# mission. Ctrl-C stops everything.
+# mission. Ctrl-C stops everything. The 📷 button on the page shows the
+# simulated camera (sim_camera.py: grass, sky, obstacles as grey cylinders —
+# for trying the page, nothing more); a bumper press keeps its frame with
+# the detection.
 #
 # The site file persists between runs (default ~/.robot/sim_site.geojson), and
 # so do the bumper's detections (~/.robot/sim_detected.json) — delete them for
@@ -78,6 +81,7 @@ setsid ros2 run robot_sim sim_node --ros-args \
   -p datum_lat:="${LAT}" -p datum_lon:="${LON}" \
   -p publish_obstacle_map:=false -p bumper_from_obstacles:=true \
   -p battery_capacity_ah:=200.0 -p battery_idle_current_a:=0.0 \
+  -p camera_rate_hz:=5.0 \
   "${GPS_ARGS[@]}" "${ROCK_ARGS[@]}" &
 SIM_PID=$!
 sleep 3

@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import time
 from typing import Optional
 
 import rclpy
@@ -41,7 +42,8 @@ from geographic_msgs.msg import GeoPoint
 from nav_msgs.msg import OccupancyGrid
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
+from sensor_msgs.msg import Image
 from robot_localization.srv import FromLLArray, ToLL
 from rclpy.time import Time
 from std_msgs.msg import Bool, String
@@ -49,7 +51,8 @@ from std_srvs.srv import Trigger
 from geometry_msgs.msg import Point
 from tf2_ros import Buffer, TransformException, TransformListener
 
-from robot_missions.detected import DetectedStore, contact_point
+from robot_missions.camera import jpeg_from_image
+from robot_missions.detected import DetectedStore, contact_point, images_dir
 from robot_missions.occupancy import Circle, occupied_cells
 from robot_missions.site import LatLon, Site, describe, load_site
 from robot_missions.site_map import (
@@ -85,6 +88,10 @@ class SiteMapServer(Node):
         # <= 0: a press merges only when it lands on a detection's own circle
         # (detected.py says why anything wider loses half the rock).
         self.declare_parameter("merge_distance", 0.0)
+        # The bumper's snapshot: the newest camera frame at the press, kept
+        # with the detection (detected.py). "" = no camera.
+        self.declare_parameter("camera_topic", "camera/image_raw")
+        self.declare_parameter("snapshot_max_age_s", 2.0)
 
         p = self.get_parameter
         path = p("site_file").value
@@ -113,6 +120,13 @@ class SiteMapServer(Node):
         self._to_ll = self.create_client(ToLL, "toLL")
         if p("record_contacts").value:
             self.create_subscription(Bool, "bumper", self._on_bumper, 10)
+        self._frame = None               # (receive time, Image)
+        if p("camera_topic").value:
+            # Keep only a reference to the newest frame; it is encoded only
+            # when the bumper presses.
+            self.create_subscription(Image, p("camera_topic").value,
+                                     lambda m: setattr(self, "_frame", (time.time(), m)),
+                                     qos_profile_sensor_data)
 
         self._from_ll = self.create_client(FromLLArray, "fromLLArray")
         self._asked = []
@@ -280,10 +294,37 @@ class SiteMapServer(Node):
             f"bumper: {'NEW obstacle' if new else 'known obstacle again'} at "
             f"({item.x:.2f}, {item.y:.2f}) in map, {item.count} press(es)")
         if new:
+            self._snapshot(item)
             self._publish(self._geometry)     # on the costmaps now
             self._locate(item)
         else:
             self._save()
+
+    def _snapshot(self, item) -> None:
+        frame = self._frame
+        if frame is None or time.time() - frame[0] > self.get_parameter("snapshot_max_age_s").value:
+            return
+        image = frame[1]
+        try:
+            jpeg = jpeg_from_image(image.encoding, image.width, image.height, image.step,
+                                   bytes(image.data))
+        except Exception as exc:          # noqa: BLE001 — a photo must never lose the obstacle
+            self.get_logger().warn(f"bumper snapshot failed: {exc}")
+            return
+        if jpeg is None:
+            self.get_logger().warn(f"bumper snapshot: cannot encode {image.encoding!r}",
+                                   throttle_duration_sec=60.0)
+            return
+        directory = images_dir(self.get_parameter("detected_file").value)
+        name = f"{int(item.first_seen * 1000)}.jpg"
+        try:
+            os.makedirs(directory, exist_ok=True)
+            with open(os.path.join(directory, name), "wb") as handle:
+                handle.write(jpeg)
+        except OSError as exc:
+            self.get_logger().warn(f"bumper snapshot not saved: {exc}")
+            return
+        item.image = name
 
     def _locate(self, item) -> None:
         """map -> lat/lon for the file. ⚠️ /toLL answers (0, 0) — not an
@@ -312,7 +353,7 @@ class SiteMapServer(Node):
     def _publish_detected(self) -> None:
         self._detected_pub.publish(String(data=json.dumps([
             {"x": d.x, "y": d.y, "radius": d.radius_m, "count": d.count,
-             "lat": d.lat, "lon": d.lon} for d in self._store.placed()])))
+             "lat": d.lat, "lon": d.lon, "image": d.image} for d in self._store.placed()])))
 
     def _publish_diagnostics(self) -> None:
         level, message = self._status

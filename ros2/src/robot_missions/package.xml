@@ -24,6 +24,10 @@
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>std_srvs</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
+  <!-- camera.py: bumper snapshots, the web page's live view -->
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
   <!-- planner.py: polygon offsets, differences, row clipping -->
   <exec_depend>python3-shapely</exec_depend>

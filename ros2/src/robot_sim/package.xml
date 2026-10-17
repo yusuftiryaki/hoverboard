@@ -13,6 +13,8 @@
   <license>MIT</license>
 
   <exec_depend>rclpy</exec_depend>
+  <!-- sim_camera.py -->
+  <exec_depend>python3-numpy</exec_depend>
   <exec_depend>hoverboard_bridge</exec_depend>
   <!-- For earth_field: the simulated magnetic field has ONE definition, and it
        lives with the magnetometer driver. See A6 in docs/handoff.md. -->

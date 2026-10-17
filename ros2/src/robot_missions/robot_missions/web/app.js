@@ -389,6 +389,25 @@ async function pollStatus() {
   }
 }
 
+// --- live camera --------------------------------------------------------------
+// Only while the box is open: the robot subscribes to (and encodes) the camera
+// only while someone is watching, so closing it must drop the stream.
+$("camera-toggle").onclick = () => {
+  const box = $("camera-box"), view = $("camera-view");
+  const opening = box.hidden;
+  box.hidden = !opening;
+  $("camera-toggle").classList.toggle("active", opening);
+  if (opening) {
+    $("camera-message").textContent = "Bağlanıyor…";
+    view.onload = () => { $("camera-message").textContent = ""; };
+    view.onerror = () => { $("camera-message").textContent =
+      "Kamera görüntüsü yok — kamera çalışıyor mu? (robotta use_camera:=true)"; };
+    view.src = "/api/camera/stream?t=" + Date.now();
+  } else {
+    view.removeAttribute("src");
+  }
+};
+
 // --- detections ---------------------------------------------------------------
 async function pollDetected() {
   let items = [];
@@ -407,6 +426,20 @@ async function pollDetected() {
   for (const d of items) {
     const li = document.createElement("li");
     li.innerHTML = `<div><b>#${d.index}</b> · ${d.count} basış · ${new Date(d.last_seen * 1000).toLocaleString("tr-TR")}</div>`;
+    if (d.image) {
+      // The camera's frame from the moment of the press.
+      const img = document.createElement("img");
+      img.className = "thumb";
+      img.src = `/api/detected/${d.index}/image?f=${encodeURIComponent(d.image)}`;
+      img.title = "Tampon basıldığı an — büyütmek için tıkla";
+      img.onclick = () => window.open(img.src, "_blank");
+      li.appendChild(img);
+    } else {
+      const none = document.createElement("div");
+      none.className = "hint";
+      none.textContent = "Fotoğraf yok (o an kamera görüntüsü yoktu).";
+      li.appendChild(none);
+    }
     const name = document.createElement("input"); name.placeholder = "ad (ör. agac)";
     name.title = "sahadaki engelin adı";
     const radius = document.createElement("input"); radius.type = "number"; radius.step = "0.05";
