@@ -68,6 +68,8 @@ if pgrep -f "[l]ib/robot_sim/sim_node|[r]obot_bringup robot.launch.py|^gz [s]im"
   echo "Bir simülasyon/robot yığını zaten çalışıyor (pgrep). Önce onu kapat." >&2
   exit 1
 fi
+# Dead stacks' DDS files make every new node hang silently (see the script).
+"${REPO}/scripts/dds_shm_clean.sh"
 
 cleanup() {
   echo; echo ">> kapatılıyor"

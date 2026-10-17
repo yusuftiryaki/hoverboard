@@ -75,6 +75,9 @@ build_workspace() {
   colcon build --symlink-install
   source install/setup.bash
   set -u
+  # Locally the stacks of earlier runs were SIGKILLed: their DDS files make
+  # new nodes hang (scripts/dds_shm_clean.sh). A no-op on a fresh runner.
+  "${REPO}/scripts/dds_shm_clean.sh"
   mkdir -p "${REPORTS}"
   BUILT=1
 }
@@ -142,7 +145,11 @@ import sys
 import xml.etree.ElementTree as ET
 
 suite = ET.parse(sys.argv[1]).getroot().find("testsuite")
-tests, skipped = int(suite.get("tests")), int(suite.get("skipped"))
+# JUnit files an xfail under <skipped type="pytest.xfail"> too. That one is a
+# known, documented failure that RAN (strict: it fails the run if it passes),
+# not a hole in the environment — test_gazebo_marker's planar ambiguity.
+skips = [s for s in suite.iter("skipped") if s.get("type") != "pytest.xfail"]
+tests, skipped = int(suite.get("tests")), len(skips)
 if skipped or not tests:
     sys.exit(f"!! {skipped} of {tests} tests skipped in {sys.argv[1]} — in CI a "
              "skip is a hole in the environment, not a pass. See the SKIPPED "
