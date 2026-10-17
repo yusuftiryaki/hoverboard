@@ -54,7 +54,7 @@ from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.qos import DurabilityPolicy, QoSProfile
 from rclpy.time import Time
-from sensor_msgs.msg import Imu, MagneticField, NavSatFix, NavSatStatus
+from sensor_msgs.msg import Image, Imu, MagneticField, NavSatFix, NavSatStatus
 from std_msgs.msg import Bool, Float64
 from tf2_ros import Buffer, TransformBroadcaster, TransformException, TransformListener
 
@@ -133,6 +133,13 @@ class SimNode(Node):
         # ⚠️ The station body never presses it here: whether the real bumper
         # meets the station when docking is an SP6 design question.
         self.declare_parameter("bumper_from_obstacles", False)
+        # A cheap rendered camera on camera/image_raw (sim_camera.py) for the
+        # image pipeline — the bumper's snapshot, the web page's live view.
+        # 0 = off (the default: the tests that do not look at images should
+        # not pay for rendering). NOT for anything vision is judged on.
+        self.declare_parameter("camera_rate_hz", 0.0)
+        self.declare_parameter("camera_width", 320)
+        self.declare_parameter("camera_height", 240)
 
         # ---- Battery (SP5) -----------------------------------------------------
         # The pack the robot really has. battery_monitor's capacity_ah is what
@@ -370,6 +377,10 @@ class SimNode(Node):
 
         self._last_tick = None
         self.create_timer(TX_PERIOD_S, self._tick)
+        rate = self.get_parameter("camera_rate_hz").value
+        if rate > 0.0:
+            self._image_pub = self.create_publisher(Image, "camera/image_raw", 2)
+            self.create_timer(1.0 / rate, self._publish_camera)
         self.create_timer(1.0 / p("imu_rate_hz").value, self._publish_imu)
         self.create_timer(1.0 / p("mag_rate_hz").value, self._publish_mag)
         self.create_timer(1.0 / p("gps_rate_hz").value, self._publish_gps)
@@ -510,6 +521,28 @@ class SimNode(Node):
                 return None            # robot_state_publisher not up yet
             self._gps_offset = (tf.transform.translation.x, tf.transform.translation.y)
         return self._gps_offset
+
+    def _publish_camera(self) -> None:
+        from robot_sim.sim_camera import render   # numpy only when the camera is on
+        mount = self._camera_mount()
+        if mount is None:
+            return
+        p = self.get_parameter
+        width, height = int(p("camera_width").value), int(p("camera_height").value)
+        # Heights are guesses: small things knee-high, wide ones tree-trunk tall.
+        solids = [(o.x, o.y, o.radius, 0.4 if o.radius < 0.4 else 1.5)
+                  for o in self._obstacles + self._unsurveyed]
+        pose = self._world.pose
+        pixels = render(width, height, mount.hfov, mount.translation, mount.rotation,
+                        (pose.x, pose.y, pose.yaw), solids)
+        msg = Image()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = "camera_optical_link"
+        msg.height, msg.width = height, width
+        msg.encoding = "rgb8"
+        msg.step = width * 3
+        msg.data = pixels.tobytes()
+        self._image_pub.publish(msg)
 
     def _camera_mount(self) -> CameraMount | None:
         if self._camera is None:

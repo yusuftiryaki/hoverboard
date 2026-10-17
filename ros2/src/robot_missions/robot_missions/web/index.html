@@ -14,7 +14,12 @@
     <header>
       <div id="status-line">Bağlanıyor…</div>
       <div id="battery"></div>
+      <button id="camera-toggle" title="Canlı kamera">📷</button>
     </header>
+    <div id="camera-box" hidden>
+      <img id="camera-view" alt="kamera">
+      <div id="camera-message" class="hint"></div>
+    </div>
     <nav>
       <button data-tab="site" class="active">Saha</button>
       <button data-tab="mission">Görev</button>

@@ -23,6 +23,8 @@ from robot_localization.srv import FromLLArray, ToLL                # noqa: E402
 from geographic_msgs.msg import GeoPoint                            # noqa: E402
 from geometry_msgs.msg import TransformStamped                      # noqa: E402
 from std_msgs.msg import Bool, String                               # noqa: E402
+from sensor_msgs.msg import Image                                   # noqa: E402
+from rclpy.qos import qos_profile_sensor_data                       # noqa: E402
 from tf2_ros import StaticTransformBroadcaster                      # noqa: E402
 
 from robot_missions.occupancy import OCCUPIED                       # noqa: E402
@@ -220,12 +222,16 @@ def test_a_bumper_press_puts_an_obstacle_on_the_map_and_on_disk(context, tmp_pat
                   detected_file=str(detected_file))
     keep = robot_at(navsat.node, 2.0, 3.0, math.pi / 2)        # facing north
     bumper = navsat.node.create_publisher(Bool, "bumper", 10)
+    camera = navsat.node.create_publisher(Image, "camera/image_raw", qos_profile_sensor_data)
+    frame = Image(height=4, width=6, encoding="rgb8", step=18, data=bytes([200, 30, 30]) * 24)
     executor = SingleThreadedExecutor()
     executor.add_node(navsat.node)
     executor.add_node(node)
     try:
         assert listen(executor, "obstacle_map", OccupancyGrid, LATCHED, bool)
-        time.sleep(0.5)
+        for _ in range(5):                              # the camera is running
+            camera.publish(frame)
+            listen(executor, "unused", String, 10, lambda g: False, timeout_s=0.1)
         for pressed in (True, True, True, False):      # one press, held: ONE record
             bumper.publish(Bool(data=pressed))
             listen(executor, "unused", String, 10, lambda g: False, timeout_s=0.2)
@@ -251,6 +257,9 @@ def test_a_bumper_press_puts_an_obstacle_on_the_map_and_on_disk(context, tmp_pat
 
         saved = json.loads(detected_file.read_text())["detected"]
         assert len(saved) == 1 and saved[0]["lat"] == pytest.approx(rock["lat"])
+        # The camera's frame from the press, kept beside the detections.
+        photo = tmp_path / "detected_images" / saved[0]["image"]
+        assert rock["image"] == saved[0]["image"] and photo.read_bytes()[:2] == b"\xff\xd8"
     finally:
         del keep
         node.destroy_node()

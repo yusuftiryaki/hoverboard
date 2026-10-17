@@ -9,6 +9,8 @@ web_api.py is the HTTP side and knows no ROS; this node is its backend:
     mission_runner/status, battery_supervisor/state, /battery
     mission_runner/start|pause|resume|abort
     site_map_server/reload, battery_supervisor/reload_site   after a site edit
+    camera/image_raw                       the live view — subscribed only while
+                                           a page is watching, encoded <= 5 Hz
 
 The executor spins in its own thread; HTTP handlers (one thread each) send a
 service request and wait on its future, bounded by call_timeout_s.
@@ -26,13 +28,14 @@ from typing import Any, Dict, Optional, Tuple
 import rclpy
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, QoSProfile
+from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
 from rclpy.time import Time
-from sensor_msgs.msg import BatteryState, NavSatFix
+from sensor_msgs.msg import BatteryState, Image, NavSatFix
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 from tf2_ros import Buffer, TransformException, TransformListener
 
+from robot_missions.camera import jpeg_from_image
 from robot_missions.web_api import WebApi, default_static_dir, make_server
 from robot_missions_interfaces.srv import StartMission
 
@@ -47,6 +50,8 @@ class WebUi(Node):
                                os.path.expanduser("~/.robot/detected_obstacles.json"))
         self.declare_parameter("call_timeout_s", 5.0)
         self.declare_parameter("static_dir", "")
+        self.declare_parameter("camera_topic", "camera/image_raw")
+        self.declare_parameter("camera_fps", 5.0)
 
         self._lock = threading.Lock()
         self._fix: Optional[Tuple[float, float, float]] = None   # lat, lon, stamp
@@ -66,6 +71,15 @@ class WebUi(Node):
                           for name in ("pause", "resume", "abort")}
         self._reloads = [self.create_client(Trigger, "site_map_server/reload"),
                          self.create_client(Trigger, "battery_supervisor/reload_site")]
+
+        # The live view: nothing is subscribed (or encoded) until a page asks.
+        self._camera = threading.Condition()
+        self._jpeg: Optional[Tuple[int, bytes, float]] = None     # seq, data, time
+        self._camera_wanted_until = 0.0
+        self._camera_sub = None
+        self._seq = 0
+        self._last_encode = 0.0
+        self.create_timer(0.5, self._manage_camera)
 
         p = self.get_parameter
         self.api = WebApi(p("site_file").value, p("detected_file").value, self)
@@ -150,6 +164,49 @@ class WebUi(Node):
                 ok = ok and response.success
                 messages.append(f"{client.srv_name}: {response.message}")
         return ok, "; ".join(messages)
+
+    def camera_jpeg(self, wait_s: float = 3.0, after: Optional[int] = None):
+        """(seq, JPEG) newer than `after` (any fresh one if None), or None."""
+        deadline = time.monotonic() + wait_s
+        with self._camera:
+            self._camera_wanted_until = time.monotonic() + 5.0
+            while True:
+                frame = self._jpeg
+                if frame is not None and (after is None and time.time() - frame[2] < 2.0
+                                          or after is not None and frame[0] > after):
+                    return frame[0], frame[1]
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    return None
+                self._camera.wait(timeout=left)
+
+    def _manage_camera(self) -> None:
+        wanted = time.monotonic() < self._camera_wanted_until
+        topic = self.get_parameter("camera_topic").value
+        if wanted and self._camera_sub is None and topic:
+            self._camera_sub = self.create_subscription(Image, topic, self._on_image,
+                                                        qos_profile_sensor_data)
+        elif not wanted and self._camera_sub is not None:
+            self.destroy_subscription(self._camera_sub)
+            self._camera_sub = None
+            with self._camera:
+                self._jpeg = None
+
+    def _on_image(self, msg: Image) -> None:
+        now = time.monotonic()
+        if now - self._last_encode < 1.0 / max(0.5, self.get_parameter("camera_fps").value):
+            return
+        self._last_encode = now
+        data = jpeg_from_image(msg.encoding, msg.width, msg.height, msg.step, bytes(msg.data),
+                               quality=70)
+        if data is None:
+            self.get_logger().warn(f"camera: cannot encode {msg.encoding!r}",
+                                   throttle_duration_sec=60.0)
+            return
+        with self._camera:
+            self._seq += 1               # monotonic across re-subscriptions
+            self._jpeg = (self._seq, data, time.time())
+            self._camera.notify_all()
 
     def _call(self, client, request):
         timeout = self.get_parameter("call_timeout_s").value

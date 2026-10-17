@@ -42,6 +42,10 @@ class Detection:
     last_seen: float = field(default_factory=time.time)
     lat: Optional[float] = None         # filled in by /toLL; None until then
     lon: Optional[float] = None
+    # The camera's frame from the moment of the press (a file name in the
+    # images directory), so a person can tell a rock from a dog. None: no
+    # camera, or no fresh frame.
+    image: Optional[str] = None
 
 
 def contact_point(x: float, y: float, yaw: float, offset: float) -> Tuple[float, float]:
@@ -72,7 +76,8 @@ class DetectedStore:
                 count=int(entry.get("count", 1)),
                 first_seen=float(entry.get("first_seen", 0.0)),
                 last_seen=float(entry.get("last_seen", 0.0)),
-                lat=float(entry["lat"]), lon=float(entry["lon"])))
+                lat=float(entry["lat"]), lon=float(entry["lon"]),
+                image=entry.get("image")))
         return self.items
 
     def add_contact(self, x: float, y: float, radius_m: float) -> Tuple[Detection, bool]:
@@ -102,3 +107,14 @@ class DetectedStore:
     def placed(self) -> List[Detection]:
         """The ones with a position in this run's `map`."""
         return [item for item in self.items if math.isfinite(item.x)]
+
+
+def images_dir(detected_file: str) -> str:
+    """Where the snapshots live: beside the detections file."""
+    return os.path.join(os.path.dirname(detected_file) or ".", "detected_images")
+
+
+def safe_image_name(name) -> bool:
+    """A plain file name this code wrote — never a path."""
+    return (isinstance(name, str) and name.endswith(".jpg") and "/" not in name
+            and "\\" not in name and not name.startswith("."))

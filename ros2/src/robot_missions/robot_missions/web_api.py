@@ -8,6 +8,9 @@
     POST /api/mission               {"type": ..., ...}  -> mission_runner ~/start
     POST /api/mission/pause|resume|abort
     GET  /api/detected              the bumper's finds (detected_obstacles.json)
+    GET  /api/detected/<i>/image    the camera's frame from the press (JPEG), if any
+    GET  /api/camera.jpg            the camera now (backend.camera_jpeg)
+    GET  /api/camera/stream         the camera live, MJPEG (multipart/x-mixed-replace)
     POST /api/detected/<i>/confirm  {"name": ..., "radius_m": ...} -> a site obstacle
     POST /api/detected/<i>/drop     forget it
 
@@ -29,16 +32,19 @@ import os
 import re
 import tempfile
 import threading
+import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Tuple
 
+from robot_missions.detected import images_dir, safe_image_name
 from robot_missions.mission import TASK_TYPES
 from robot_missions.site import SiteError, parse_site
 
 STATIC_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
                 ".css": "text/css; charset=utf-8"}
 MAX_BODY = 5 * 1024 * 1024
+STREAM_MAX_S = 600.0
 
 
 class ApiError(Exception):
@@ -161,6 +167,7 @@ class WebApi:
                 with open(self.site_file, encoding="utf-8") as handle:
                     _atomic_write(self.site_file + ".bak", handle.read())
             _atomic_write(self.site_file, json.dumps(site, indent=1, ensure_ascii=False))
+            self._forget_image(items[index])
             del items[index]
             _atomic_write(self.detected_file, json.dumps(raw, indent=1))
         ok, message = self.backend.reload_site()
@@ -172,10 +179,30 @@ class WebApi:
             items = raw.get("detected", [])
             if not 0 <= index < len(items):
                 raise ApiError(f"no detection #{index}", HTTPStatus.NOT_FOUND)
+            self._forget_image(items[index])
             del items[index]
             _atomic_write(self.detected_file, json.dumps(raw, indent=1))
         ok, message = self.backend.reload_site()
         return {"dropped": True, "reloaded": ok, "reload_message": message}
+
+    def detected_image(self, index: int) -> bytes:
+        items = self._read_detected().get("detected", [])
+        if not 0 <= index < len(items):
+            raise ApiError(f"no detection #{index}", HTTPStatus.NOT_FOUND)
+        name = items[index].get("image")
+        path = os.path.join(images_dir(self.detected_file), name) if safe_image_name(name) else ""
+        if not path or not os.path.isfile(path):
+            raise ApiError("this detection has no picture", HTTPStatus.NOT_FOUND)
+        with open(path, "rb") as handle:
+            return handle.read()
+
+    def _forget_image(self, item: Dict[str, Any]) -> None:
+        name = item.get("image")
+        if safe_image_name(name):
+            try:
+                os.remove(os.path.join(images_dir(self.detected_file), name))
+            except OSError:
+                pass
 
 
 def make_handler(api: WebApi, static_dir: str):
@@ -222,8 +249,64 @@ def make_handler(api: WebApi, static_dir: str):
             except Exception as exc:          # noqa: BLE001 — never kill the server
                 self._send(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": repr(exc)})
 
+        def _send_jpeg(self, data: bytes, cache: bool = False) -> None:
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(data)))
+            # A detection's photo never changes (the list re-polls it every
+            # few seconds); the camera's always does.
+            self.send_header("Cache-Control", "max-age=3600" if cache else "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+
+        def _image(self, index: int) -> None:
+            try:
+                self._send_jpeg(api.detected_image(index), cache=True)
+            except ApiError as exc:
+                self._send(exc.status, {"error": str(exc)})
+
+        def _camera_still(self) -> None:
+            frame = api.backend.camera_jpeg(wait_s=3.0)
+            if frame is None:
+                return self._send(HTTPStatus.SERVICE_UNAVAILABLE,
+                                  {"error": "no camera picture (is the camera running?)"})
+            self._send_jpeg(frame[1])
+
+        def _camera_stream(self) -> None:
+            """MJPEG: every new frame as a part, until the browser goes away
+            (or STREAM_MAX_S, so a forgotten tab does not stream forever)."""
+            first = api.backend.camera_jpeg(wait_s=3.0)
+            if first is None:
+                return self._send(HTTPStatus.SERVICE_UNAVAILABLE,
+                                  {"error": "no camera picture (is the camera running?)"})
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            seq, frame = first
+            ends = time.monotonic() + STREAM_MAX_S
+            try:
+                while time.monotonic() < ends:
+                    self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\n"
+                                     + f"Content-Length: {len(frame)}\r\n\r\n".encode()
+                                     + frame + b"\r\n")
+                    self.wfile.flush()
+                    nxt = api.backend.camera_jpeg(wait_s=3.0, after=seq)
+                    if nxt is None:
+                        break                  # the camera stopped
+                    seq, frame = nxt
+            except (BrokenPipeError, ConnectionResetError):
+                pass                           # the tab was closed
+
         def do_GET(self) -> None:             # noqa: N802
             path = self.path.split("?", 1)[0]
+            match = re.match(r"^/api/detected/(\d+)/image$", path)
+            if match:
+                return self._image(int(match.group(1)))
+            if path == "/api/camera.jpg":
+                return self._camera_still()
+            if path == "/api/camera/stream":
+                return self._camera_stream()
             if path == "/api/site":
                 return self._guard(api.get_site)
             if path == "/api/task_types":
