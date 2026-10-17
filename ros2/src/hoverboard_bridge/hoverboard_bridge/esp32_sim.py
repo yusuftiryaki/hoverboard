@@ -135,6 +135,9 @@ class Esp32Sim:
         self.estop = estop
         self._bump_forced = bump
         self._bump_file = bump_file
+        # Optional: a callable the simulator's world answers (robot_sim's
+        # bumper model). None = only `bump` / bump_file, as before.
+        self.bump_source = None
         self.bump = bump
         self._bat_voltage = bat_voltage
         self._board_temp = board_temp
@@ -187,6 +190,8 @@ class Esp32Sim:
 
     def _poll_bump(self) -> bool:
         if self._bump_forced:
+            return True
+        if self.bump_source is not None and self.bump_source():
             return True
         return bool(self._bump_file) and os.path.exists(self._bump_file)
 

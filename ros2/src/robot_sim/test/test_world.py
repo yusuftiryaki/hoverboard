@@ -164,3 +164,21 @@ def test_zero_dt_is_a_no_op():
     pose_before = (w.pose.x, w.pose.y, w.pose.yaw)
     w.step(50.0, 50.0, 0.0)
     assert (w.pose.x, w.pose.y, w.pose.yaw) == pose_before
+
+
+# --- the front bumper ---------------------------------------------------------
+
+def test_the_front_bumper_presses_only_on_contact_ahead():
+    from robot_sim.world import CircularObstacle, Pose, bumper_pressed
+    rock = [CircularObstacle(x=1.0, y=0.0, radius=0.2)]
+    # Contact distance 0.4 + 0.2 = 0.6 m, margin 0.03.
+    assert bumper_pressed(Pose(0.40, 0.0, 0.0), 0.4, rock)                 # 0.60 m, dead ahead
+    assert bumper_pressed(Pose(0.38, 0.0, 0.0), 0.4, rock)                 # 0.62 m, in margin
+    assert not bumper_pressed(Pose(0.36, 0.0, 0.0), 0.4, rock)             # 0.64 m, a gap
+    # Same distance, facing away: the rock is behind — a FRONT bumper.
+    assert not bumper_pressed(Pose(0.40, 0.0, math.pi), 0.4, rock)
+    # Rock 50 deg off the heading: pressed; 70 deg: the side, not pressed.
+    for degrees, pressed in ((50, True), (70, False), (-50, True), (-70, False)):
+        yaw = math.radians(degrees)
+        pose = Pose(1.0 - 0.6 * math.cos(yaw), -0.6 * math.sin(yaw), 0.0)
+        assert bumper_pressed(pose, 0.4, rock) is pressed, degrees

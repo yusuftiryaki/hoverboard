@@ -236,7 +236,10 @@ def mission_positions(site: Site, mission: Mission) -> List[LatLon]:
 
 
 def plan_from_answer(site: Site, mission: Mission, answer: Sequence[XY],
-                     robot: RobotSpec = RobotSpec(), start: Optional[XY] = None) -> Plan:
+                     robot: RobotSpec = RobotSpec(), start: Optional[XY] = None,
+                     extra_obstacles: Sequence[Tuple[float, float, float]] = ()) -> Plan:
+    """extra_obstacles: (x, y, r) circles already in `map` — the bumper's
+    detections (detected.py), avoided like surveyed obstacles."""
     expected = len(mission_positions(site, mission))
     if len(answer) != expected:
         raise NotReady(f"asked to convert {expected} positions, got {len(answer)} back")
@@ -259,6 +262,7 @@ def plan_from_answer(site: Site, mission: Mission, answer: Sequence[XY],
                                                      *geometry.obstacle_polygons)]
         obstacles += [Point(c.x, c.y).buffer(c.radius)
                       for c in (*geometry.circles, *geometry.station_bodies)]
+        obstacles += [Point(x, y).buffer(r) for x, y, r in extra_obstacles]
         region = planner.free_region(area, obstacles, margin,
                                      robot.robot_radius + robot.obstacle_margin)
         inputs = Inputs(region=region, area=area, heading=heading)

@@ -47,12 +47,13 @@ import json
 import math
 import os
 import tempfile
+from types import SimpleNamespace
 from typing import Any, Dict, Optional
 
 import rclpy
 from action_msgs.msg import GoalStatus
 from geographic_msgs.msg import GeoPoint
-from geometry_msgs.msg import Point, PoseStamped
+from geometry_msgs.msg import Point, PoseStamped, Twist
 from nav2_msgs.action import FollowPath, NavigateToPose
 from nav_msgs.msg import Path
 from rclpy.action import ActionClient
@@ -67,7 +68,7 @@ from tf2_ros import Buffer, TransformException, TransformListener
 
 from robot_missions.mission import (
     MissionError, RobotSpec, mission_positions, parse_mission, plan_from_answer)
-from robot_missions.planner import PlanError
+from robot_missions.planner import PlanError, free_intervals
 from robot_missions.runner_policy import (
     Cancel, Persist, Plan, Progress, Result, ResumeSupervisor, RunnerPolicy, Send, State)
 from robot_missions.site import LatLon, SiteError, load_site
@@ -88,7 +89,13 @@ class MissionRunner(Node):
         self.declare_parameter("cut_width", robot.cut_width)
         self.declare_parameter("robot_radius", robot.robot_radius)
         self.declare_parameter("obstacle_margin", robot.obstacle_margin)
-        self.declare_parameter("max_retries", 1)
+        self.declare_parameter("max_retries", 2)
+        # Extra room round a bumper detection, on top of robot_radius +
+        # obstacle_margin. A detection is a 0.25 m circle on the near side of
+        # something of unknown size, located only as well as the robot knew
+        # where it was: rows cut round it at the bare clearance ended inside
+        # the costmap's inscribed zone often enough for RPP to refuse them.
+        self.declare_parameter("detection_margin", 0.3)
         self.declare_parameter("max_skips_in_a_row", 3)
         self.declare_parameter("server_wait_s", 15.0)
         self.declare_parameter("cancel_grace_s", 3.0)
@@ -97,6 +104,8 @@ class MissionRunner(Node):
         self.declare_parameter("convert_retry_s", 1.0)
         self.declare_parameter("convert_attempts", 60)
         self.declare_parameter("supervisor", "battery_supervisor")
+        # site_map_server's bumper finds (detected.py), in `map`.
+        self.declare_parameter("detected_topic", "site_map_server/detected")
         # Coverage rows (see the module docstring).
         self.declare_parameter("odom_frame", "odom")
         self.declare_parameter("row_controller", "FollowRow")
@@ -139,6 +148,7 @@ class MissionRunner(Node):
         self._tf_listener = TransformListener(self._tf, self)
         self._nav = ActionClient(self, NavigateToPose, "navigate_to_pose")
         self._follow = ActionClient(self, FollowPath, "follow_path")
+        self._reverse_pub = self.create_publisher(Twist, "cmd_vel_nav", 10)
         self._from_ll = self.create_client(FromLLArray, "fromLLArray")
         self._to_ll = self.create_client(ToLL, "toLL")
         supervisor = p("supervisor").value
@@ -147,6 +157,8 @@ class MissionRunner(Node):
         latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self._status_pub = self.create_publisher(String, "~/status", latched)
         self.create_subscription(String, f"{supervisor}/state", self._on_supervisor, latched)
+        self._detected = []             # (x, y, r) in `map`
+        self.create_subscription(String, p("detected_topic").value, self._on_detected, latched)
         self.create_service(StartMission, "~/start", self._on_start)
         self.create_service(Trigger, "~/pause", self._command(self._policy.pause))
         self.create_service(Trigger, "~/resume", self._command(self._policy.resume))
@@ -181,6 +193,9 @@ class MissionRunner(Node):
             self._run(actions)
             return response
         return handler
+
+    def _on_detected(self, message: String) -> None:
+        self._detected = [(d["x"], d["y"], d["radius"]) for d in json.loads(message.data)]
 
     def _on_supervisor(self, message: String) -> None:
         self._run(self._policy.supervisor_state(message.data, self._now()))
@@ -260,7 +275,10 @@ class MissionRunner(Node):
             mission = type(mission)(mission.type, mission.target_name,
                                     mission.target_point, params)
         try:
-            plan = plan_from_answer(self._site, mission, answer, self._robot, start)
+            extra = self.get_parameter("detection_margin").value
+            plan = plan_from_answer(self._site, mission, answer, self._robot, start,
+                                    extra_obstacles=[(x, y, r + extra)
+                                                     for x, y, r in self._detected])
         except NotReady as exc:
             self._retry_convert(str(exc))
             return
@@ -295,7 +313,7 @@ class MissionRunner(Node):
             self._try_convert()
         timer = self.create_timer(self.get_parameter("convert_retry_s").value, again)
 
-    def _send(self, action: Send, waited: float = 0.0) -> None:
+    def _send(self, action: Send, waited: float = 0.0, backed_off: bool = False) -> None:
         if action.token != self._policy.in_flight:
             return                       # dropped while waiting for tf
         plan, index = self._plan, action.index
@@ -322,6 +340,8 @@ class MissionRunner(Node):
             goal.pose = self._pose("map", waypoint.x, waypoint.y, waypoint.yaw)
             self._dispatch(self._nav, goal, action.token, "navigate_to_pose")
             return
+        if not backed_off and self._back_off(action, waited):
+            return
         target = self._target(index)
         if target is None:
             self._run(self._policy.goal_result(action.token, Result.ABORTED, self._now()))
@@ -330,20 +350,132 @@ class MissionRunner(Node):
         if waypoint.work and index > 0:
             before = plan.waypoints[index - 1]
             start = self._targets.get(index - 1) or self._target(index - 1, fresh=True)
-
-            def row():
-                self._cutting = True
-                self._publish_status()
-                self._send_line(token, start, target)
-            # Not at the row's start (a skipped transit, back from the dock,
-            # a resume elsewhere): get there first, NOT cutting, then mow the
-            # row as drawn — never a slanted row from wherever the robot is.
-            self._approach(token, before, start, then=row)
+            # Cut round what the bumper found since the plan was made: the
+            # row's free stretches, as fractions along it (planner.
+            # free_intervals), so the same split applies in `map` (where the
+            # detections are) and in `odom` (where the row is driven).
+            grow = (self._robot.robot_radius + self._robot.obstacle_margin
+                    + self.get_parameter("detection_margin").value)
+            pieces = free_intervals((before.x, before.y), (waypoint.x, waypoint.y),
+                                    [(x, y, r + grow) for x, y, r in self._detected])
+            pieces = self._not_behind(before, waypoint, pieces)
+            self._cut_pieces(token, before, waypoint, start, target, pieces)
             return
         # A transit to the next row's start.
         self._approach(token, waypoint, target,
                        then=lambda: self._run(self._policy.goal_result(
                            token, Result.SUCCEEDED, self._now())))
+
+    def _back_off(self, action: Send, waited: float) -> bool:
+        """Back away first if the robot sits inside a detection's footprint.
+
+        After a bumper press the robot stands right against what it hit —
+        inside the obstacle's inflation the moment site_map_server draws it.
+        From there every straight line "collides ahead" (RPP refuses it) and
+        navigate_to_pose cannot plan out of lethal space: measured, three
+        waypoints failed in a row and the mission paused, the robot never
+        having moved off the rock. So: reverse straight back far enough to
+        clear it (_reverse), then carry on. True = backing off."""
+        here = self._robot_xy()
+        if here is None or not self._detected:
+            return False
+        try:
+            tf = self._tf.lookup_transform("map", "base_link", Time())
+        except TransformException:
+            return False
+        q = tf.transform.rotation
+        yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+        # Back off to where the rows round it are cut: the same clearance.
+        clearance = (self._robot.robot_radius + self._robot.obstacle_margin
+                     + self.get_parameter("detection_margin").value)
+        need = 0.0
+        for x, y, r in self._detected:
+            # Only what is AHEAD: backing away from something behind would
+            # drive into it.
+            if math.cos(math.atan2(y - here[1], x - here[0]) - yaw) <= 0.0:
+                continue
+            need = max(need, clearance + r - math.hypot(x - here[0], y - here[1]))
+        if need <= 0.0:
+            return False
+        self._reverse(action.token, min(1.0, need + 0.05),
+                      then=lambda: self._send(action, waited, backed_off=True))
+        return True
+
+    def _reverse(self, token: int, distance: float, then) -> None:
+        """Straight back `distance` m at 0.1 m/s on cmd_vel_nav — the same
+        input the controller drives, so nav_cmd_gate and twist_mux (teleop
+        above it, the supervisor's lock, the deadman below) all still apply.
+
+        ⚠️ Not behavior_server's backup: it collision-checks the robot's own
+        footprint first, and a robot touching what it just hit is IN that
+        obstacle's inflation by definition — measured, it aborted five times
+        in 30 ms without moving. Reversing blind is acceptable here and only
+        here: it retraces, at walking pace, the ground the robot just drove
+        over, and the firmware's bumper veto never blocks reverse."""
+        frame = self.get_parameter("odom_frame").value
+        origin = self._robot_in(frame)
+        started = self._now()
+        self.get_logger().info(f"backing off {distance:.2f} m from a detected obstacle")
+        timer = None
+
+        def step():
+            here = self._robot_in(frame)
+            gone = math.hypot(here[0] - origin[0], here[1] - origin[1]) \
+                if here is not None and origin is not None else 0.0
+            if token != self._policy.in_flight:          # paused, aborted, handed over
+                timer.cancel()
+                self._reverse_pub.publish(Twist())
+                return
+            if gone >= distance or self._now() - started > 15.0:
+                timer.cancel()
+                self._reverse_pub.publish(Twist())
+                then()
+                return
+            twist = Twist()
+            twist.linear.x = -0.1
+            self._reverse_pub.publish(twist)
+        timer = self.create_timer(0.1, step)
+
+    def _not_behind(self, a, b, pieces):
+        """A row resumed mid-way (the bumper stopped it, the goal was retried)
+        carries on from where the robot is, not from the row's start: drop
+        what lies behind the robot ALONG the row — only when the robot is on
+        the row (within half a metre of its line), not back from the dock."""
+        here = self._robot_xy()
+        length = math.hypot(b.x - a.x, b.y - a.y)
+        if here is None or length < 1e-6:
+            return pieces
+        ux, uy = (b.x - a.x) / length, (b.y - a.y) / length
+        along = (here[0] - a.x) * ux + (here[1] - a.y) * uy
+        across = abs(-(here[0] - a.x) * uy + (here[1] - a.y) * ux)
+        if across > 0.5 or along <= 0.3:
+            return pieces
+        t_here = along / length
+        return [(max(t0, t_here), t1) for t0, t1 in pieces
+                if (t1 - max(t0, t_here)) * length >= 0.3]
+
+    def _cut_pieces(self, token: int, a_map, b_map, a_odom, b_odom, pieces) -> None:
+        """Mow pieces[0], then the rest, each reached first with the trimmer
+        off (_approach: never a slanted row from wherever the robot is)."""
+        if not pieces:
+            self._run(self._policy.goal_result(token, Result.SUCCEEDED, self._now()))
+            return
+        (t0, t1), rest = pieces[0], pieces[1:]
+
+        def lerp(p, q, t):
+            return (p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t)
+        heading = math.atan2(b_map.y - a_map.y, b_map.x - a_map.x)
+        sx, sy = lerp((a_map.x, a_map.y), (b_map.x, b_map.y), t0)
+        piece_start = SimpleNamespace(x=sx, y=sy, yaw=heading)
+        start, end = lerp(a_odom, b_odom, t0), lerp(a_odom, b_odom, t1)
+
+        def cut():
+            self._cutting = True
+            self._publish_status()
+            self._send_line(token, start, end,
+                            then=(lambda: self._cut_pieces(token, a_map, b_map, a_odom,
+                                                           b_odom, rest)) if rest else None)
+        self._approach(token, piece_start, start, then=cut)
 
     def _approach(self, token: int, waypoint, target, then) -> None:
         """Get to `target` (`waypoint` in odom) with the trimmer off, then run

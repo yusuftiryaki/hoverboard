@@ -689,7 +689,13 @@ Alanlar hem **masada haritadan çizilecek** hem **öğret-kaydet** ile kaydedile
   istasyonu → şarj → FULL → undock → devam → DONE. ⚠️ Yolda: SoC tahmincisi
   sayılan SoC 1.0'a dayanmışsa FULL'ü hiç bildirmiyordu → robot istasyonda
   sonsuza kadar kalırdı (gerçek robotta da; düzeltildi).
-- **Sıradaki: 3c** (tampon temas haritası), sonra 4 (web arayüzü).
+- ✅ **3c — tampon temas haritası.** Basış → haritaya hemen + diske lat/lon
+  (siteye değil) → satırlar etrafından kesilir; çarpan robot önce düz geri
+  çekilir (`cmd_vel_nav`; Nav2 backup kendi izini çarpışma sayıp düşüyordu).
+  Ölçülen: survey edilmemiş kayada 0 çarpışma, %75 kesim (kaya ~1 m çim
+  götürüyor). Ayrıntı missions.md 3c.
+- **Sıradaki: 4. aşama — web arayüzü** (çizim, görev formu, canlı durum,
+  tespitleri onaylama/etiketleme), sonra 5 (öğret-kaydet).
 
 ### A5 (CI) — çalışıyor, ve ilk koşuda gerçek bir hata yakaladı
 `scripts/ci.sh` her şeyi koşturur, `.github/workflows/ci.yml` sadece onu

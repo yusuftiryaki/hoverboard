@@ -66,6 +66,7 @@ from robot_sim.dock_model import (CameraMount, DockStation, mat_mul, matrix_from
                                   quaternion_from_matrix)
 from robot_sim.gazebo_backend import GazeboBackend
 from robot_sim.obstacle_map import DEFAULT_GRID, build_obstacle_grid, parse_obstacle_params
+from robot_sim.world import bumper_pressed
 from robot_sim.world import KinematicWorld
 
 EARTH_RADIUS_M = 6378137.0
@@ -125,6 +126,13 @@ class SimNode(Node):
         # exactly one publisher: two latched maps on one topic do not error,
         # the costmap just keeps whichever arrived last.
         self.declare_parameter("publish_obstacle_map", True)
+        # true = the front bumper presses when the robot touches an obstacle
+        # ahead (world.bumper_pressed), so the ESP32's veto and everything
+        # downstream of /bumper see real contacts. false (default) keeps the
+        # old behaviour — bump / bump_file only — that the jam test documents.
+        # ⚠️ The station body never presses it here: whether the real bumper
+        # meets the station when docking is an SP6 design question.
+        self.declare_parameter("bumper_from_obstacles", False)
 
         # ---- Battery (SP5) -----------------------------------------------------
         # The pack the robot really has. battery_monitor's capacity_ah is what
@@ -215,6 +223,9 @@ class SimNode(Node):
             self._unset_as_empty("unsurveyed_obstacle_centers"),
             self._unset_as_empty("unsurveyed_obstacle_radii"),
         )
+        # What the bumper can meet: every obstacle, surveyed or not, but not
+        # the station body (appended to _unsurveyed below).
+        self._bumpable = self._obstacles + self._unsurveyed
         dock = self._unset_as_empty("dock_pose")
         self._station = None
         # Drawn on the published map, never collided with: the survey's idea
@@ -286,6 +297,10 @@ class SimNode(Node):
             bump=p("bump").value,
             bump_file=p("bump_file").value,
         )
+        if p("bumper_from_obstacles").value:
+            radius = p("robot_radius").value
+            self._esp.bump_source = lambda: bumper_pressed(
+                self._world.pose, radius, self._bumpable)
         self.get_logger().info(
             f"simulated ESP32 on {self._link.link_path} — point the bridge at it: "
             f"-p port:={self._link.link_path}"
