@@ -105,7 +105,7 @@ Laptop tarayıcı (uydu haritası)        Pi
 2. ✅ **Planlayıcı**: coverage, patrol, route, goto. ROS'suz, elle hesaplanmış
    testler (aşağıda).
 3. **mission_runner** — 3a ✅ (yürütme, disk, şarjdan sonra devam, ölçüm);
-   kalan 3b (istasyon sahadan) ve 3c (tampon temas haritası). Kapsam:
+   3b ✅ (istasyon sahadan), 3c ✅ (tampon temas haritası). Kapsam:
    yürütme, ilerlemeyi diske yazma, şarjdan sonra devam;
    istasyon pozunu docks.yaml yerine sahadan alma; **tampon temas haritası**
    (aşağıda). Sim'de uçtan uca: alan →
@@ -292,6 +292,44 @@ navigate_to_pose ◄── devriye, rota, nokta, uzun geçişler        follow_p
   `capacity_ah` hâlâ yer tutucu) FULL **hiç** gelmiyor, supervisor CHARGING'de
   sonsuza kadar bekliyor, robot istasyondan **hiç** ayrılmıyordu. İlk koşu 20 dk
   şarjda kaldı. Artık bekleme süresi ilk aşıldığında bir kez bildiriliyor.
+
+## 3c: tampon temas haritası (yapıldı)
+```
+tampon basıldı ─► ESP32 ileriyi keser ─► site_map_server: temas noktası (base_link + 0.45 m ileri)
+   ─► /obstacle_map'e hemen (0.25 m daire) + diske lat/lon (`detected_obstacles.json`, /toLL)
+   ─► ~/detected (JSON) ─► mission_runner: satırlar tespitlerin etrafından kesilir,
+                            yeni planlar da onları engel sayar
+```
+- **Siteye yazılmaz**: tampona köpek, top, ayak da basar; onay/etiket 4. aşamada.
+- Yeniden açılışta tespitler lat/lon'dan geri çevrilip haritaya çizilir.
+- Bir basış ancak bilinen bir tespitin **dairesinin içine** düşerse aynı temas
+  sayılır. ⚠️ Önce 0.5 m içindeki her basış birleştiriliyordu: 0.4 m'lik kaya
+  yakın kenarında tek bir 0.25 m daire olarak kaldı, robot ortasına **27 kez**
+  çarptı (her yeni basış eski dairenin içinde kayboldu).
+- ⚠️ Çarpan robot, tespit çizildiği an onun şişirmesinin **içinde** duruyor:
+  her düz çizgi "collision ahead", `navigate_to_pose` letal alandan plan
+  yapamıyor; behavior_server'ın `backup`'ı da kendi izini çarpışma sayıp 30 ms'de
+  5 kez düştü. Çözüm: runner önündeki tespitten temizlenecek kadar **düz geri**
+  sürer — `cmd_vel_nav` üstünden (kapı, twist_mux kilidi, deadman hâlâ geçerli),
+  0.1 m/s, yalnız az önce geçtiği zeminde; firmware'in tampon vetosu geri
+  hareketi zaten hiç kesmiyor.
+- Durdurulan satır robotun bulunduğu yerden devam eder (satırın başından değil).
+- Geri çekilme yalnızca robot tespite **değerken** (robot yarıçapı + 15 cm).
+  ⚠️ Önce satırların geniş boşluğu kullanılıyordu: çimin kenarını biçen, tespite
+  bir metre uzaktaki robot her bacaktan önce geri gitti, kenar turu üç kez
+  üst üste düşüp görev durdu (CI, PR #16).
+- Tespitlerin etrafında `robot_radius + obstacle_margin + detection_margin
+  (0.3)` boşluk. Daha dar iken satır uçları costmap'in inscribed bölgesine düştü,
+  RPP satırları reddetti (3 satır atlandı).
+- **Ölçülen** (`test_mission_rock.py`, sessiz GPS, 4 × 3 m çimde survey edilmemiş
+  0.2 m kaya, 3 koşu): **0 çarpışma** (sim tamponu temastan 3 cm önce basıyor),
+  1–2 tespit (merkezden 0.17–0.55 m — temas noktası, robotun o anki ~0.35 m'ye
+  varan konum hatasıyla), hiç atlama yok, **%75–80** kesim (kayasız
+  %95–96: küçük bir kaya ~1 m yarıçapında çim götürüyor; gerçek boyutu bir insan
+  etiketleyince — 4. aşama — geri gelir).
+- Sim'de tampon artık engellerden basılabiliyor (`bumper_from_obstacles`,
+  varsayılan kapalı; yalnızca ön ±60°, istasyon gövdesi hariç — gerçek tamponun
+  istasyona değip değmeyeceği SP6 sorusu).
 
 ## Robotun kendi tespit ettiği engeller (2026-10-16, kullanıcı onayı)
 Bugünkü donanımda menzil sensörü yok (handoff karar 8): survey edilmemiş bir

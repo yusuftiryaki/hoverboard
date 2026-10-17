@@ -370,10 +370,14 @@ class SiteStack(GlobalStack):
 
     def __init__(self, workdir, features, *sim_args):
         self.site_file = write_site(workdir, features)
+        self.detected_file = os.path.join(workdir, "detected_obstacles.json")
         super().__init__("--ros-args", "-p", "publish_obstacle_map:=false", *sim_args)
 
     def launch_args(self):
-        return (*self.LAUNCH_ARGS, "use_site_map:=true", f"site_file:={self.site_file}")
+        # ⚠️ detected_file per test: the default (~/.robot/...) would carry one
+        # test's bumper finds into the next test's map.
+        return (*self.LAUNCH_ARGS, "use_site_map:=true", f"site_file:={self.site_file}",
+                f"detected_file:={self.detected_file}")
 
 
 def write_site(workdir, features):
@@ -544,10 +548,12 @@ class SiteNav2Stack(Nav2Stack):
 
     def __init__(self, workdir, features, *sim_args):
         self.site_file = write_site(workdir, features)
+        self.detected_file = os.path.join(workdir, "detected_obstacles.json")
         super().__init__("--ros-args", "-p", "publish_obstacle_map:=false", *sim_args)
 
     def launch_args(self):
-        return (*self.LAUNCH_ARGS, "use_site_map:=true", f"site_file:={self.site_file}")
+        return (*self.LAUNCH_ARGS, "use_site_map:=true", f"site_file:={self.site_file}",
+                f"detected_file:={self.detected_file}")
 
     def nav2_args(self):
         # battery_supervisor reads home from the site's station (missions.md 3b).

@@ -14,7 +14,7 @@ from shapely import affinity
 from shapely.geometry import LineString, MultiLineString, Point, Polygon
 
 from robot_missions.planner import (
-    PlanError, auto_angle, coverage, free_region, goto, patrol_perimeter,
+    PlanError, auto_angle, free_intervals, coverage, free_region, goto, patrol_perimeter,
     patrol_random, route, row_offsets)
 
 RECT = Polygon([(0, 0), (10, 0), (10, 4), (0, 4)])
@@ -245,3 +245,31 @@ def test_bad_counts_are_errors():
         route([(0, 0), (1, 1)], repeat=-1)
     with pytest.raises(PlanError):
         patrol_perimeter(free_region(RECT, [], 0, 0), laps=-1)
+
+
+# --- clipping rows round detections -----------------------------------------------
+
+def test_a_row_is_cut_round_a_detected_rock():
+    # Row (0,0)->(10,0); rock at (4, 0) grown to r 1.0: blocked x 3..5.
+    assert free_intervals((0, 0), (10, 0), [(4.0, 0.0, 1.0)]) == [
+        (0.0, pytest.approx(0.3)), (pytest.approx(0.5), 1.0)]
+
+
+def test_a_rock_beside_the_row_changes_nothing():
+    assert free_intervals((0, 0), (10, 0), [(4.0, 1.5, 1.0)]) == [(0.0, 1.0)]
+
+
+def test_slivers_shorter_than_min_length_are_dropped():
+    # Rock near the start leaves 0.2 m before it: not worth a stop and a turn.
+    assert free_intervals((0, 0), (10, 0), [(1.2, 0.0, 1.0)], min_length=0.3) == [
+        (pytest.approx(0.22), 1.0)]
+
+
+def test_a_fully_blocked_row_has_no_intervals():
+    assert free_intervals((0, 0), (1, 0), [(0.5, 0.0, 2.0)]) == []
+
+
+def test_intervals_run_from_a_to_b_whatever_the_direction():
+    # The same rock, the row driven west: the free part near a comes first.
+    assert free_intervals((10, 0), (0, 0), [(4.0, 0.0, 1.0)]) == [
+        (0.0, pytest.approx(0.5)), (pytest.approx(0.7), 1.0)]

@@ -138,3 +138,19 @@ class KinematicWorld:
             <= self.robot_radius + obstacle.radius
             for obstacle in self._obstacles
         )
+
+
+def bumper_pressed(pose, robot_radius: float, obstacles, margin: float = 0.03,
+                   half_angle: float = math.radians(60.0)) -> bool:
+    """The FRONT bumper: an obstacle touching (within `margin` of contact)
+    inside +-half_angle of the heading. A rock brushing the robot's side or
+    rear does not press a front bumper — and the firmware's veto only stops
+    forward motion, so a rear contact must not stop it either."""
+    for obstacle in obstacles:
+        dx, dy = obstacle.x - pose.x, obstacle.y - pose.y
+        if math.hypot(dx, dy) > robot_radius + obstacle.radius + margin:
+            continue
+        off = math.atan2(dy, dx) - pose.yaw
+        if abs(math.atan2(math.sin(off), math.cos(off))) <= half_angle:
+            return True
+    return False

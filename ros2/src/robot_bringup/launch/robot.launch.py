@@ -83,6 +83,7 @@ def generate_launch_description():
     site_file = LaunchConfiguration("site_file")
     dock_database = LaunchConfiguration("dock_database")
     use_missions = LaunchConfiguration("use_missions")
+    detected_file = LaunchConfiguration("detected_file")
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -139,6 +140,12 @@ def generate_launch_description():
             "site_file", default_value="",
             description="The site (docs/missions.md), e.g. ~/site.geojson. Empty: "
                         "an all-free survey map.",
+        ),
+        DeclareLaunchArgument(
+            "detected_file",
+            default_value=os.path.expanduser("~/.robot/detected_obstacles.json"),
+            description="Obstacles found by the bumper (lat/lon), kept across "
+                        "restarts until a person confirms or drops them.",
         ),
         DeclareLaunchArgument(
             "use_missions", default_value="true",
@@ -245,6 +252,7 @@ def generate_launch_description():
             output="screen",
             condition=IfCondition(use_site_map),
             parameters=[{"site_file": site_file,
+                         "detected_file": detected_file,
                          "dock_database": dock_database,
                          "use_sim_time": use_sim_time}],
         ),

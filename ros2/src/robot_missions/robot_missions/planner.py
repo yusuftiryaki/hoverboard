@@ -280,6 +280,31 @@ def goto(target: XY, yaw: Optional[float] = None, start: Optional[XY] = None) ->
     return Plan("goto", (Waypoint(target[0], target[1], yaw, work=True),))
 
 
+# --- clipping a row round obstacles found mid-mission --------------------------------
+
+def free_intervals(a: XY, b: XY, circles: Sequence[Tuple[float, float, float]],
+                   min_length: float = 0.3) -> List[Tuple[float, float]]:
+    """The parts of segment a->b outside every circle (x, y, r), as (t0, t1)
+    fractions along it, in order, each at least min_length long.
+
+    For obstacles the robot found AFTER the plan was made (the bumper): the
+    row is cut around them rather than driven into them again. Fractions, not
+    points, so the caller can apply them to the same row in another frame.
+    """
+    length = _dist(a, b)
+    if length < 1e-9:
+        return []
+    line = LineString([a, b])
+    blocked = unary_union([Point(x, y).buffer(r) for x, y, r in circles]) if circles else None
+    free = line.difference(blocked) if blocked is not None else line
+    out = []
+    for piece in _lines_of(free):
+        ts = sorted(line.project(Point(c)) / length for c in (piece.coords[0], piece.coords[-1]))
+        if (ts[1] - ts[0]) * length >= min_length:
+            out.append((ts[0], ts[1]))
+    return sorted(out)
+
+
 # --- helpers ------------------------------------------------------------------------
 
 def _lines_of(geometry: BaseGeometry) -> List[LineString]:
