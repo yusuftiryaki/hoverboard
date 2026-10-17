@@ -135,6 +135,7 @@ class MissionRunner(Node):
         # was used but never made it to lat/lon, and the saved index is moot.
         self._planned_with_start = False
         self._handles: Dict[int, Any] = {}
+        self._leg = None                # (token, deadline) — _check_leg_deadline
         # index -> the waypoint's target in `odom` ("chain" anchoring); emptied
         # whenever the mission stops running or is re-planned (re-anchor).
         self._targets: Dict[int, Any] = {}
@@ -202,6 +203,41 @@ class MissionRunner(Node):
 
     def _tick(self) -> None:
         self._run(self._policy.tick(self._now()))
+        self._check_leg_deadline()
+
+    def _start_leg_clock(self, token: int, length_m: float) -> None:
+        """Every waypoint gets a time budget: 60 s plus 10 s per metre between
+        the robot and it (a 0.3 m/s row with turns, retries and a detour fits
+        well inside). See _check_leg_deadline for why."""
+        self._leg = (token, self._now() + 60.0 + 10.0 * max(0.0, length_m))
+
+    def _check_leg_deadline(self) -> None:
+        """⚠️ A JAMMED robot never finishes its goal, and nothing else notices.
+        Seen in the simulator demo: an unsurveyed rock met side-on (the FRONT
+        bumper never pressed) held the robot for 3.5 hours — the wheels kept
+        turning, odometry said it was moving, the GPS pulled it back, Nav2's
+        progress checker was satisfied by the tug-of-war, and the mission just
+        hung until the battery ran out. Real jam detection (current, GPS) is
+        still open (handoff, A3c trap 3); this is the net under it: a leg that
+        overruns its budget is cancelled and counts as failed — retried, then
+        skipped, and three in a row pause the mission for a person."""
+        leg = getattr(self, "_leg", None)
+        if leg is None or self._policy.state != State.RUNNING:
+            return
+        token, deadline = leg
+        if token != self._policy.in_flight:
+            self._leg = None
+            return
+        if self._now() < deadline:
+            return
+        self._leg = None
+        self.get_logger().warn(f"waypoint {self._policy.progress.index} overran its time "
+                               "budget — cancelling it (jammed?)")
+        handle = self._handles.pop(token, None)
+        if handle is not None:
+            handle.cancel_goal_async()
+        self._reverse_pub.publish(Twist())
+        self._run(self._policy.goal_result(token, Result.ABORTED, self._now()))
 
     # --- actions ------------------------------------------------------------
 
@@ -335,6 +371,10 @@ class MissionRunner(Node):
                 self._send(action, waited + 0.5)
             timer = self.create_timer(0.5, again)
             return
+        here_map = self._robot_xy()
+        self._start_leg_clock(action.token, (math.hypot(waypoint.x - here_map[0],
+                                                        waypoint.y - here_map[1])
+                                             if here_map else 20.0) * 1.5)
         if not plan.precise:
             goal = NavigateToPose.Goal()
             goal.pose = self._pose("map", waypoint.x, waypoint.y, waypoint.yaw)
@@ -347,6 +387,12 @@ class MissionRunner(Node):
             self._run(self._policy.goal_result(action.token, Result.ABORTED, self._now()))
             return
         token = action.token
+        here = self._robot_xy()
+        self.get_logger().info(
+            f"waypoint {index}/{len(plan.waypoints)} {'row' if waypoint.work else 'transit'} "
+            f"to map ({waypoint.x:.2f}, {waypoint.y:.2f}) = odom ({target[0]:.2f}, "
+            f"{target[1]:.2f}); robot at map "
+            + (f"({here[0]:.2f}, {here[1]:.2f})" if here else "?"))
         if waypoint.work and index > 0:
             before = plan.waypoints[index - 1]
             start = self._targets.get(index - 1) or self._target(index - 1, fresh=True)

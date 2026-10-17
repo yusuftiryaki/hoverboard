@@ -31,6 +31,9 @@ cd firmware/esp32_bridge && pio run
 ./scripts/ci.sh stack nav2 gazebo dock sweep mission # build + tam suite (~40 dk); skip = hata
 ./scripts/ci.sh all               # yukarıdakiler + firmware
 
+# Simülatörde tüm robot + web arayüzü (tarayıcıda http://localhost:8080/)
+./scripts/sim_demo.sh [--quiet-gps] [--rock 9,0]
+
 # Pi'a deploy (repo remote'a bağlı olmalı)
 PI_HOST=enes@robot.local ./scripts/deploy.sh
 ```

@@ -357,6 +357,30 @@ Imagery; "Harita" katmanı OpenStreetMap).
   bölge `/obstacle_map`'te). Tarayıcıda (headless Chromium) elle de denendi:
   çizim → kaydet → robotun kendi okuyucusu kabul etti, JS hatası yok.
 
+## Simülatörde elle denemek (`scripts/sim_demo.sh`)
+```bash
+./scripts/sim_demo.sh                 # sonra tarayıcıda http://localhost:8080/
+./scripts/sim_demo.sh --quiet-gps     # NEO-6M gezinmesi olmadan
+./scripts/sim_demo.sh --rock 9,0      # başlangıcın 9 m doğusunda survey edilmemiş taş
+```
+Simülatör + Pi'daki `robot.launch.py`'nin aynısı (Nav2, supervisor, site_map_server,
+mission_runner, web_ui). Robot Yıldız Parkı'nda (`--lat/--lon` ile değişir)
+doğuya bakarak başlar; sayfada yanına alan çiz → kaydet → Görev → Başlat.
+Saha `~/.robot/sim_site.geojson`'da kalır. Demo bataryası 200 Ah (stok 4.4 Ah
+~3.5 saatte LOW → CRITICAL → SAFE_STOP oluyordu; istasyon simüle edilmiyor).
+
+Bu demoyla elle denerken bulunanlar (ikisi de düzeltildi):
+- ⚠️ **Henüz kaydedilmemiş `site_file` açılışta iki düğümü düşürüyordu**
+  (site_map_server, battery_supervisor: FileNotFoundError) → survey haritası
+  yok, Nav2 her hedefi reddeder. Artık olmayan dosya = boş saha.
+- ⚠️ **Yandan sıkışan robot görevi sonsuza kadar askıda bıraktı** (3.5 saat).
+  Ön tampon yandan temasta basmıyor, tekerlekler dönüyor → odometri
+  "ilerliyorum", GPS geri çekiyor, Nav2'nin ilerleme denetçisi bu çekişmeyi
+  ilerleme sanıyor. Gerçek sıkışma tespiti hâlâ açık (A3c tuzak 3); altına ağ:
+  her waypoint'e **süre bütçesi** (60 sn + 10 sn/m), aşan bacak iptal →
+  başarısız sayılır (tekrar, atla, üst üste 3'te PAUSED). Aynı senaryo
+  ağdan sonra: DONE, atlama yok, iki tespit, 380 sn.
+
 ## Robotun kendi tespit ettiği engeller (2026-10-16, kullanıcı onayı)
 Bugünkü donanımda menzil sensörü yok (handoff karar 8): survey edilmemiş bir
 taşı robot ancak **tamponla değince** fark ediyor, Nav2 de sıkışmayı göremiyor

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from dataclasses import dataclass
 from typing import Any, Dict, List, Sequence, Tuple
 
@@ -113,8 +114,16 @@ class Site:
                         self.polygon_obstacles, self.stations, self.routes))
 
 
-def load_site(path: str) -> Site:
-    """Read and validate a site file. Raises SiteError (or OSError)."""
+def load_site(path: str, missing_ok: bool = False) -> Site:
+    """Read and validate a site file. Raises SiteError (or OSError).
+
+    missing_ok: a file that does not exist YET is an empty site — the web page
+    creates it on its first save. ⚠️ Without this, a robot configured with a
+    site_file nobody had saved yet lost site_map_server and battery_supervisor
+    at boot (FileNotFoundError): no survey map, so Nav2 aborted every goal.
+    Found by running the simulator demo by hand."""
+    if missing_ok and not os.path.exists(path):
+        return Site()
     with open(path, encoding="utf-8") as handle:
         try:
             document = json.load(handle)
