@@ -111,7 +111,7 @@ def generate_launch_description():
             description="Fuse IMU + mag into /imu/data. REQUIRED with use_gps.",
         ),
         DeclareLaunchArgument("use_camera", default_value="false"),
-        DeclareLaunchArgument("marker_size", default_value="0.10",
+        DeclareLaunchArgument("marker_size", default_value="0.20",
                               description="The station marker's black square, metres."),
         DeclareLaunchArgument(
             "camera_driver", default_value="true",

@@ -976,8 +976,7 @@ Robot orijinde, istasyon 6 konumda; `dock_model.tag_in_camera`'ya karşı:
   aynası iki pozu var; istasyon bir yöne dönükken dedektör ters olanı seçiyor —
   her karede aynı, filtreyle ortalanamaz. Yanaşma denetleyicisi buna göre 30°
   yamuk girer. **0.20 m etiket bunu gideriyor** ve uzak menzil hatasını da
-  %7.6'dan %2.1'e indiriyor. ⚠️ SP6 kararı: etiket boyu (`marker_size`, şu an
-  0.10) — testte xfail(strict) olarak duruyor, düzelince patlar.
+  %7.6'dan %2.1'e indiriyor. → Kullanıcı onayıyla 0.20 m'ye geçildi, aşağıda.
 - Menzil hatası bir ölçek: kare küçüldükçe render filtrelemesi siyah kareyi
   küçük gösteriyor, dedektör uzakta sanıyor. Gerçek kamerada bulanıklık benzer
   yönde etki eder; büyüklüğü sahada ölçülmeli.
@@ -988,6 +987,51 @@ Robot orijinde, istasyon 6 konumda; `dock_model.tag_in_camera`'ya karşı:
   Nav2 `controller_server` dakikalarca aktifleşmedi. Demo bu yüzden kinematik
   dünyada kalıyor (sahte kamerası `sim_camera.py`). Dahili GPU'yu (UHD 620,
   `/dev/dri`) container'a açmak render yükünü alabilir — denenmedi.
+
+### ✅ İstasyon etiketi: 0.20 m, gövdenin arka kenarında, kamera 5° aşağı (2026-10-17)
+Kullanıcı: "20 cm'e çek, işi kolaylaştıracaksa daha da büyüt". Büyütmeden önce
+ortaya çıkan: **eski tasarım yanaşmanın sonunu göremiyordu.** Kamera 20°
+(0.35 rad) aşağı bakıyor, yanaşınca etikete ~25 cm kalıyor; o mesafede
+kadrajın üst kenarı yerden ~25 cm'i görüyor, 0.10 m etiket 0.20 m yükseklikte
+üstten kesiliyordu. `dock_model.tag_in_camera` sadece etiketin MERKEZİNE
+baktığı için bunu hiç yakalamamıştı ("sees the tag all the way in" testi
+yeşildi). Nav2 docking taze tespit olmadan "Failed dock detection" atar.
+
+Yapılan (hepsi Gazebo'da gerçek dedektörle ölçüldü, robot staging'de =
+kameradan 1.9 m, ve yanaşmış):
+| tasarım | staging'de yön hatası | yanaşınca |
+|---|---|---|
+| 0.10 m, 0.55 ileride, 0.20 yukarı, kamera 20° (eski) | ⚠️ dönük istasyonda 30° ters | 5 cm yanda+0.08 rad: **hiç tespit yok** |
+| 0.15 m, gövdenin üstünde, kamera 5° | ⚠️ karşıdan −10°, yandan +20° | kusursuz |
+| 0.20 m, gövdenin arkasında (0.85–1.05 ileride) | — | **gövde etiketin altını kapatıyor** (uzaktan) |
+| **0.20 m, 0.70 ileride (gövdenin arka kenarı), 0.275 yukarı, kamera 5°** | **≤ 2.2°**, menzil +%2.1, yanal ≤ 11 mm | 0.70 m'de 0.3 mm/0.2°; son ~8 cm kör |
+
+- **Daha büyük etiket işi kolaylaştırmıyor:** uzakta kazandırdığını yakında
+  kaybettiriyor (0.25 m hiçbir yükseklikte kadraja sığmadı). 20°'lik kamerayla
+  15–20 cm'lik etiketi hiçbir yerleşim çözmüyor — düğüm kameranın açısıydı.
+- **Kamera eğimi 0.35 → 0.09 rad** (`robot.urdf.xacro` `camera_pitch`,
+  `hoverbot.sdf` aynı sayı). Bedeli: zemin kameranın 24 cm yerine 41 cm
+  önünden görünmeye başlıyor. Kamera henüz monte edilmedi — montaj bu açıyla.
+- **Kör son:** etiket yanaşık pozdan ~8 cm önce kadrajdan çıkıyor (kontaklar
+  6 cm'de kapanıyor). `external_detection_timeout` 1.0 → **3.0 s**: son tespit
+  odom'a kendi damgasıyla çevrildiği için bayat ama doğru; robot sonu tekerlek
+  odometrisiyle sürüyor. `test_docking_config` bu kör mesafeyi URDF'teki
+  eğimden hesaplayıp zaman aşımına bağlıyor.
+- `tag_in_camera` artık **etiketin tamamını + bir hücre beyaz** istiyor.
+- ⚠️ **Kalan belirsizlik:** staging'in ötesinde 0.20 m etiket de kayıyor —
+  kameradan 2.4 m'de karşıdan bakan istasyonu −9.4°, 2.9 m'de −11.5° dönük
+  okuyor (görüntünün ortasındaki kare, cepheden: belirsizliğin en kötü hali).
+  Staging'de (1.9 m) her durum 2° içinde; yaklaştıkça düzeliyor. Staging'den
+  çok uzakta duran robot yanaşmaya yamuk başlar. `test_gazebo_marker` "far"
+  durumu xfail(strict). İleride çare: iki etiket (uzak için büyük) veya
+  belirsizliği çözen dedektör (apriltag_ros'un iki çözümü karşılaştırması).
+- Gazebo istasyonu: levha gövdenin dışındaysa gövde 0.12 m kalıyor; doku
+  karesi artık `TAG_BOARD_PER_MARKER`'den (1.5) — 1/1.6'lık eski doku 1.5'lik
+  levhada her menzili %7 uzun okutuyordu.
+- **SP6 bu sayılarla inşa eder:** 0.20 m siyah kare (+ her yanda 2 hücre beyaz,
+  levha 0.30 m), merkezi yerden 0.275 m, yanaşık base_link'in 0.70 m önünde.
+  Değişirse: `dock_model.DockStation`, `nav2.yaml`
+  `external_detection_translation_x`, `marker_size` (launch) birlikte.
 
 ### ✅ twist_mux (2026-10-16) — teleop, Nav2'den önce gelir
 ```

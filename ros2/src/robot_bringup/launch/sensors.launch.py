@@ -50,7 +50,7 @@ def generate_launch_description():
         DeclareLaunchArgument("camera_driver", default_value="true"),
         # Edge of the printed black square, metres — what the station
         # carries. CALIBRATE: every range the detector reports scales with it.
-        DeclareLaunchArgument("marker_size", default_value="0.10"),
+        DeclareLaunchArgument("marker_size", default_value="0.20"),
         DeclareLaunchArgument(
             "fake_imu", default_value="false",
             description="Simulate the MPU6050 — dev machine only, there is no I2C there.",
