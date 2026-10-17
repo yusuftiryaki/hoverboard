@@ -385,9 +385,12 @@ class MissionRunner(Node):
             return False
         q = tf.transform.rotation
         yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
-        # Back off to where the rows round it are cut: the same clearance.
-        clearance = (self._robot.robot_radius + self._robot.obstacle_margin
-                     + self.get_parameter("detection_margin").value)
+        # Only when TOUCHING it (inside the costmap's inscribed zone, where
+        # nothing can be planned): robot radius + a hand's breadth. ⚠️ Not
+        # the rows' wider clearance — with that, a robot merely mowing the
+        # lawn's edge a metre from a detection reversed before every leg and
+        # the perimeter pass failed three times in a row (CI, PR #16).
+        clearance = self._robot.robot_radius + 0.15
         need = 0.0
         for x, y, r in self._detected:
             # Only what is AHEAD: backing away from something behind would

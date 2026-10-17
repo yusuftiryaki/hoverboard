@@ -314,13 +314,17 @@ tampon basıldı ─► ESP32 ileriyi keser ─► site_map_server: temas noktas
   0.1 m/s, yalnız az önce geçtiği zeminde; firmware'in tampon vetosu geri
   hareketi zaten hiç kesmiyor.
 - Durdurulan satır robotun bulunduğu yerden devam eder (satırın başından değil).
+- Geri çekilme yalnızca robot tespite **değerken** (robot yarıçapı + 15 cm).
+  ⚠️ Önce satırların geniş boşluğu kullanılıyordu: çimin kenarını biçen, tespite
+  bir metre uzaktaki robot her bacaktan önce geri gitti, kenar turu üç kez
+  üst üste düşüp görev durdu (CI, PR #16).
 - Tespitlerin etrafında `robot_radius + obstacle_margin + detection_margin
   (0.3)` boşluk. Daha dar iken satır uçları costmap'in inscribed bölgesine düştü,
   RPP satırları reddetti (3 satır atlandı).
 - **Ölçülen** (`test_mission_rock.py`, sessiz GPS, 4 × 3 m çimde survey edilmemiş
-  0.2 m kaya): **0 çarpışma** (sim tamponu temastan 3 cm önce basıyor), iki
-  tespit kayanın iki yanında (merkezden 0.17–0.55 m — temas noktası, robotun o
-  anki ~0.35 m'ye varan konum hatasıyla), hiç atlama yok, **%75.1** kesim (kayasız
+  0.2 m kaya, 3 koşu): **0 çarpışma** (sim tamponu temastan 3 cm önce basıyor),
+  1–2 tespit (merkezden 0.17–0.55 m — temas noktası, robotun o anki ~0.35 m'ye
+  varan konum hatasıyla), hiç atlama yok, **%75–80** kesim (kayasız
   %95–96: küçük bir kaya ~1 m yarıçapında çim götürüyor; gerçek boyutu bir insan
   etiketleyince — 4. aşama — geri gelir).
 - Sim'de tampon artık engellerden basılabiliyor (`bumper_from_obstacles`,

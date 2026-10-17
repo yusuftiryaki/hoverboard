@@ -104,7 +104,7 @@ def test_the_bumper_finds_an_unsurveyed_rock_and_the_mission_mows_round_it(
         # Learned once: after the first press, the rows that would have hit it
         # again are cut round it. Two is allowed (a press while backing off).
         assert watcher.collisions <= 2, f"hit the rock {watcher.collisions} times"
-        # The rest of the lawn still gets mown. MEASURED 75.1% (the rock-free
+        # The rest of the lawn still gets mown. MEASURED 75.1 / 77.7 / 80.0% (the rock-free
         # lawn: 95-96%). The price is the clearance kept round each
         # detection — 0.25 m circle + robot 0.4 + 0.1 + detection_margin 0.3,
         # about a metre from its centre, so a little rock blanks a lot of
