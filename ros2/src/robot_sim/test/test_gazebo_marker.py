@@ -9,14 +9,21 @@ sees an image anywhere in this project. Skips without ROS or Gazebo.
     convention with a hand-drawn tag; this holds it to a rendered one)
 
 The station is spawned by sim_node from dock_pose (gazebo_obstacles.
-station_model_sdf: a low body and an AprilTag 36h11 #0 board). The robot stays
-at the origin facing east; the station is moved instead, one Gazebo world per
-case: straight ahead, off to each side, turned each way, and further back
-(decision 11: a mirrored or rotated texture is exact in exactly one of them).
+station_model_sdf: a low body and an AprilTag 36h11 #0 board on its back
+edge — dock_model.DockStation's defaults, the design SP6 builds). The robot
+stays at the origin facing east; the station is moved instead, one Gazebo
+world per case: from staging straight ahead, off to each side, turned each
+way; further back; and 0.3 m short of docked (decision 11: a mirrored or
+rotated texture is exact in exactly one of them).
+
+How the design got here (docs/handoff.md "İstasyon etiketi", this test's
+earlier runs): a 0.10 m tag read a station turned 20 deg as turned 10 deg the
+other way from staging, every frame (planar pose ambiguity), a 0.15 m one
+still did; a 0.20 m one reads all of them within 2 deg.
 
 What it does NOT prove: the real camera's lens, exposure, sunlight, motion
 blur, a printed tag's flatness. Perfect intrinsics here (camera_info from the
-renderer), and a 10 cm tag rendered at 640 x 480.
+renderer), and a 20 cm tag rendered at 640 x 480.
 
 ~40 s per world. CI stage `gazebo`.
 """
@@ -37,14 +44,19 @@ from robot_sim.dock_model import (                      # noqa: E402
     CameraMount, DockStation, matrix_from_quaternion)
 from robot_sim.world import Pose                        # noqa: E402
 
-# (dock x, y, yaw): where base_link sits docked; the marker is 0.55 m beyond.
+# (dock x, y, yaw): where base_link sits docked; the marker is 0.70 m beyond.
 CASES = {
     "ahead":   (1.5, 0.0, 0.0),
     "left":    (1.5, 0.30, 0.0),
     "right":   (1.5, -0.30, 0.0),
     "turned+": (1.5, 0.0, 0.35),
     "turned-": (1.5, 0.0, -0.35),
-    "far":     (2.5, 0.0, 0.0),
+    # The far edge of the envelope: staging (1.5 m) plus nav2.yaml's
+    # dock_prestaging_tolerance (0.5 m). Measured beyond it, 2.5 m (2.9 m
+    # camera to tag): the 0.20 m tag flips too, -11.5 deg for a square-on
+    # station — the ambiguity grows with range, whatever the size.
+    "far":     (2.0, 0.0, 0.0),
+    "near":    (0.3, 0.0, 0.0),
 }
 
 
@@ -74,32 +86,23 @@ def detections(node, seconds):
     return got
 
 
-# ⚠️ THE PLANAR POSE AMBIGUITY, measured: a small square marker has two poses
-# that project almost alike, mirror images in tilt. With the station turned
-# 0.35 rad one way the detector picks the right one; turned the other way it
-# reports the station turned ~10 deg the WRONG way — 30 deg off, every frame,
-# no jitter that a filter could average out. A docking controller steering on
-# that drives in 30 deg skewed. xfail(strict): when it starts passing, this
-# test fails and says so (the fix landed, update the docs).
-AMBIGUOUS = pytest.mark.xfail(strict=True, reason=(
-    "planar PnP ambiguity: 0.10 m marker, station turned +0.35 rad reads ~30 deg off"))
+# ⚠️ What is LEFT of the planar pose ambiguity with the 0.20 m tag: beyond
+# staging it reads a square-on station turned ~10 deg (-9.4 at 2.4 m, -11.5
+# at 2.9 m camera to tag), every frame. Within staging (1.9 m) every case
+# reads within 2 deg. The docking server starts from staging and the reading
+# settles as it closes in — but a robot staged far off its staging pose starts
+# the approach steering on a wrong heading. xfail(strict): if this passes, the
+# envelope grew, update the docs.
+FAR_AMBIGUOUS = pytest.mark.xfail(strict=True, reason=(
+    "planar PnP ambiguity: 0.20 m marker, 2.4 m away, square-on station reads ~10 deg turned"))
 
 
-def cases():
-    out = []
-    for case in CASES:
-        marks = [AMBIGUOUS] if case == "turned+" else []
-        out.append(pytest.param(case, 0.10, marks=marks, id=f"{case}-0.10"))
-    # Does a bigger marker help? The tag size is an SP6 decision, so measure it.
-    for case in ("turned+", "far"):
-        out.append(pytest.param(case, 0.20, id=f"{case}-0.20"))
-    return out
-
-
-@pytest.mark.parametrize("case, marker_size", cases())
+@pytest.mark.parametrize("case", [pytest.param(c, marks=[FAR_AMBIGUOUS] if c == "far" else [])
+                                  for c in CASES])
 def test_the_real_detector_reads_the_rendered_marker_where_the_geometry_says(
-        gazebo_camera, case, marker_size):
+        gazebo_camera, case):
     dock = CASES[case]
+    marker_size = DockStation.tag_size
     gazebo_camera("-p", "dock_pose:=[{}, {}, {}]".format(*map(float, dock)),
                   marker_size=marker_size)
     node = rclpy.create_node(f"marker_probe_{case.replace('+', 'p').replace('-', 'm')}")
@@ -130,19 +133,22 @@ def test_the_real_detector_reads_the_rendered_marker_where_the_geometry_says(
               f"(range {np.linalg.norm(e_pos):.2f} m, detected {d_pos.round(3)}, expected "
               f"{e_pos.round(3)}), rotation error {turn:.1f} deg, normal heading "
               f"{heading(b):.1f} vs {heading(a):.1f} deg (spread over the run {spread:.1f})")
-        # Thresholds from the measured runs (docs/missions.md, "AprilTag"),
-        # split by what each error means for docking:
-        #   sideways (camera x) — where the dock is across the approach: mm;
-        #   range — the black square reads SMALL as it shrinks in the frame
-        #     (render filtering at ~20 px), so the dock reads further away:
-        #     +2.8% at 1.75 m, +7.6% at 2.75 m for the 0.10 m tag, +2.1% for
-        #     a 0.20 m one at 2.75 m. Same ratio in every axis: a scale.
-        #   heading of the marker's normal — what the approach steers on.
+        # Thresholds from the measured runs (docs/handoff.md "İstasyon
+        # etiketi"), split by what each error means for docking:
+        #   sideways (camera x) — where the dock is across the approach:
+        #     <= 11 mm measured;
+        #   range — +2.1% at 1.9 m, +0.3% at 0.7 m: the black square reads a
+        #     touch small in the rendered frame, so the dock reads further
+        #     away. Same ratio in every axis: a scale;
+        #   heading of the marker's normal — what the approach steers on:
+        #     <= 2.2 deg; the total rotation also carries the tag's tilt about
+        #     the horizontal (5.2 deg square-on from staging), which docking
+        #     ignores.
         rng = float(np.linalg.norm(e_pos))
         assert abs(d_pos[0] - e_pos[0]) < 0.03, f"{case}: sideways {d_pos[0]:.3f} vs {e_pos[0]:.3f}"
-        assert abs(np.linalg.norm(d_pos) / rng - 1.0) < 0.09, f"{case}: range {np.linalg.norm(d_pos):.3f} vs {rng:.3f}"
-        assert abs(heading(b) - heading(a)) < 6.0, (
+        assert abs(np.linalg.norm(d_pos) / rng - 1.0) < 0.05, f"{case}: range {np.linalg.norm(d_pos):.3f} vs {rng:.3f}"
+        assert abs(heading(b) - heading(a)) < 4.0, (
             f"{case}: the station reads turned {heading(b):.1f} deg, truly {heading(a):.1f}")
-        assert turn < 12.0, f"{case}: rotation off by {turn:.1f} deg"
+        assert turn < 8.0, f"{case}: rotation off by {turn:.1f} deg"
     finally:
         node.destroy_node()

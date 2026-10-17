@@ -5,9 +5,9 @@ ROS-free, pure Python (the `unit` CI stage has no numpy).
 
     station seen from above (dock yaw = 0, robot drives east into it):
 
-        staging ───1.5 m───►  base_link ─0.57─► body │ tag (0.55 ahead,
-        pose                  when docked     stop    │  0.20 m up, facing
-                                                       │  back at the robot)
+        staging ───1.5 m───►  base_link ─0.57─► body │ tag (0.70 ahead, on the
+        pose                  when docked     stop    │  body's back edge, 0.275 m
+                                                       │  up, facing the robot)
 
 `DockStation.x/y/yaw` is the pose base_link has when the robot is DOCKED: the
 same meaning opennav_docking gives a dock pose, which is why nav2.yaml's
@@ -31,6 +31,11 @@ from robot_sim.world import CircularObstacle, Pose
 
 Vec = Tuple[float, float, float]
 Mat = Tuple[Vec, Vec, Vec]          # row-major 3x3
+
+# AprilTag 36h11: the black square is 8 cells across (6 data + the black
+# border); the detector needs at least one more cell of white round it.
+TAG_CELLS = 8
+TAG_QUIET_CELLS = 1
 
 # Pi Camera V2 (Sony IMX219): 62.2 x 48.8 deg field of view.
 PI_CAMERA_V2_HFOV = math.radians(62.2)
@@ -94,7 +99,7 @@ class CameraMount:
     rotation: Mat
     hfov: float = PI_CAMERA_V2_HFOV
     vfov: float = PI_CAMERA_V2_VFOV
-    min_range: float = 0.15       # a 10 cm tag fills the frame closer than this
+    min_range: float = 0.15       # (the whole-tag check below binds first)
     max_range: float = 4.0        # and is too few pixels beyond this
     # Beyond this angle between the tag's normal and the line of sight the
     # square is too foreshortened to decode.
@@ -107,8 +112,20 @@ class DockStation:
     y: float
     yaw: float
     # The marker, relative to the DOCKED base_link: this far ahead, this high.
-    tag_distance: float = 0.55
-    tag_height: float = 0.20
+    # ⚠️ Chosen, not guessed (docs/handoff.md "İstasyon etiketi", measured in
+    # Gazebo with the real detector): a 0.20 m tag, because a 0.10 m one read
+    # a station turned 20 deg as turned 10 deg the OTHER way from staging
+    # (planar ambiguity) and a 0.15 m one still did; standing on the body's
+    # back edge, because a body in front of the board hid its lower half; and
+    # with the camera tilted only 0.09 rad down (robot.urdf.xacro), because at
+    # 0.35 rad no size and height kept the tag in frame near the contacts.
+    # SP6 builds it to these numbers — or changes them here and in nav2.yaml.
+    tag_distance: float = 0.70
+    tag_height: float = 0.275
+    # The black square's edge (the detector's marker_size). The camera must
+    # see all of it plus one cell of white round it (TAG_QUIET_CELLS) — the
+    # detector finds the square by its edges, a cropped one is not found.
+    tag_size: float = 0.20
     # Spring contacts: they close over the last `contact_travel` of approach and
     # tolerate `contact_overrun` past the nominal pose, `contact_lateral`
     # sideways (pad width) and `contact_yaw` of skew. GUESSES until SP6 builds
@@ -183,4 +200,18 @@ class DockStation:
         cos_view = -sum(n * p for n, p in zip(normal, position)) / distance
         if cos_view < math.cos(mount.max_view_angle):
             return None
+        # ⚠️ The WHOLE square in the frame, not just its centre. Checking the
+        # centre alone passed a 0.10 m tag 0.20 m up as visible "all the way
+        # in" while the camera, pitched 20 deg down, cut its top edge off for
+        # the last 0.3 m of the approach — exactly where the docking
+        # controller needs a fresh detection every step.
+        half = self.tag_size * (0.5 + TAG_QUIET_CELLS / TAG_CELLS)
+        tan_h, tan_v = math.tan(mount.hfov / 2), math.tan(mount.vfov / 2)
+        right = tuple(rotation[i][0] for i in range(3))
+        up = tuple(rotation[i][1] for i in range(3))
+        for u in (-half, half):
+            for v in (-half, half):
+                cx, cy, cz = (position[i] + u * right[i] + v * up[i] for i in range(3))
+                if cz <= 0.0 or abs(cx) > tan_h * cz or abs(cy) > tan_v * cz:
+                    return None
         return position, quaternion_from_matrix(rotation)

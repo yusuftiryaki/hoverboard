@@ -392,14 +392,22 @@ docking_server:
       # The marker (image_proc track_marker_node -> detected_dock_pose) steers
       # the approach; the database pose only says where to look.
       use_external_detection_pose: true
-      external_detection_timeout: 1.0
-      # The marker is 0.55 m AHEAD of the docked base_link (the station:
-      # robot_sim/dock_model.py; SP6 builds the real one — CALIBRATE).
-      external_detection_translation_x: -0.55
+      # ⚠️ 3.0, not 1.0: the end of the approach is BLIND. The marker leaves
+      # the frame ~8 cm before the docked pose (robot_sim/dock_model.py: the
+      # whole 0.20 m tag, camera 0.09 rad down; the contacts close at 6 cm,
+      # and "charging" needs the current to show on /battery after that), and
+      # this server throws "Failed dock detection" the moment the newest
+      # detection is older than this. A stale detection is still right: it is
+      # transformed into fixed_frame (odom) at its OWN stamp, so the robot
+      # finishes on wheel odometry — 8 cm at v_linear_min 0.05 m/s is 1.6 s.
+      external_detection_timeout: 3.0
+      # The marker is 0.70 m AHEAD of the docked base_link, on the body's back
+      # edge (robot_sim/dock_model.py; SP6 builds the real one — CALIBRATE).
+      external_detection_translation_x: -0.70
       external_detection_translation_y: 0.0
       # These undo the aruco/AprilTag marker convention (z out of the marker,
       # y up). Nav2's defaults, written to 4 digits instead of 1.57: 0.0008 rad
-      # of yaw error across 0.55 m is half a millimetre, but it is free to fix.
+      # of yaw error across 0.70 m is half a millimetre, but it is free to fix.
       external_detection_rotation_roll: -1.5708
       external_detection_rotation_pitch: 1.5708
       external_detection_rotation_yaw: 0.0
@@ -413,7 +421,7 @@ docking_server:
       # The approach also stops this close to the detected dock pose — the
       # spring contacts close over the last ~6 cm (CALIBRATE with SP6).
       docking_threshold: 0.05
-      # Staging 1.5 m out: near enough for a 10 cm marker to decode, far enough
+      # Staging 1.5 m out: near enough for the 20 cm marker to decode well, far enough
       # that a survey error of the dock database is still in view.
       staging_x_offset: -1.5
       staging_yaw_offset: 0.0

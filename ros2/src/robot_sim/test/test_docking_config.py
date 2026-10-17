@@ -9,11 +9,13 @@ milliseconds.
 
 import math
 import os
+import re
 import sys
 
 import yaml
 
-from robot_sim.dock_model import DockStation
+from robot_sim.dock_model import CameraMount, DockStation
+from robot_sim.world import Pose
 
 CONFIG = os.path.join(os.path.dirname(__file__), "..", "..", "robot_bringup", "config")
 # robot_missions is ROS-free too, but a sibling package: import it from the
@@ -64,6 +66,30 @@ def test_the_marker_offset_is_the_simulated_stations():
     they agree."""
     assert PLUGIN["external_detection_translation_x"] == -DockStation(0, 0, 0).tag_distance
     assert PLUGIN["external_detection_translation_y"] == 0.0
+
+
+def test_the_blind_end_of_the_approach_fits_in_the_detection_timeout():
+    """The marker leaves the frame a few cm before the docked pose
+    (dock_model: the whole tag must be seen). The docking server fails the
+    dock once its newest detection is older than external_detection_timeout,
+    so that stretch, driven at the controller's slowest, must fit inside it
+    — with room for "charging" to show on /battery after the contacts close.
+    The camera's tilt is read from robot.urdf.xacro: tilting it changes this."""
+    urdf = open(os.path.join(CONFIG, "..", "urdf", "robot.urdf.xacro"), encoding="utf-8").read()
+    pitch = float(re.search(r'name="camera_pitch" value="([0-9.]+)"', urdf).group(1))
+    cp, sp = math.cos(pitch), math.sin(pitch)
+    level = ((0.0, 0.0, 1.0), (-1.0, 0.0, 0.0), (0.0, -1.0, 0.0))
+    pitched = ((cp, 0.0, sp), (0.0, 1.0, 0.0), (-sp, 0.0, cp))
+    optical = tuple(tuple(sum(pitched[i][k] * level[k][j] for k in range(3))
+                          for j in range(3)) for i in range(3))
+    mount = CameraMount(translation=(0.30, 0.0, 0.2325), rotation=optical)
+    station = DockStation(0.0, 0.0, 0.0)
+    seen = [a / 1000 for a in range(-1500, 1) if station.tag_in_camera(Pose(x=a / 1000), mount)]
+    blind = -max(seen)
+    assert blind < station.contact_travel + 0.05, f"{blind:.3f} m blind: the tag is lost too early"
+    slowest = NAV2["docking_server"]["ros__parameters"]["controller"]["v_linear_min"]
+    assert PLUGIN["external_detection_timeout"] >= 1.5 * blind / slowest, (
+        f"{blind:.3f} m blind at {slowest} m/s needs a timeout over {1.5 * blind / slowest:.1f} s")
 
 
 def test_the_marker_convention_rotation_is_a_right_angle_pair():

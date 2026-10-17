@@ -20,7 +20,8 @@ def rpy(r, p, y):
                      [-sp, cp * sr, cp * cr]])
 
 
-# robot.urdf.xacro's camera: pitched 0.35 rad down, the optical frame turned
+# A camera pitched 0.35 rad down (robot.urdf.xacro's old tilt — the renderer
+# is tested on its own mount, any tilt will do), the optical frame turned
 # (-pi/2, 0, -pi/2) from the link (z forward, x right, y down).
 MOUNT_R = rpy(0, 0.35, 0) @ rpy(-math.pi / 2, 0, -math.pi / 2)
 MOUNT_T = (0.3, 0.0, 0.35)

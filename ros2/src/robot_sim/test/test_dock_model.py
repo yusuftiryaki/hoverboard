@@ -45,7 +45,7 @@ def test_a_robot_left_of_the_line_sees_the_tag_to_its_right():
 
 
 def test_a_tag_above_the_camera_is_up_in_the_image():
-    station = DockStation(x=1.0, y=0.0, yaw=0.0, tag_height=0.30)
+    station = DockStation(x=1.0, y=0.0, yaw=0.0, tag_distance=0.55, tag_height=0.30)
     position, _ = station.tag_in_camera(Pose(), LEVEL_CAMERA)
     # optical y points DOWN
     assert position == pytest.approx((0.0, -0.10, 1.25))
@@ -74,20 +74,46 @@ def test_out_of_view_out_of_range_and_from_behind_report_nothing():
     assert station.tag_in_camera(Pose(x=3.0, yaw=math.pi), LEVEL_CAMERA) is None
 
 
-def test_the_real_mount_sees_the_tag_all_the_way_in():
-    """robot.urdf.xacro's actual camera: x 0.30, z 0.2325, pitched 0.35 rad
-    down. The docking controller needs a fresh detection on EVERY step of the
-    approach (opennav external_detection_timeout), so a tag that drops out of
-    the frame in the last few centimetres fails a dock that was going fine."""
-    pitch = 0.35
+def test_the_real_mount_keeps_the_whole_tag_in_frame_until_the_last_centimetres():
+    """robot.urdf.xacro's actual camera: x 0.30, z 0.2325, pitched 0.09 rad
+    down; the station's default 0.20 m tag. The docking controller needs a
+    fresh detection on every step of the approach unless the newest is younger
+    than nav2.yaml's external_detection_timeout — so the blind stretch at the
+    end must be short enough to drive inside that timeout.
+
+    ⚠️ This test used to check the tag's CENTRE only, and passed with the old
+    0.35 rad tilt while the camera cut the top off a 0.10 m tag for the last
+    0.3 m. The whole square plus a cell of white is what the detector needs."""
+    pitch = 0.09
     cp, sp = math.cos(pitch), math.sin(pitch)
     pitched = ((cp, 0.0, sp), (0.0, 1.0, 0.0), (-sp, 0.0, cp))
     optical = tuple(tuple(sum(pitched[i][k] * LEVEL_OPTICAL[k][j] for k in range(3))
                           for j in range(3)) for i in range(3))
     mount = CameraMount(translation=(0.30, 0.0, 0.2325), rotation=optical)
     station = DockStation(x=0.0, y=0.0, yaw=0.0)
-    for along in (-1.5, -1.0, -0.5, -0.2, 0.0, 0.02):
+    for along in [a / 100 for a in range(-150, -8)]:      # staging to 8 cm short
         assert station.tag_in_camera(Pose(x=along), mount) is not None, along
+    # ...also off the line, as the robot is after staging on a survey error.
+    for lateral, yaw in ((0.3, 0.0), (-0.3, 0.0), (0.0, 0.3), (0.3, -0.2)):
+        assert station.tag_in_camera(Pose(x=-1.5, y=lateral, yaw=yaw), mount) is not None
+    # The blind end (test_docking_config holds the timeout to it): at the
+    # docked pose the tag's top is out of frame.
+    assert station.tag_in_camera(Pose(x=0.0), mount) is None
+
+
+def test_the_old_tilt_could_not_see_the_tag_near_the_contacts():
+    """The reason robot.urdf.xacro's camera_pitch changed (0.35 -> 0.09)."""
+    pitch = 0.35
+    cp, sp = math.cos(pitch), math.sin(pitch)
+    pitched = ((cp, 0.0, sp), (0.0, 1.0, 0.0), (-sp, 0.0, cp))
+    optical = tuple(tuple(sum(pitched[i][k] * LEVEL_OPTICAL[k][j] for k in range(3))
+                          for j in range(3)) for i in range(3))
+    mount = CameraMount(translation=(0.30, 0.0, 0.2325), rotation=optical)
+    old = DockStation(x=0.0, y=0.0, yaw=0.0, tag_distance=0.55, tag_height=0.20, tag_size=0.10)
+    # Lost 14 cm out, before the contacts close at 6 (Gazebo: the real
+    # detector, with the white border cropped, held on to 6 cm and lost it at
+    # the docked pose 5 cm off the line).
+    assert old.tag_in_camera(Pose(x=-0.14), mount) is None
 
 
 def test_contact_window():
