@@ -137,6 +137,10 @@ class SimNode(Node):
         # image pipeline — the bumper's snapshot, the web page's live view.
         # 0 = off (the default: the tests that do not look at images should
         # not pay for rendering). NOT for anything vision is judged on.
+        self.declare_parameter("simulate_marker", True)
+        # The rendered marker's black square (gazebo backend). Must equal the
+        # detector's marker_size (robot.launch.py) or every range is scaled.
+        self.declare_parameter("dock_marker_size", 0.10)
         self.declare_parameter("camera_rate_hz", 0.0)
         self.declare_parameter("camera_width", 320)
         self.declare_parameter("camera_height", 240)
@@ -235,6 +239,7 @@ class SimNode(Node):
         self._bumpable = self._obstacles + self._unsurveyed
         dock = self._unset_as_empty("dock_pose")
         self._station = None
+        self._station_body = None
         # Drawn on the published map, never collided with: the survey's idea
         # of an obstacle whose physical twin lives in _unsurveyed.
         self._map_only = ()
@@ -244,8 +249,8 @@ class SimNode(Node):
             self._station = DockStation(*dock)
             robot_radius = p("robot_radius").value
             # The body physically stops a robot that drives in too far.
-            self._unsurveyed = self._unsurveyed + (
-                self._station.stop_obstacle(robot_radius),)
+            self._station_body = self._station.stop_obstacle(robot_radius)
+            self._unsurveyed = self._unsurveyed + (self._station_body,)
             if p("dock_in_survey").value:
                 surveyed = self._unset_as_empty("dock_surveyed_pose") or dock
                 if len(surveyed) != 3:
@@ -276,8 +281,14 @@ class SimNode(Node):
                 wheel_separation=p("wheel_separation").value,
                 board_units_per_rpm=p("board_units_per_rpm").value,
                 # Both kinds are physically there; only the map tells them
-                # apart. Same split as the kinematic world below.
-                obstacles=self._obstacles + self._unsurveyed,
+                # apart. Same split as the kinematic world below. The station
+                # body goes with its marker board instead (station_model_sdf:
+                # a 1 m obstacle cylinder there would hide the marker).
+                obstacles=tuple(o for o in self._obstacles + self._unsurveyed
+                                if o is not self._station_body),
+                station=((self._station, self._station_body,
+                          float(p("dock_marker_size").value))
+                         if self._station is not None else None),
                 world=p("gazebo_world").value,
             )
             self.get_logger().info("Gazebo fizik backend'i seçildi")
@@ -332,6 +343,11 @@ class SimNode(Node):
                                idle_current_a=p("battery_idle_current_a").value)
         self._esp.bat_voltage = round(self._pack.open_circuit_voltage * 100.0)
         self._tag_visible = bool(p("dock_tag_visible").value)
+        # false = the REAL detector reads the marker off the rendered camera
+        # (gazebo backend, gazebo.launch.py camera:=true, track_marker_node);
+        # this node then must not publish its geometric /detected_dock_pose
+        # too — two publishers on one topic do not error, they interleave.
+        self._simulate_marker = bool(p("simulate_marker").value)
         self._tag_noise = p("dock_detection_noise_per_m").value
         self._tag_angle_noise = p("dock_detection_angle_noise").value
         self._camera: CameraMount | None = None
@@ -563,7 +579,8 @@ class SimNode(Node):
         measurement, so docking_server turns it into odom through the EKF's
         transform and the dock lands where the robot's own estimate says —
         which is how the survey error of the dock database gets corrected."""
-        if not self._tag_visible or not getattr(self._world, "ground_truth_seen", True):
+        if (not self._simulate_marker or not self._tag_visible
+                or not getattr(self._world, "ground_truth_seen", True)):
             return
         mount = self._camera_mount()
         if mount is None:

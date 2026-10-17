@@ -405,6 +405,16 @@ Bu demoyla elle denerken bulunanlar (ikisi de düzeltildi):
   her waypoint'e **süre bütçesi** (60 sn + 10 sn/m), aşan bacak iptal →
   başarısız sayılır (tekrar, atla, üst üste 3'te PAUSED). Aynı senaryo
   ağdan sonra: DONE, atlama yok, iki tespit, 380 sn.
+- ⚠️ **Sayfa hiç açılmadı (2026-10-17): ölü yığınların DDS dosyaları.**
+  Öldürülen (SIGKILL) ROS süreçleri `/dev/shm/fastrtps_*` dosyalarını geride
+  bırakıyor; ~1800 tanesi birikince her yeni düğüm `rcl_node_init`'te
+  **sessizce** takılıyor (Fast DDS ölü portları tek tek zaman aşımıyla
+  yokluyor). Nav2 "active" dedi ama web_ui, mission_runner, site_map_server ve
+  batarya düğümleri `Node.__init__`'i geçemedi → :8080 cevap vermedi, logda tek
+  satır yok. Temizlikten sonra aynı yığın sayfayı 15 sn'de açtı.
+  `scripts/dds_shm_clean.sh` artık `sim_demo.sh` ve `ci.sh` başında koşuyor:
+  hiçbir süreç bu dosyaları kullanmıyorsa hepsini siler, kullanan varsa yalnız
+  `fastdds shm clean` (canlı katılımcılarınkine dokunmaz).
 
 ## Robotun kendi tespit ettiği engeller (2026-10-16, kullanıcı onayı)
 Bugünkü donanımda menzil sensörü yok (handoff karar 8): survey edilmemiş bir

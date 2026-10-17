@@ -32,10 +32,42 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess, TimerAction
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction, TimerAction
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+
+
+SENSORS_PLUGIN = """
+    <!-- Added by gazebo.launch.py camera:=true: renders hoverbot.sdf's camera.
+         The ambient term lifts the shadowed side: with the sun alone, the
+         ground under a directional light rendered almost black. -->
+    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <scene>
+      <ambient>0.45 0.45 0.45 1</ambient>
+      <background>0.7 0.82 0.92 1</background>
+    </scene>
+"""
+
+
+def world_with_sensors(world_file: str) -> str:
+    """empty.sdf plus the Sensors system, written next to it in /tmp. One
+    world file, not two that could drift apart (A6): the plugin is the only
+    difference, and it is inserted, not maintained twice."""
+    import tempfile
+
+    with open(world_file, encoding="utf-8") as handle:
+        text = handle.read()
+    marker = '<plugin filename="gz-sim-physics-system"'
+    if marker not in text:
+        raise RuntimeError(f"{world_file}: no Physics plugin line to insert the Sensors system after")
+    text = text.replace(marker, SENSORS_PLUGIN.strip() + "\n    " + marker, 1)
+    out = tempfile.NamedTemporaryFile("w", suffix="_camera.sdf", delete=False, encoding="utf-8")
+    out.write(text)
+    out.close()
+    return out.name
 
 
 def generate_launch_description():
@@ -56,7 +88,16 @@ def generate_launch_description():
         DeclareLaunchArgument("world", default_value="empty"),
         DeclareLaunchArgument("model_name", default_value="hoverbot"),
 
-        ExecuteProcess(cmd=["gz", "sim", "-s", "-r", world_file], output="screen"),
+        DeclareLaunchArgument(
+            "camera", default_value="false",
+            description="Load Gazebo's Sensors system so hoverbot.sdf's camera renders "
+                        "(software rendering here: no GPU). Off for the physics tests.",
+        ),
+        OpaqueFunction(function=lambda context: [ExecuteProcess(
+            cmd=(["gz", "sim", "-s", "-r", "--headless-rendering", world_with_sensors(world_file)]
+                 if LaunchConfiguration("camera").perform(context) == "true"
+                 else ["gz", "sim", "-s", "-r", world_file]),
+            output="screen")]),
         ExecuteProcess(cmd=["gz", "sim", "-g"], output="screen",
                        condition=IfCondition(gui)),
 

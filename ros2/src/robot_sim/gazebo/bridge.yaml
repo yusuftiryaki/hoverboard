@@ -53,3 +53,20 @@
   ros_type_name: "ros_gz_interfaces/msg/Contacts"
   gz_type_name: "gz.msgs.Contacts"
   direction: GZ_TO_ROS
+
+# The camera (hoverbot.sdf). lazy: Gazebo renders only while something on
+# the ROS side subscribes — the physics tests never pay for rendering. Needs
+# gazebo.launch.py camera:=true (the Sensors system) to publish at all.
+- ros_topic_name: "/camera/image_raw"
+  gz_topic_name: "/model/hoverbot/camera"
+  ros_type_name: "sensor_msgs/msg/Image"
+  gz_type_name: "gz.msgs.Image"
+  direction: GZ_TO_ROS
+  lazy: true
+
+- ros_topic_name: "/camera/camera_info"
+  gz_topic_name: "/model/hoverbot/camera_info"
+  ros_type_name: "sensor_msgs/msg/CameraInfo"
+  gz_type_name: "gz.msgs.CameraInfo"
+  direction: GZ_TO_ROS
+  lazy: true

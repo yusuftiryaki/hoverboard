@@ -8,7 +8,7 @@
 #   firmware  pio run                                              (~1 min)
 #   stack     colcon build + every test except the four below      (~4 min)
 #   nav2      colcon build + the Nav2 stacks (map pinned, and on GPS) (~7 min)
-#   gazebo    colcon build + the Gazebo physics worlds             (~5 min)
+#   gazebo    colcon build + Gazebo physics + rendered marker      (~11 min)
 #   dock      colcon build + battery -> return -> dock stacks      (~5 min)
 #   sweep     colcon build + docking from every side, one stack    (~12 min)
 #   mission   colcon build + coverage: GPS, a charge, a rock      (~25 min)
@@ -25,7 +25,7 @@ WS="${REPO}/ros2"
 REPORTS="${WS}/log/ci"          # ros2/log/ is already gitignored
 
 NAV2_TESTS=(src/robot_sim/test/test_nav2.py src/robot_sim/test/test_site_nav2.py)
-GAZEBO_TESTS=(src/robot_sim/test/test_gazebo_physics.py
+GAZEBO_TESTS=(src/robot_sim/test/test_gazebo_physics.py src/robot_sim/test/test_gazebo_marker.py
               src/robot_sim/test/test_gazebo_localization.py)
 DOCK_TESTS=(src/robot_sim/test/test_docking.py)
 SWEEP_TESTS=(src/robot_sim/test/test_docking_sweep.py)
@@ -75,6 +75,9 @@ build_workspace() {
   colcon build --symlink-install
   source install/setup.bash
   set -u
+  # Locally the stacks of earlier runs were SIGKILLed: their DDS files make
+  # new nodes hang (scripts/dds_shm_clean.sh). A no-op on a fresh runner.
+  "${REPO}/scripts/dds_shm_clean.sh"
   mkdir -p "${REPORTS}"
   BUILT=1
 }
@@ -142,7 +145,11 @@ import sys
 import xml.etree.ElementTree as ET
 
 suite = ET.parse(sys.argv[1]).getroot().find("testsuite")
-tests, skipped = int(suite.get("tests")), int(suite.get("skipped"))
+# JUnit files an xfail under <skipped type="pytest.xfail"> too. That one is a
+# known, documented failure that RAN (strict: it fails the run if it passes),
+# not a hole in the environment — test_gazebo_marker's planar ambiguity.
+skips = [s for s in suite.iter("skipped") if s.get("type") != "pytest.xfail"]
+tests, skipped = int(suite.get("tests")), len(skips)
 if skipped or not tests:
     sys.exit(f"!! {skipped} of {tests} tests skipped in {sys.argv[1]} — in CI a "
              "skip is a hole in the environment, not a pass. See the SKIPPED "
