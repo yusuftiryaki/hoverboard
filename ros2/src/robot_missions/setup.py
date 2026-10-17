@@ -1,3 +1,5 @@
+from glob import glob
+
 from setuptools import find_packages, setup
 
 package_name = "robot_missions"
@@ -9,6 +11,8 @@ setup(
     data_files=[
         ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
         ("share/" + package_name, ["package.xml"]),
+        # The web page web_ui serves (web_api.default_static_dir falls back here).
+        ("share/" + package_name + "/web", glob("robot_missions/web/*")),
     ],
     install_requires=["setuptools"],
     zip_safe=True,
@@ -21,6 +25,7 @@ setup(
         "console_scripts": [
             "site_map_server = robot_missions.site_map_server:main",
             "mission_runner = robot_missions.mission_runner:main",
+            "web_ui = robot_missions.web_ui:main",
         ],
     },
 )

@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Robot Saha</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="map"></div>
+  <aside id="panel">
+    <header>
+      <div id="status-line">Bağlanıyor…</div>
+      <div id="battery"></div>
+    </header>
+    <nav>
+      <button data-tab="site" class="active">Saha</button>
+      <button data-tab="mission">Görev</button>
+      <button data-tab="detected">Tespitler <span id="detected-count"></span></button>
+    </nav>
+
+    <section id="tab-site" class="tab active">
+      <p class="hint">Çiz: önce türü seç, sonra haritada çiz. Bir şekle tıkla → özellikleri.</p>
+      <div class="draw-buttons">
+        <button data-draw="area" data-shape="Polygon">Alan</button>
+        <button data-draw="keepout" data-shape="Polygon">Girilmez</button>
+        <button data-draw="obstacle" data-shape="Marker">Engel</button>
+        <button data-draw="station" data-shape="Marker">İstasyon</button>
+        <button data-draw="route" data-shape="Line">Rota</button>
+      </div>
+      <div id="feature-editor" hidden>
+        <h3 id="fe-title"></h3>
+        <label>Ad <input id="fe-name"></label>
+        <label id="fe-radius-row">Yarıçap (m) <input id="fe-radius" type="number" step="0.05" min="0.05"></label>
+        <label id="fe-heading-row">Yanaşmış robotun baktığı yön (pusula °) <input id="fe-heading" type="number" step="1" min="0" max="359"></label>
+        <div class="row">
+          <button id="fe-apply">Uygula</button>
+          <button id="fe-delete" class="danger">Sil</button>
+        </div>
+      </div>
+      <ul id="feature-list"></ul>
+      <div class="row">
+        <button id="site-save" class="primary">Sahayı kaydet</button>
+        <button id="site-reload">Robottan yeniden yükle</button>
+      </div>
+      <div id="site-message" class="message"></div>
+    </section>
+
+    <section id="tab-mission" class="tab">
+      <label>Görev tipi <select id="m-type"></select></label>
+      <p id="m-describe" class="hint"></p>
+      <label id="m-target-row">Hedef <select id="m-target"></select></label>
+      <p id="m-goto-hint" class="hint" hidden>Hedef noktası: haritaya tıkla.</p>
+      <div id="m-params"></div>
+      <button id="m-start" class="primary">Başlat</button>
+      <div class="row">
+        <button id="m-pause">Duraklat</button>
+        <button id="m-resume">Devam</button>
+        <button id="m-abort" class="danger">İptal</button>
+      </div>
+      <div id="mission-message" class="message"></div>
+      <pre id="mission-status"></pre>
+    </section>
+
+    <section id="tab-detected" class="tab">
+      <p class="hint">Tamponun bulduğu engeller. Gerçekse adını ve gerçek boyutunu ver → sahaya
+        kalıcı engel olarak girer (etrafındaki fazladan boşluk kalkar). Değilse (köpek, top…) sil.</p>
+      <ul id="detected-list"></ul>
+      <div id="detected-message" class="message"></div>
+    </section>
+  </aside>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -180,6 +180,8 @@ STACK_PATTERNS = (
     "lib/robot_missions/site_map_server",
     # sends navigate_to_pose goals: an orphan would drive the next stack
     "lib/robot_missions/mission_runner",
+    # holds the web port: an orphan makes the next web test bind fail
+    "lib/robot_missions/web_ui",
 )
 
 
@@ -266,7 +268,7 @@ class SimStack:
 
     # sim_node publishes /obstacle_map; the robot's site_map_server must not
     # publish a second one (robot.launch.py). SiteStack turns this around.
-    SITE_ARGS = ("use_site_map:=false",)
+    SITE_ARGS = ("use_site_map:=false", "use_web:=false")
 
     def launch_args(self):
         return (*self.LAUNCH_ARGS, *self.SITE_ARGS)
@@ -377,7 +379,11 @@ class SiteStack(GlobalStack):
         # ⚠️ detected_file per test: the default (~/.robot/...) would carry one
         # test's bumper finds into the next test's map.
         return (*self.LAUNCH_ARGS, "use_site_map:=true", f"site_file:={self.site_file}",
-                f"detected_file:={self.detected_file}")
+                f"detected_file:={self.detected_file}", *self.WEB_ARGS)
+
+    # The web page only where a test asks for it (WebStack): two stacks in a
+    # row would otherwise race for the port.
+    WEB_ARGS = ("use_web:=false",)
 
 
 def write_site(workdir, features):
@@ -387,6 +393,27 @@ def write_site(workdir, features):
     with open(path, "w", encoding="utf-8") as handle:
         json.dump({"type": "FeatureCollection", "features": list(features)}, handle)
     return path
+
+
+class WebStack(SiteStack):
+    """SiteStack with the web page on WEB_PORT."""
+
+    WEB_PORT = 18080
+    WEB_ARGS = ("use_web:=true", f"web_port:={WEB_PORT}")
+
+
+@pytest.fixture
+def web_stack(ros, tmp_path):
+    made = []
+
+    def _make(features, *sim_args):
+        stack = WebStack(str(tmp_path), features, *sim_args)
+        made.append(stack)
+        return stack
+
+    yield _make
+    for stack in made:
+        stack.close()
 
 
 @pytest.fixture
@@ -553,7 +580,7 @@ class SiteNav2Stack(Nav2Stack):
 
     def launch_args(self):
         return (*self.LAUNCH_ARGS, "use_site_map:=true", f"site_file:={self.site_file}",
-                f"detected_file:={self.detected_file}")
+                f"detected_file:={self.detected_file}", "use_web:=false")
 
     def nav2_args(self):
         # battery_supervisor reads home from the site's station (missions.md 3b).
