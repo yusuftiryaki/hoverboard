@@ -84,6 +84,8 @@ def generate_launch_description():
     dock_database = LaunchConfiguration("dock_database")
     use_missions = LaunchConfiguration("use_missions")
     detected_file = LaunchConfiguration("detected_file")
+    use_web = LaunchConfiguration("use_web")
+    web_port = LaunchConfiguration("web_port")
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -147,6 +149,12 @@ def generate_launch_description():
             description="Obstacles found by the bumper (lat/lon), kept across "
                         "restarts until a person confirms or drops them.",
         ),
+        DeclareLaunchArgument(
+            "use_web", default_value="true",
+            description="Serve the web page (robot_missions web_ui). ⚠️ No login: "
+                        "anyone on the robot's network can start a mission.",
+        ),
+        DeclareLaunchArgument("web_port", default_value="8080"),
         DeclareLaunchArgument(
             "use_missions", default_value="true",
             description="Run mission_runner (with use_nav2). docs/missions.md.",
@@ -255,6 +263,17 @@ def generate_launch_description():
                          "detected_file": detected_file,
                          "dock_database": dock_database,
                          "use_sim_time": use_sim_time}],
+        ),
+
+        # The web page: draw the site, start missions, confirm detections.
+        Node(
+            package="robot_missions",
+            executable="web_ui",
+            name="web_ui",
+            output="screen",
+            condition=IfCondition(use_web),
+            parameters=[{"site_file": site_file, "detected_file": detected_file,
+                         "port": web_port, "use_sim_time": use_sim_time}],
         ),
 
         # Missions on the site: ~/start, ~/pause, ~/resume, ~/abort, ~/status.

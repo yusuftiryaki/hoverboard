@@ -111,8 +111,8 @@ Laptop tarayıcı (uydu haritası)        Pi
    (aşağıda). Sim'de uçtan uca: alan →
    düşük batarya → dock → devam. **Kaplama yüzdesi ve sınır ihlali** ground
    truth'tan, GPS gürültüsü açık/kapalı.
-4. **Web arayüzü**: çizim, görev formu, canlı durum; tespit edilen engelleri
-   onaylama/etiketleme.
+4. ✅ **Web arayüzü** (4a): çizim, görev formu, canlı durum; tespit edilen
+   engelleri onaylama/etiketleme.
 5. **Öğret-kaydet**: web teleop + sınır/waypoint/istasyon kaydı.
 
 ## 1. aşama: ne yapıldı, nasıl kullanılır
@@ -330,6 +330,32 @@ tampon basıldı ─► ESP32 ileriyi keser ─► site_map_server: temas noktas
 - Sim'de tampon artık engellerden basılabiliyor (`bumper_from_obstacles`,
   varsayılan kapalı; yalnızca ön ±60°, istasyon gövdesi hariç — gerçek tamponun
   istasyona değip değmeyeceği SP6 sorusu).
+
+## 4. aşama: web arayüzü (`web_ui`, `web_api.py`, `web/`)
+Laptoptan (ya da telefondan): **`http://<robot>:8080/`** — tarayıcı yeter, ROS
+gerekmez. Uydu görüntüsü için laptopun internete çıkması lazım (Esri World
+Imagery; "Harita" katmanı OpenStreetMap).
+- **Saha** sekmesi: tür seç (Alan, Girilmez, Engel, İstasyon, Rota), haritada
+  çiz; bir şekle tıkla → ad, yarıçap (engel), yanaşma yönü (istasyon, pusula °);
+  köşeleri sürükle. **Sahayı kaydet** → robot kendi okuyucusuyla doğrular
+  (bozuksa reddedilir, dosya değişmez), eski hâli `site.geojson.bak`, sonra
+  `site_map_server` ve `battery_supervisor` dosyayı yeniden okur (`~/reload`,
+  `~/reload_site`). Supervisor eve dönüş/yanaşma sırasında yeniden yüklemeyi
+  reddeder (staging bir yere, dock başka yere gitmesin). İlk istasyon adı
+  `home` — supervisor'ın yanaştığı istasyon o.
+- **Görev** sekmesi: form `TASK_TYPES`'tan üretiliyor (yeni görev tipi = sayfada
+  kendiliğinden yeni seçenek). Başlat / Duraklat / Devam / İptal; durum canlı.
+- **Tespitler** sekmesi: tamponun buldukları; **Onayla** (ad + gerçek yarıçap) →
+  sahaya kalıcı `obstacle` olarak girer ve tespitlerden çıkar — fazladan boşluk
+  kalkar, kaybedilen çim geri gelir; **Sil** → unutulur.
+- Canlı: robot konumu `/gps/filtered`'dan, yönü `map→base_link`'ten (pusula),
+  görev durumu, supervisor, batarya; saniyede bir.
+- ⚠️ **Giriş/şifre YOK.** Robotun ağındaki herkes görev başlatabilir. Robotu
+  kontrol etmediğin ağlara bağlama. `use_web:=false` ile kapanır.
+- Doğrulama: `test_web_api.py` (18 test, gerçek HTTP, sahte robot),
+  `test_web_stack.py` (gerçek yığın: konum/yön doğru, sayfadan çizilen yasak
+  bölge `/obstacle_map`'te). Tarayıcıda (headless Chromium) elle de denendi:
+  çizim → kaydet → robotun kendi okuyucusu kabul etti, JS hatası yok.
 
 ## Robotun kendi tespit ettiği engeller (2026-10-16, kullanıcı onayı)
 Bugünkü donanımda menzil sensörü yok (handoff karar 8): survey edilmemiş bir

@@ -45,6 +45,7 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from robot_localization.srv import FromLLArray, ToLL
 from rclpy.time import Time
 from std_msgs.msg import Bool, String
+from std_srvs.srv import Trigger
 from geometry_msgs.msg import Point
 from tf2_ros import Buffer, TransformException, TransformListener
 
@@ -113,15 +114,42 @@ class SiteMapServer(Node):
         if p("record_contacts").value:
             self.create_subscription(Bool, "bumper", self._on_bumper, 10)
 
-        self.get_logger().info(
-            f"site {path or '(none)'}: {describe(self._site)}")
-        if not needs_conversion(self._site) and not self._store.items:
-            self._publish(MapGeometry())
-            return
         self._from_ll = self.create_client(FromLLArray, "fromLLArray")
         self._asked = []
+        self._generation = 0            # bumped by ~/reload; stale answers are dropped
         self._retry = self.create_timer(p("retry_period").value, self._try_convert)
+        # The web page (web_ui) edits the site and the detections, then asks
+        # for this: re-read both files, convert, republish.
+        self.create_service(Trigger, "~/reload", self._on_reload)
+        self.get_logger().info(f"site {path or '(none)'}: {describe(self._site)}")
+        self._rebuild()
+
+    def _rebuild(self) -> None:
+        self._generation += 1
+        self._pending = None
+        self._published = False
+        if not needs_conversion(self._site) and not self._store.items:
+            self._retry.cancel()
+            self._publish(MapGeometry())
+            return
+        self._retry.reset()
         self._try_convert()
+
+    def _on_reload(self, _request, response):
+        path = self.get_parameter("site_file").value
+        try:
+            site = load_site(path) if path else Site()
+            self._store.load()
+        except (OSError, ValueError) as exc:
+            # A broken file leaves the map as it was — never half a site.
+            response.success, response.message = False, f"not reloaded: {exc}"
+            return response
+        self._site = site
+        self.get_logger().info(f"reloaded site {path or '(none)'}: {describe(site)}, "
+                               f"{len(self._store.items)} detection(s)")
+        self._rebuild()
+        response.success, response.message = True, describe(site)
+        return response
 
     # --- conversion ---------------------------------------------------------
 
@@ -139,9 +167,12 @@ class SiteMapServer(Node):
                              for q in asked]
         self._asked = asked
         self._pending = self._from_ll.call_async(request)
-        self._pending.add_done_callback(self._on_answer)
+        generation = self._generation
+        self._pending.add_done_callback(lambda f: self._on_answer(f, generation))
 
-    def _on_answer(self, future) -> None:
+    def _on_answer(self, future, generation: int) -> None:
+        if generation != self._generation:
+            return                       # asked before a reload: not this site
         self._pending = None
         response = future.result()
         answer = [(pt.x, pt.y) for pt in response.map_points] if response else []

@@ -694,8 +694,11 @@ Alanlar hem **masada haritadan çizilecek** hem **öğret-kaydet** ile kaydedile
   çekilir (`cmd_vel_nav`; Nav2 backup kendi izini çarpışma sayıp düşüyordu).
   Ölçülen: survey edilmemiş kayada 0 çarpışma, %75 kesim (kaya ~1 m çim
   götürüyor). Ayrıntı missions.md 3c.
-- **Sıradaki: 4. aşama — web arayüzü** (çizim, görev formu, canlı durum,
-  tespitleri onaylama/etiketleme), sonra 5 (öğret-kaydet).
+- ✅ **4. aşama — web arayüzü** `http://<robot>:8080/` (çizim, görev formu,
+  canlı durum, tespit onayı). ⚠️ Giriş yok — robotu güvenmediğin ağa bağlama.
+- **Sıradaki: 5. aşama — öğret-kaydet** (sayfadan teleop + sınır/rota/istasyon
+  kaydı). Sahada ilk kullanım için `robot.service`'e `site_file:=` eklenmeli
+  (deployment.md adım 8).
 
 ### A5 (CI) — çalışıyor, ve ilk koşuda gerçek bir hata yakaladı
 `scripts/ci.sh` her şeyi koşturur, `.github/workflows/ci.yml` sadece onu

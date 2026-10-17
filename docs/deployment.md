@@ -161,7 +161,10 @@ User=enes
 ExecStartPre=/bin/sleep 5
 ExecStart=/bin/bash -lc 'source /opt/ros/jazzy/setup.bash && \
   source /home/enes/howerboard/ros2/install/setup.bash && \
-  ros2 launch robot_bringup robot.launch.py'
+  ros2 launch robot_bringup robot.launch.py site_file:=/home/enes/site.geojson'
+# site_file: the site (docs/missions.md) — the web page (http://<robot>:8080/)
+# edits it; the file does not have to exist yet, the first save creates it.
+# Missions, the survey map and home all come from it.
 # ⚠️ always, NOT on-failure: nav2_watchdog shuts the launch down when Nav2
 # hangs in bring-up, and `ros2 launch` then exits 0 (measured) — on-failure
 # would leave the robot off. `systemctl stop` still stops it for good.

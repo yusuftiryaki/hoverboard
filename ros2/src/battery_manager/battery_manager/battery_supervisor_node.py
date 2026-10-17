@@ -146,10 +146,13 @@ class BatterySupervisor(Node):
         self.create_service(Trigger, "~/return_home", self._on_return_home)
         self.create_timer(0.5, self._tick)
         self.create_timer(1.0, self._diag_tick)
-        if self._site is not None:
-            self._from_ll = self.create_client(FromLLArray, "fromLLArray")
-            self._converting = False
-            self._home_timer = self.create_timer(1.0, self._convert_home)
+        self._from_ll = self.create_client(FromLLArray, "fromLLArray")
+        self._converting = False
+        self._home_timer = self.create_timer(1.0, self._convert_home)
+        if self._site is None:
+            self._home_timer.cancel()
+        # The web page moved the station (or added one): read the site again.
+        self.create_service(Trigger, "~/reload_site", self._on_reload_site)
         self._publish_state()
 
     # ---- inputs -------------------------------------------------------------------
@@ -238,6 +241,31 @@ class BatterySupervisor(Node):
             "docks.yaml, and the survey map does not draw the station")
         return None
 
+    def _on_reload_site(self, _request, response):
+        if self._sup.phase.value not in ("NORMAL", "CHARGING", "DOCKED_IDLE", "SAFE_STOP"):
+            # Mid-return or mid-dock: changing home under a running sequence
+            # would send the dock to one place and the staging to another.
+            response.success = False
+            response.message = f"not while {self._sup.phase.value} — try again when it is done"
+            return response
+        try:
+            site = self._site_with_station(str(self.get_parameter("site_file").value))
+        except (OSError, ValueError) as exc:
+            response.success, response.message = False, f"not reloaded: {exc}"
+            return response
+        self._site = site
+        if site is None:
+            self._dock = load_dock(str(self.get_parameter("dock_database").value),
+                                   self._dock_id)
+            self._home_source = "docks.yaml"
+            self._home_timer.cancel()
+        else:
+            self._dock = None
+            self._home_source = "site (waiting for navsat_transform)"
+            self._home_timer.reset()
+        response.success, response.message = True, f"home from {self._home_source}"
+        return response
+
     def _convert_home(self) -> None:
         """Ask /fromLLArray until it answers in full (it answers an EMPTY list,
         not an error, before navsat_transform has a transform)."""
@@ -249,9 +277,12 @@ class BatterySupervisor(Node):
         request = FromLLArray.Request()
         request.ll_points = [GeoPoint(latitude=q.lat, longitude=q.lon) for q in asked]
         self._converting = True
+        asked_site = self._site
 
         def done(future):
             self._converting = False
+            if asked_site is not self._site:
+                return                    # the site was reloaded meanwhile
             response = future.result()
             answer = [(pt.x, pt.y) for pt in response.map_points] if response else []
             try:
