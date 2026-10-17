@@ -10,8 +10,9 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
@@ -24,6 +25,8 @@ def generate_launch_description():
     use_mag = LaunchConfiguration("use_mag")
     use_imu_filter = LaunchConfiguration("use_imu_filter")
     use_camera = LaunchConfiguration("use_camera")
+    camera_driver = LaunchConfiguration("camera_driver")
+    marker_size = LaunchConfiguration("marker_size")
     gps_port = LaunchConfiguration("gps_port")
     fake_imu = LaunchConfiguration("fake_imu")
     fake_mag = LaunchConfiguration("fake_mag")
@@ -41,6 +44,13 @@ def generate_launch_description():
                         "this produces one.",
         ),
         DeclareLaunchArgument("use_camera", default_value="false"),
+        # false = something else publishes camera/image_raw + camera_info (the
+        # Gazebo camera, gazebo.launch.py camera:=true); the marker detector
+        # still runs on it.
+        DeclareLaunchArgument("camera_driver", default_value="true"),
+        # Edge of the printed black square, metres — what the station
+        # carries. CALIBRATE: every range the detector reports scales with it.
+        DeclareLaunchArgument("marker_size", default_value="0.10"),
         DeclareLaunchArgument(
             "fake_imu", default_value="false",
             description="Simulate the MPU6050 — dev machine only, there is no I2C there.",
@@ -104,7 +114,8 @@ def generate_launch_description():
             executable="camera_node",
             name="camera",
             output="screen",
-            condition=IfCondition(use_camera),
+            condition=IfCondition(PythonExpression(
+                ["'", use_camera, "' == 'true' and '", camera_driver, "' == 'true'"])),
             parameters=[{
                 "camera": 0,
                 "width": 640,
@@ -133,7 +144,7 @@ def generate_launch_description():
                 "marker_id": 0,
                 # Edge of the printed black square, metres. CALIBRATE: every
                 # range the camera reports scales with this number.
-                "marker_size": 0.10,
+                "marker_size": ParameterValue(marker_size, value_type=float),
                 "use_sim_time": use_sim_time,
             }],
             remappings=[("image", "camera/image_raw"),

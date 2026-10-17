@@ -71,3 +71,69 @@ def obstacle_model_sdf(
         + "".join(links)
         + "\n  </model>\n</sdf>\n"
     )
+
+
+# --- the charging station, with its marker (camera:=true worlds) ---------------
+
+# A low body under the marker: tall enough for the chassis box (0.09-0.27 m
+# up) to hit, low enough not to hide the marker board standing on it (the
+# board's lower edge is at tag_height - board/2: 0.12 m for the 0.10 m tag).
+STATION_BODY_HEIGHT_M = 0.12
+# The printed board round the marker: the black square plus a white quiet
+# zone, which the detector needs to find the square at all — 30% of the
+# square's edge on each side (0.10 m square -> 0.16 m board).
+TAG_BOARD_PER_MARKER = 1.6
+
+
+def station_model_sdf(station, body, texture_path: str, name: str = "station",
+                      marker_size: float = 0.10) -> str:
+    """The station as Gazebo sees it: its body (the same CircularObstacle the
+    kinematic world stops the robot at, but STATION_BODY_HEIGHT_M tall) and a
+    board carrying an AprilTag 36h11 #0 at DockStation.tag_position, facing
+    the robot driving in.
+
+    ⚠️ The kinematic model puts the tag INSIDE the body's footprint (0.55 m
+    ahead of the docked base_link; the body spans 0.42-0.72 m) — harmless with
+    no renderer, but a 1 m obstacle cylinder there hides the marker from the
+    camera completely. Hence the low body with the board standing on it.
+
+    The board link's +X is the marker's normal (back at the robot); the
+    texture is drawn on that face. Its orientation is not taken on faith:
+    test_gazebo_marker.py checks the real detector decodes it and reads it
+    the way dock_model.tag_rotation says.
+    """
+    board = marker_size * TAG_BOARD_PER_MARKER
+    tx, ty, tz = station.tag_position
+    # Never above the board's lower edge, or it hides the bottom of the marker
+    # (a bigger tag on the same 0.20 m-high mount reaches further down).
+    body_height = min(STATION_BODY_HEIGHT_M, tz - board / 2 - 0.005)
+    if body_height <= 0.0:
+        raise ValueError(f"a {marker_size} m marker at {tz} m height reaches the ground")
+    face = station.yaw + 3.141592653589793
+    return f"""<?xml version="1.0"?>
+<sdf version="1.9">
+  <model name={quoteattr(name)}>
+    <static>true</static>
+    <link name="body">
+      <pose>{body.x!r} {body.y!r} {body_height / 2!r} 0 0 0</pose>
+      <collision name="collision">
+        <geometry><cylinder><radius>{body.radius!r}</radius><length>{body_height!r}</length></cylinder></geometry>
+      </collision>
+      <visual name="visual">
+        <geometry><cylinder><radius>{body.radius!r}</radius><length>{body_height!r}</length></cylinder></geometry>
+        <material><ambient>0.3 0.3 0.35 1</ambient><diffuse>0.35 0.35 0.4 1</diffuse></material>
+      </visual>
+    </link>
+    <link name="tag_board">
+      <pose>{tx!r} {ty!r} {tz!r} 0 0 {face!r}</pose>
+      <visual name="tag">
+        <geometry><box><size>0.004 {board!r} {board!r}</size></box></geometry>
+        <material>
+          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><specular>0 0 0 1</specular>
+          <pbr><metal><albedo_map>{texture_path}</albedo_map><roughness>1</roughness><metalness>0</metalness></metal></pbr>
+        </material>
+      </visual>
+    </link>
+  </model>
+</sdf>
+"""

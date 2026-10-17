@@ -182,6 +182,8 @@ STACK_PATTERNS = (
     "lib/robot_missions/mission_runner",
     # holds the web port: an orphan makes the next web test bind fail
     "lib/robot_missions/web_ui",
+    # publishes /detected_dock_pose from the camera
+    "image_proc/track_marker_node",
 )
 
 
@@ -725,6 +727,7 @@ class GazeboStack(SimStack):
     LAUNCH_ARGS = ("use_localization:=true", "use_imu:=false", "use_gps:=false",
                    "use_sim_time:=true")
     LINK = "/tmp/fake_esp32_gazebo"
+    GAZEBO_ARGS = ()
 
     def _await_shutdown(self):
         """Also wait for the gz server. Killing the launch process group is not
@@ -751,7 +754,7 @@ class GazeboStack(SimStack):
             "the /world/empty topics and mix into one unreadable world. A "
             "previous test's stack did not shut down.")
 
-        self._spawn("ros2", "launch", "robot_bringup", "gazebo.launch.py")
+        self._spawn("ros2", "launch", "robot_bringup", "gazebo.launch.py", *self.GAZEBO_ARGS)
         # Proof that gz, the model spawn and the bridge ALL work: ground truth
         # only flows if every one of them did. This is the check the A3 bug
         # would have failed instantly.
@@ -774,6 +777,44 @@ class GazeboStack(SimStack):
             raise AssertionError(
                 "sim_node published no /ground_truth — check its log for a "
                 "backend or obstacle-spawn failure")
+
+
+class GazeboCameraStack(GazeboStack):
+    """GazeboStack whose world RENDERS: the Sensors system (software, no GPU
+    here), hoverbot.sdf's camera, and the REAL marker detector
+    (track_marker_node) reading it — sim_node's geometric /detected_dock_pose
+    switched off, so there is one publisher."""
+
+    GAZEBO_ARGS = ("camera:=true",)
+    LAUNCH_ARGS = (*GazeboStack.LAUNCH_ARGS, "use_camera:=true", "camera_driver:=false")
+
+    def __init__(self, *sim_args, marker_size=0.10):
+        # The rendered square and the detector's idea of it: one number.
+        self._marker_size = float(marker_size)
+        super().__init__("-p", "simulate_marker:=false",
+                         "-p", f"dock_marker_size:={self._marker_size}", *sim_args)
+
+    def launch_args(self):
+        return (*super().launch_args(), f"marker_size:={self._marker_size}")
+
+
+@pytest.fixture
+def gazebo_camera(ros):
+    if shutil.which("gz") is None:
+        pytest.skip("Gazebo (`gz`) is not installed")
+    made = []
+
+    def _make(*sim_args, **kwargs):
+        for stack in made:
+            stack.close()
+        made.clear()
+        stack = GazeboCameraStack(*sim_args, **kwargs)
+        made.append(stack)
+        return stack
+
+    yield _make
+    for stack in made:
+        stack.close()
 
 
 @pytest.fixture(scope="module")

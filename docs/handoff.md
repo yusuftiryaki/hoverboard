@@ -951,6 +951,44 @@ güneşte AprilTag tespiti (track_marker_node hiç piksel görmüyor), INA228
 doğruluğu, Pi'da libcamera. Kamera kalibre edilmeden (`camera_info` K/D sıfır)
 tespit edilen her poz **kendinden emin bir çöp**.
 
+### ✅ AprilTag gerçek pikseller üzerinde (2026-10-17, `test_gazebo_marker.py`)
+Şimdiye kadar `track_marker_node` hiç piksel görmemişti (yanaşma testleri
+geometrik sahte tespit kullanıyor). Artık Gazebo'da **render'lı kamera** var:
+`gazebo.launch.py camera:=true` dünyaya Sensors sistemini ekliyor (GPU yok,
+**yazılımla render**: 640×480 ~28 Hz, 320×240 ~80 Hz — sim zamanında, bu
+container'da ölçüldü), `hoverbot.sdf`'te URDF montajında Pi Camera V2,
+`sim_node` istasyonu gövde + AprilTag 36h11 #0 levhasıyla spawn ediyor
+(`gazebo_obstacles.station_model_sdf`, doku `tag_texture.py`), gerçek
+`track_marker_node` okuyor (`camera_driver:=false`, `simulate_marker:=false`).
+Robot orijinde, istasyon 6 konumda; `dock_model.tag_in_camera`'ya karşı:
+
+| durum (0.10 m etiket) | yanal | menzil | normalin yönü |
+|---|---|---|---|
+| tam karşı 1.75 m | mm | +%2.8 | −5.0° (gerçek 0) |
+| ±0.3 m yanda | mm | +%2.6 | ±0.7° |
+| −0.35 rad dönük | mm | +%2.8 | −22.2° (gerçek −21.2) |
+| ⚠️ **+0.35 rad dönük** | mm | +%1.7 | **−10.6° (gerçek +21.2) — 30° ters** |
+| uzak 2.75 m | mm | **+%7.6** | −0.1° |
+| **0.20 m etiket**, +0.35 rad | mm | +%1.8 | **21.8°** ✓ |
+| **0.20 m etiket**, uzak 2.75 m | mm | **+%2.1** | 0.2° |
+
+- ⚠️⚠️ **Düzlemsel poz belirsizliği:** küçük kare işaretçinin eğimde birbirinin
+  aynası iki pozu var; istasyon bir yöne dönükken dedektör ters olanı seçiyor —
+  her karede aynı, filtreyle ortalanamaz. Yanaşma denetleyicisi buna göre 30°
+  yamuk girer. **0.20 m etiket bunu gideriyor** ve uzak menzil hatasını da
+  %7.6'dan %2.1'e indiriyor. ⚠️ SP6 kararı: etiket boyu (`marker_size`, şu an
+  0.10) — testte xfail(strict) olarak duruyor, düzelince patlar.
+- Menzil hatası bir ölçek: kare küçüldükçe render filtrelemesi siyah kareyi
+  küçük gösteriyor, dedektör uzakta sanıyor. Gerçek kamerada bulanıklık benzer
+  yönde etki eder; büyüklüğü sahada ölçülmeli.
+- Dokunulmayanlar: robotun kendi gövdesi kameradan gizli (`visibility_flags`),
+  fizik testleri kamerayı hiç yüklemiyor (camera:=false varsayılan, köprü lazy).
+- ⚠️ **Gazebo + Nav2 + render bu dizüstünde birlikte kalkmadı** (`sim_demo.sh`
+  Gazebo denemesi): yük 7/8 çekirdek, ekf_global güncelleme hızını kaçırdı,
+  Nav2 `controller_server` dakikalarca aktifleşmedi. Demo bu yüzden kinematik
+  dünyada kalıyor (sahte kamerası `sim_camera.py`). Dahili GPU'yu (UHD 620,
+  `/dev/dri`) container'a açmak render yükünü alabilir — denenmedi.
+
 ### ✅ twist_mux (2026-10-16) — teleop, Nav2'den önce gelir
 ```
 controller_server, behavior_server ─► /cmd_vel_nav ─► nav_cmd_gate ─► /cmd_vel_nav_gated (öncelik 10) ─┐

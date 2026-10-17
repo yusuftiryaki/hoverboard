@@ -26,6 +26,7 @@ spin-up, and it scales as v^2. test_gazebo_physics.py pins that.
 from __future__ import annotations
 
 import math
+import os
 import shutil
 import subprocess
 import threading
@@ -34,7 +35,7 @@ import time
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 
-from robot_sim.gazebo_obstacles import obstacle_model_sdf
+from robot_sim.gazebo_obstacles import obstacle_model_sdf, station_model_sdf
 
 # The spawn goes through Gazebo's own UserCommands service rather than
 # `ros2 run ros_gz_sim create`, which is a whole ROS node spun up and torn down
@@ -50,7 +51,7 @@ class GazeboBackend:
                  wheel_odometry_topic="/gazebo/wheel_odometry",
                  ground_truth_topic="/gazebo/ground_truth",
                  contacts_topic="/gazebo/contacts",
-                 obstacles=(), world="empty") -> None:
+                 obstacles=(), world="empty", station=None) -> None:
         self._node = node
         self._radius = float(wheel_radius)
         self._separation = float(wheel_separation)
@@ -77,6 +78,8 @@ class GazeboBackend:
 
         if obstacles:
             self._spawn_obstacles(obstacles, world)
+        if station is not None:
+            self._spawn_station(*station, world)
 
     # ---- World setup ---------------------------------------------------------
     def _spawn_obstacles(self, obstacles, world: str) -> None:
@@ -93,8 +96,23 @@ class GazeboBackend:
                 "obstacles were requested for the gazebo backend but the `gz` "
                 "CLI is not on PATH, so they cannot be spawned"
             )
-        sdf = obstacle_model_sdf(obstacles)
-        request = f"sdf: {sdf!r}, name: 'obstacles', allow_renaming: false"
+        self._spawn(obstacle_model_sdf(obstacles), "obstacles", world,
+                    f"{len(obstacles)} engel Gazebo'ya spawn edildi")
+
+    def _spawn_station(self, station, body, marker_size: float, world: str) -> None:
+        """The station body and its AprilTag board (station_model_sdf). The
+        texture is written next to nothing else, in a temp dir, per run."""
+        import tempfile
+
+        from robot_sim.tag_texture import write_tag_texture
+        texture = write_tag_texture(os.path.join(tempfile.mkdtemp(prefix="hoverbot_tag_"),
+                                                 "tag36h11_0.png"))
+        self._spawn(station_model_sdf(station, body, texture, marker_size=marker_size),
+                    "station", world,
+                    "istasyon + AprilTag Gazebo'ya spawn edildi")
+
+    def _spawn(self, sdf: str, name: str, world: str, done: str) -> None:
+        request = f"sdf: {sdf!r}, name: '{name}', allow_renaming: false"
         deadline = time.monotonic() + SPAWN_TIMEOUT_S
         last = ""
         while time.monotonic() < deadline:
@@ -108,12 +126,11 @@ class GazeboBackend:
             )
             last = (result.stdout + result.stderr).strip()
             if "data: true" in result.stdout:
-                self._node.get_logger().info(
-                    f"{len(obstacles)} engel Gazebo'ya spawn edildi")
+                self._node.get_logger().info(done)
                 return
             time.sleep(1.0)
         raise RuntimeError(
-            f"could not spawn obstacles into Gazebo world '{world}' within "
+            f"could not spawn {name} into Gazebo world '{world}' within "
             f"{SPAWN_TIMEOUT_S:.0f} s — last reply: {last!r}"
         )
 

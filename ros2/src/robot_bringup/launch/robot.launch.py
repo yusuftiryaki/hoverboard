@@ -73,6 +73,8 @@ def generate_launch_description():
     use_imu_filter = LaunchConfiguration("use_imu_filter")
     use_nav2 = LaunchConfiguration("use_nav2")
     use_camera = LaunchConfiguration("use_camera")
+    camera_driver = LaunchConfiguration("camera_driver")
+    marker_size = LaunchConfiguration("marker_size")
     esp32_port = LaunchConfiguration("esp32_port")
     fake_imu = LaunchConfiguration("fake_imu")
     fake_mag = LaunchConfiguration("fake_mag")
@@ -109,6 +111,12 @@ def generate_launch_description():
             description="Fuse IMU + mag into /imu/data. REQUIRED with use_gps.",
         ),
         DeclareLaunchArgument("use_camera", default_value="false"),
+        DeclareLaunchArgument("marker_size", default_value="0.10",
+                              description="The station marker's black square, metres."),
+        DeclareLaunchArgument(
+            "camera_driver", default_value="true",
+            description="false: camera/image_raw comes from Gazebo, not camera_ros.",
+        ),
         DeclareLaunchArgument(
             "fake_imu", default_value="false",
             description="Simulate the IMU — dev machine only.",
@@ -237,6 +245,8 @@ def generate_launch_description():
                 "use_mag": use_mag,
                 "use_imu_filter": use_imu_filter,
                 "use_camera": use_camera,
+                "camera_driver": camera_driver,
+                "marker_size": marker_size,
                 "fake_imu": fake_imu,
                 "fake_mag": fake_mag,
                 "use_sim_time": use_sim_time,
