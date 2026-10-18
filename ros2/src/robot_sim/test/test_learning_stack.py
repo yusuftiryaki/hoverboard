@@ -193,8 +193,9 @@ def test_a_killed_recorder_ends_the_episode_and_reindex_recovers_the_closed_spli
     # under load), and the splits it has not written cannot be recovered.
     wait_status(lambda s: s["episode"]["recording"] and s["episode"]["ready"], 30.0, "READY")
     time.sleep(3 * LearningStack.SPLIT_S + 1.0)       # three splits close
-    pids = subprocess.run(["pgrep", "-f", "bin/ros2 bag record"], capture_output=True,
-                          text=True).stdout.split()
+    # By node name: CI runs a `ros2 bag record` of its own (ci.sh, CI_BAG).
+    pids = subprocess.run(["pgrep", "-f", "node-name episode_bag_recorder"],
+                          capture_output=True, text=True).stdout.split()
     assert len(pids) == 1, f"expected one recorder, found {pids}"
     os.kill(int(pids[0]), signal.SIGKILL)             # a power cut, as far as the bag knows
 

@@ -187,7 +187,10 @@ STACK_PATTERNS = (
     # learning mode: an orphan recorder would keep writing a bag forever
     "lib/robot_learning/episode_recorder",
     "lib/robot_learning/image_compressor",
-    "bin/ros2 bag record",
+    # ⚠️ by its node name, NOT "ros2 bag record": ci.sh's flight recorder
+    # (CI_BAG=1) is one too, runs for the whole stage, and matched — every
+    # stack in CI then refused to start.
+    "episode_bag_recorder",
 )
 
 
