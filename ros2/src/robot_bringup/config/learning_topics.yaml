@@ -51,3 +51,7 @@ learning_topics:
     - /ground_truth
     - /collision_truth
     - /dock_contact_truth
+    # the privileged expert's label (robot_sim edge_expert, learning.md 6a):
+    # recorded whether or not it drives — DAgger's label
+    - /expert/cmd_vel
+    - /edge_expert/status

@@ -194,6 +194,65 @@ kare arası 0–5 kare (asla negatif değil — hizalama ters olsaydı politika
 geleceği "görerek" öğrenirdi), işaret doğru karede, video kare sayısı = satır
 sayısı.
 
+## 6. aşama: beceri öğrenme — önce kenar takibi (plan, 2026-10-18)
+Kullanıcıyla kararlaştırıldı: "tüm görev" tek politikaya verilmiyor. **Rota
+planlayıcı + Nav2'de kalır** (şeritler, eve dönüş); öğrenme **yerel
+becerilere** gider: kenar dibi takibi, engel etrafı, yabani ota yönelme.
+`mission_runner` beceriyi kısa süreliğine çağırır, sonra kontrolü geri alır.
+İlk beceri **kenar dibi takibi**: ölçütü en net olan, ve NEO-6M'le planlayıcının
+kenar turu metrelerce ıskalıyor — kamera kenarı GPS'ten bağımsız görür.
+Eğitim **bulutta** (Colab / Kaggle, GPU); robot ve dev container yalnız
+veri üretir, dışa aktarır, çıkarım yapar.
+
+Algoritma: önce **basit BC** (boru hattı taban çizgisi), sonra **ACT**
+(aksiyon blokları, Pi'da koşma şansı), sol/sağ ortalaması sorun olursa
+**Diffusion Policy** (çok modluluk; çıkarımı pahalı). Hepsi LeRobot'ta hazır.
+
+**Sim'in uzmanı Nav2 değil, ayrıcalıklı betik:** ground truth'u ve gerçek
+sınırı bilen bir kontrolcü (politika bunları görmez; kamera + durum görür).
+Faydası: sınırsız gösterim ve **otomatik DAgger** — politika sürerken uzman
+her duruma etiket verir (gerçekte bunu insan yapar: "müdahale" modu).
+
+| dilim | ne | ölçüt / kanıt |
+|---|---|---|
+| **6a** | Ayrıcalıklı kenar uzmanı + kenar ölçütü (ground truth) + uzman bölümü kaydı; dışa aktarmada `action_expert` sütunu | uzman kendi ölçütünde: yanal hata cm'ler |
+| **6b** | Kenar **görünür**: kinematik sim kamerasında çim / çim dışı (hızlı); rastgele sahalarla toplu bölüm üretimi | kamerada kenar; N bölüm |
+| **6c** | npz → LeRobot dönüştürücü + Colab/Kaggle defteri (BC, ACT) | defter uçtan uca koşar |
+| **6d** | `policy_node` + `policy_gate` (twist_mux önceliği 20) + sim'de kapalı çevrim değerlendirme + otomatik DAgger | politika kendi ölçütüyle puanlanır |
+| **6e** | Gazebo render'lı dünyada gerçekçilik; sonra gerçek robotta **gölge mod** (komut üretir, tekerleğe gitmez) | sim→gerçek açığı |
+
+### ✅ 6a: ayrıcalıklı kenar uzmanı (2026-10-18)
+- `robot_sim/edge_expert.py` (ROS'suz): yol = sınırın `offset_m` (0.4) içeri
+  çekilmişi; pure pursuit, ama **hedef keskin köşeyi geçmiyor** → robot köşeye
+  girip yerinde dönüyor. Yalnız pure pursuit köşeleri yuvarlıyordu: dikdörtgen
+  kenarın %16'sı hiç ulaşılmıyordu. `label(x, y, yaw)` saf: politikanın
+  ulaştığı HER duruma etiket (6d DAgger). Tur, yay uzunluğuyla işaretli
+  sayılıyor (ileri-geri titreme sıfır).
+- `edge_metrics`: işaretli sınır uzaklığının `offset`'ten hatası (ortalama,
+  p95, max), tolerans içi oranı, dışarı çıkma oranı, **sınırın ulaşılan oranı**.
+  Uzman ve politika aynı ölçütle puanlanır.
+- `edge_expert` düğümü: `/ground_truth` + sahanın alanı (sim'in GPS formülünün
+  tam tersiyle sim_world'e — sim'in kendi gerçeği), `expert/cmd_vel` (her
+  zaman, etiket) + `drive:=true` ise `cmd_vel_teleop` (insan gibi sürer),
+  `~/start`, `~/stop`, `~/status`. Profil ve dışa aktarma: `action_expert`
+  sütunu (sustuğu yerde NaN).
+- **Ölçülen** (`test_edge_expert_stack.py`, gerçek mux + köprü + ESP32 sim +
+  kinematik dünya, 6 × 4 m çim, offset 0.4): ortalama hata **1.9 cm**, p95
+  6.5 cm, max 10 cm, dışarı 0, sınırın **%94**'ü (köşelerin kalanı yuvarlak
+  misinanın erişemeyeceği yer: 0.4·√2 = 0.57 m > 0.5). Kayıt dışa
+  aktarıldı: 652 kare, %99'unda uzman etiketi.
+
+⚠️ Kinematik kameranın kenarı (6b) yapısal olarak doğru ama gerçekçi değil;
+o veriden öğrenen politika boru hattını ve yöntemi kanıtlar, sahayı değil.
+Gerçek beceri gerçek gösterimler + müdahale verisiyle gelir.
+
+**Güvenlik (6d):** `policy_gate` = kendi hız tavanı (ilk sahada 0.3 m/s) ve
+ivme sınırı, kendi ölü adamı (kamera/politika > 0.3 s eskiyse sıfır),
+coğrafi çit (görev alanı dışı = dur), **yalnız `mission_runner` beceriyi
+başlattığında açık** (varsayılan kapalı). twist_mux'ta 20: teleop (100) ve
+batarya kilidi (50) onu ezer; altındaki köprü/ESP32/E-stop/tampon zinciri
+aynen kalır.
+
 ## Sonra: politika robota nasıl takılır
 Algoritma seçilince (adaylar: ACT, Diffusion Policy — ikisi de kamera +
 durum → aksiyon dizisi) öğrenilen politika twist_mux'a teleop ile Nav2

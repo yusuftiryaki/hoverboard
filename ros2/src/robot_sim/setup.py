@@ -23,6 +23,7 @@ setup(
     entry_points={
         "console_scripts": [
             "sim_node = robot_sim.sim_node:main",
+            "edge_expert = robot_sim.edge_expert_node:main",
         ],
     },
 )

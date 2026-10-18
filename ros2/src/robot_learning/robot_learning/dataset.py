@@ -13,7 +13,8 @@ this turns them into one row per frame at `fps`:
                0.5 s), else nav if a /cmd_vel_nav is fresh, else none (= 0)
 
 Three action columns are kept apart on purpose (learning.md decision 3):
-`action` (the label above), `action_executed` (/cmd_vel: what reached the
+`action` (the label above), `action_expert` (the simulator's privileged
+expert, NaN where it said nothing — 6a), `action_executed` (/cmd_vel: what reached the
 bridge after mux, gate and locks) — and `teleop` marks the frames where a
 person held the wheels; in an "intervention" episode those are DAgger's data.
 """
@@ -73,6 +74,7 @@ class Frames:
     action: np.ndarray           # (N, 2) the label
     action_source: np.ndarray    # (N,) int8 index into SOURCES
     action_executed: np.ndarray  # (N, 2) /cmd_vel
+    action_expert: np.ndarray    # (N, 2) /expert/cmd_vel, NaN = no expert
     teleop: np.ndarray           # (N,) bool: a person held the wheels
     image_index: np.ndarray      # (N,) int: index into the image series, -1 = none
     image_age: np.ndarray        # (N,) seconds since that image's stamp
@@ -101,11 +103,13 @@ def build_frames(series: Dict[str, Series], images: Series, fps: float, t0: floa
     action = np.zeros((n, 2))
     source = np.zeros(n, dtype=np.int8)
     executed = np.zeros((n, 2))
+    expert_label = np.full((n, 2), np.nan)
     teleop_held = np.zeros(n, dtype=bool)
     image_index = np.full(n, -1, dtype=np.int64)
     image_age = np.full(n, np.nan)
     teleop, nav = series.get("teleop", Series()), series.get("nav", Series())
     cmd = series.get("executed", Series())
+    expert = series.get("expert", Series())
     for k, t in enumerate(times):
         column = 0
         for name, width in STATE_SERIES:
@@ -124,11 +128,14 @@ def build_frames(series: Dict[str, Series], images: Series, fps: float, t0: floa
         done = _command(cmd, t, t + dt)
         if done is not None:
             executed[k] = done
+        said = _command(expert, t, t + dt)
+        if said is not None:
+            expert_label[k] = said
         shot = images.latest(t)
         if shot is not None:
             image_index[k], image_age[k] = shot[0], t - shot[1]
-    return Frames(times - t0, state, action, source, executed, teleop_held, image_index,
-                  image_age, t0)
+    return Frames(times - t0, state, action, source, executed, expert_label, teleop_held,
+                  image_index, image_age, t0)
 
 
 def marker_frames(markers: Sequence[Dict], ready_after_s: float, fps: float) -> List[Dict]:

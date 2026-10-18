@@ -99,3 +99,13 @@ def test_nonsense_is_refused():
 def test_frames_start_at_ready_only_when_the_clocks_agree(first, last, started, ready, expected):
     from robot_learning.export import start_of_frames
     assert start_of_frames(first, last, started, ready) == expected
+
+
+def test_the_expert_label_is_its_own_column_and_nan_where_it_was_silent():
+    # The expert labels while the policy (here: nav) drives — DAgger (6d).
+    f = frames(nav=[(100.0 + 0.1 * k + 0.05, 0.5, 0.0) for k in range(10)],
+               expert=[(100.15, 0.2, -0.1)])
+    assert f.action[1].tolist() == [0.5, 0.0] and SOURCES[f.action_source[1]] == "nav"
+    assert f.action_expert[1].tolist() == [0.2, -0.1]
+    assert np.isnan(f.action_expert[0]).all()                   # before it spoke
+    assert np.isnan(f.action_expert[-1]).all()                  # stale after 0.5 s
