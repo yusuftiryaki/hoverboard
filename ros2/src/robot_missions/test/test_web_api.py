@@ -9,6 +9,7 @@ import urllib.request
 
 import pytest
 
+from robot_missions.teleop import TeleopGate
 from robot_missions.web_api import WebApi, default_static_dir, make_server
 
 LAT0, LON0 = 41.0, 29.0
@@ -55,12 +56,22 @@ def lawn():
          "properties": {"kind": "area", "name": "cim"}}]}
 
 
+class FakeClock:
+    def __init__(self):
+        self.now = 100.0
+
+    def __call__(self):
+        return self.now
+
+
 @pytest.fixture
 def web(tmp_path):
     robot = FakeRobot()
     site = tmp_path / "site.geojson"
     detected = tmp_path / "detected.json"
-    api = WebApi(str(site), str(detected), robot)
+    clock = FakeClock()
+    gate = TeleopGate(max_linear=0.6, max_angular=1.0, deadman_s=0.3, lease_s=2.0, clock=clock)
+    api = WebApi(str(site), str(detected), robot, gate)
     server = make_server(api, default_static_dir(), "127.0.0.1", 0)
     thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05},
                               daemon=True)
@@ -80,6 +91,7 @@ def web(tmp_path):
             return exc.code, json.loads(exc.read())
 
     call.base = base
+    call.gate, call.clock, call.api = gate, clock, api
     yield call, robot, site, detected
     server.shutdown()
     server.server_close()
@@ -88,7 +100,7 @@ def web(tmp_path):
 def test_the_page_and_its_assets_are_served(web):
     call, *_ = web
     for path, marker in (("/", b"<title>Robot Saha</title>"), ("/app.js", b"/api/site"),
-                         ("/style.css", b"#panel")):
+                         ("/style.css", b"#panel"), ("/drive.js", b"/api/teleop")):
         status, body = call("GET", path)
         assert status == 200 and marker in body, path
 
@@ -269,3 +281,64 @@ def test_the_live_stream_is_mjpeg_frame_after_frame(web):
     assert all(b"Content-Type: image/jpeg" in p for p in parts[:2])
     # Different frames, not the same one repeated.
     assert parts[0].split(b"\r\n\r\n", 1)[1][:8] != parts[1].split(b"\r\n\r\n", 1)[1][:8]
+
+
+# --- teleop (docs/missions.md 5a) -----------------------------------------------
+
+def test_driving_from_the_page_reaches_the_gate_scaled_to_its_limits(web):
+    call, *_ = web
+    status, lease = call("POST", "/api/teleop/acquire", {})
+    assert status == 200 and lease["max_linear"] == 0.6 and lease["lease_s"] == 2.0
+    status, _ = call("POST", "/api/teleop", {"token": lease["token"], "linear": 0.5,
+                                             "angular": -1.0})
+    assert status == 200
+    assert call.gate.output() == pytest.approx((0.3, -1.0))
+    teleop = call("GET", "/api/status")[1]["teleop"]
+    assert teleop["held"] and teleop["active"] and teleop["linear"] == pytest.approx(0.3)
+
+
+def test_a_second_tab_cannot_take_the_wheels_or_drive_without_the_token(web):
+    call, *_ = web
+    token = call("POST", "/api/teleop/acquire", {})[1]["token"]
+    status, body = call("POST", "/api/teleop/acquire", {})
+    assert status == 409 and "someone else" in body["error"]
+    for bad in ({"linear": 1.0, "angular": 0.0}, {"token": "nope", "linear": 1.0, "angular": 0.0}):
+        assert call("POST", "/api/teleop", bad)[0] == 409
+    assert call.gate.output() == (0.0, 0.0), "the holder's robot must stay stopped"
+    assert call("POST", "/api/teleop/release", {"token": "nope"})[1] == {"released": False}
+    assert call("POST", "/api/teleop/release", {"token": token})[1] == {"released": True}
+    assert call.gate.output() is None
+    assert call("POST", "/api/teleop/acquire", {})[0] == 200
+
+
+@pytest.mark.parametrize("linear", ["1", None, True, float("nan"), [1]])
+def test_a_malformed_command_is_rejected_and_changes_nothing(web, linear):
+    call, *_ = web
+    token = call("POST", "/api/teleop/acquire", {})[1]["token"]
+    call("POST", "/api/teleop", {"token": token, "linear": 0.5, "angular": 0.0})
+    # json.dumps writes NaN as a bare NaN token, which Python's json reads back.
+    status, body = call("POST", "/api/teleop", {"token": token, "linear": linear, "angular": 0})
+    assert status == 400 and "linear" in body["error"]
+    assert call.gate.output() == pytest.approx((0.3, 0.0))
+
+
+def test_a_page_that_goes_quiet_stops_the_robot_then_lets_go(web):
+    call, *_ = web
+    token = call("POST", "/api/teleop/acquire", {})[1]["token"]
+    call("POST", "/api/teleop", {"token": token, "linear": 1.0, "angular": 0.0})
+    call.clock.now += 0.29
+    assert call.gate.output() == (0.6, 0.0)
+    call.clock.now += 0.02                  # past deadman_s: zero, lease still held
+    assert call.gate.output() == (0.0, 0.0)
+    call.clock.now += 1.7                   # 2.01 s since the command: lease gone
+    assert call.gate.output() is None
+    status, body = call("POST", "/api/teleop", {"token": token, "linear": 1.0, "angular": 0.0})
+    assert status == 409 and "acquire" in body["error"]
+
+
+def test_teleop_turned_off_on_the_robot_says_so(web):
+    call, *_ = web
+    call.api.teleop = None
+    status, body = call("POST", "/api/teleop/acquire", {})
+    assert status == 409 and "turned off" in body["error"]
+    assert call("GET", "/api/status")[1]["teleop"] is None

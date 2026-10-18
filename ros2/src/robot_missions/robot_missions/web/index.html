@@ -24,6 +24,7 @@
       <button data-tab="site" class="active">Saha</button>
       <button data-tab="mission">Görev</button>
       <button data-tab="detected">Tespitler <span id="detected-count"></span></button>
+      <button data-tab="drive">Sür</button>
     </nav>
 
     <section id="tab-site" class="tab active">
@@ -75,10 +76,27 @@
       <ul id="detected-list"></ul>
       <div id="detected-message" class="message"></div>
     </section>
+
+    <section id="tab-drive" class="tab">
+      <p class="hint">Robotu buradan sür: topu sürükle ya da ok tuşları / WASD. Bırakınca
+        robot durur; bağlantı koparsa 0.3 sn içinde kendisi durur. Görev çalışıyorsa sürüş
+        Nav2'yi ezer — uzun süreceksen önce görevi duraklat.</p>
+      <div class="row">
+        <button id="drive-start" class="primary">Sürüşü al</button>
+        <button id="drive-stop" class="danger" hidden>Bırak</button>
+        <span id="drive-link" class="hint"></span>
+      </div>
+      <div id="drive-pad"><div id="drive-knob"></div></div>
+      <label>Hız <span id="drive-speed-value">50%</span>
+        <input id="drive-speed" type="range" min="10" max="100" step="10" value="50"></label>
+      <p id="drive-limits" class="hint"></p>
+      <div id="drive-message" class="message"></div>
+    </section>
   </aside>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.min.js"></script>
   <script src="app.js"></script>
+  <script src="drive.js"></script>
 </body>
 </html>

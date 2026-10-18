@@ -113,7 +113,9 @@ Laptop tarayıcı (uydu haritası)        Pi
    truth'tan, GPS gürültüsü açık/kapalı.
 4. ✅ **Web arayüzü** (4a): çizim, görev formu, canlı durum; tespit edilen
    engelleri onaylama/etiketleme.
-5. **Öğret-kaydet**: web teleop + sınır/waypoint/istasyon kaydı.
+5. **Öğret-kaydet** (tasarım 2026-10-18, aşağıda "5. aşama"): 5a web teleop ✅,
+   5b sınır/rota/istasyon/etiketli nokta kaydı, 5c öğrenme modu kaydedici
+   (taklit ile öğrenme verisi, `docs/learning.md`), 5d dışa aktarma.
 
 ## 1. aşama: ne yapıldı, nasıl kullanılır
 - **`robot_missions` paketi** (yeni): `site.py` (okuyucu + doğrulama),
@@ -442,6 +444,84 @@ modellerinde (COCO) "ağaç" ve "taş" sınıfı yok. Plan:
 
 ⚠️ Bedel: temas haritası öğrenmek için önce **çarpmayı** gerektirir. Yavaş hız
 ve misinalı aparatla kabul edilebilir; bıçakla olmazdı.
+
+## 5. aşama: öğret-kaydet (tasarım, 2026-10-18)
+Kullanıcı istekleri: sahada robotu sayfadan sürerek **sınır, rota, istasyon ve
+etiketli özel nokta** kaydetmek; ayrıca **öğrenme modu** — operatör "şu görevi
+yapacağız" deyince robotun tüm durumu ve sensörleri ileride bir taklit ile
+öğrenme (IL) algoritmasını eğitmek için kaydedilsin. 5c/5d'nin tasarımı
+`docs/learning.md`'de; burada 5a ve 5b.
+
+Dilimler, sırayla (her biri ayrı PR, yığınsız):
+| dilim | ne | neden bu sırada |
+|---|---|---|
+| **5a** | Sayfadan teleop | 5b ve 5c'nin ikisi de buna dayanıyor; motor komut yolunda olduğu için önce ve tek başına |
+| **5b** | İz/nokta kaydı → saha dosyası; `poi` türü | |
+| **5c** | Bölüm kaydedici (MCAP) + sayfa kontrolleri | 5a'dan sonra 5b ile paralel gidebilir |
+| **5d** | MCAP → eğitim formatı (laptopta, çevrimdışı) | algoritma seçilince |
+
+### ✅ 5a: sayfadan teleop (2026-10-18)
+Sayfada **Sür** sekmesi: sürüklenen top (dokunmatikte de) ya da ok tuşları /
+WASD, hız sürgüsü (%10–100, tavanın oranı). Kod: `teleop.py` (kapı, ROS'suz),
+`web_api.py` (`/api/teleop*`), `web_ui.py` (20 Hz yayın), `web/drive.js`.
+- Tarayıcı sürüş modundayken **10 Hz** `POST /api/teleop` yollar (çubuk
+  bırakılmışsa da: sıfır). `web_ui` `/cmd_vel_teleop`'a 20 Hz yayınlar; twist_mux
+  önceliği 100 → Nav2'yi ezer. Batarya kilidi (öncelik 50) yalnız Nav2'yi
+  maskeler, teleop'u değil (twist_mux.yaml): bitik bataryalı robot elle eve
+  sürülebilir.
+- **WebSocket değil, düz HTTP:** sunucu stdlib `http.server`; WebSocket ya yeni
+  bağımlılık ya elle çerçeveleme ister. Güvenliği taşıyan şey taşıma değil,
+  sunucu tarafındaki **ölü adam** — iki yolda da aynı.
+- **Ölü adam (sunucuda, saat `web_ui`'da):**
+  | son komuttan beri | `web_ui` ne yayınlar |
+  |---|---|
+  | < `deadman_s` (0.3 s) | komut (kırpılmış) |
+  | 0.3 s – `lease_s` (2 s) | **sıfır** — bağlantı hıçkırığında robot hemen durur, köprünün 0.5 s'sine kalmaz |
+  | > `lease_s` | **hiçbir şey**, kira düşer → mux Nav2'ye döner |
+  Altındaki zincir aynen duruyor: mux zaman aşımı 0.5 s, köprü `cmd_timeout`
+  0.5 s, ESP32 watchdog 200 ms, E-stop, tampon vetosu.
+- **Hız tavanı sunucuda:** `max_linear` 0.6 m/s, `max_angular` 1.0 rad/s
+  (köprünün 1.0 / 1.5'inin altında). Tarayıcının yolladığı sayı ±1'lik oran; m/s
+  değil — sayfa ne yollarsa yollasın tavanı aşamaz. NaN/sonsuz/yanlış tip → 400.
+- **Kira (tek sürücü):** giriş yok, iki sekme aynı anda süremesin. `POST
+  /api/teleop/acquire` bir jeton verir; komut jetonsuz/yanlış jetonla → 409.
+  Kira `lease_s` boyunca komut gelmezse kendiliğinden düşer (kapanan sekme
+  robotu kilitlemez). Başkası sürerken alma isteği reddedilir.
+- **Görev sırasında sürmek serbest** (öğrenme modunun "müdahale" verisi bu,
+  learning.md). Mux zaten teleop'u öne alıyor; 20 sn'den uzun tutarsan Nav2'nin
+  ilerleme denetçisi hedefi düşürür, mission_runner bunu başarısız bacak sayar.
+  Elle uzun süreceksen önce görevi **duraklat**.
+- `web_ui` `teleop/state` (String JSON: kira var mı, aktif mi, komut) yayınlar —
+  bölüm kaydında "o an kim sürüyordu" sorusunun cevabı.
+- Sayfa sekme gizlenince sürüşü bırakır: gizli sekmenin zamanlayıcısı ~1 Hz'e
+  düşer, robot komut ile ölü adam arasında sarsılırdı.
+- **Ölçülen** (`test_web_stack.py`, gerçek mux + köprü + kinematik dünya, 3
+  koşu): yarım çubuk 3 sn → `/cmd_vel` tam 0.30 m/s, robot 0.86–0.88 m düz;
+  sayfa susunca ilk sıfır **0.32 s**'de (köprünün 0.5 s'si değil, bizim 0.3 s),
+  robot **0.12 m**'de duruyor; kira bitince `/cmd_vel_teleop` susuyor. Tam
+  hızda (0.6 m/s) kopan Wi-Fi'ın bedeli bunun yaklaşık iki katı.
+  Headless Chromium'da da sürüldü (tuş, top, ikinci sekme reddi, JS hatası yok).
+- Testler: `test_teleop.py` (kapı, adım adım saat), `test_web_api.py` (HTTP).
+
+### 5b: sınır, rota, istasyon, etiketli nokta
+Hepsi aday geometri üretir; **kaydetme mevcut yoldan** (sayfada önizle →
+düzelt → "Sahayı kaydet" → robotun kendi okuyucusu doğrular). Karar 3 korunur.
+- **İz kaydı (alan, yasak bölge, rota):** "İzi başlat" → robot sürülürken her
+  0.5 m'de ya da 15°'lik yön değişiminde `/gps/filtered` örneği; "Bitir" →
+  Douglas–Peucker sadeleştirme (tolerans ~0.3 m), alan/yasak bölgede halka
+  kapatılır.
+- **Nokta bırak:** robot durur, N sn (varsayılan 10) ortalama alınır. İzin
+  köşelerinde ve istasyonda kullanılır. NEO-6M gezinmesi dakikalar ölçeğinde
+  olduğu için ortalama gürültüyü azaltır, **kaymayı azaltmaz** (karar 1).
+- **İstasyon:** robot yanaşmışken nokta bırak + yön `map→base_link`'ten pusula
+  derecesine. ⚠️ ENU↔pusula dönüşümü A6'nın olduğu yer: test tam tur süpürür.
+- **Etiketli nokta — yeni tür `poi`:** Point + `label` (serbest metin; sayfa
+  öneri listesi sunar: sınır taşı, kuyu, direk, musluk, vana, kapı, ağaç) +
+  isteğe bağlı `note`. İsteğe bağlı `radius_m` verilirse **engel olarak da**
+  haritaya çizilir (kuyu, direk fiziksel); verilmezse sadece işaret. `goto`
+  görevi bir `poi`'ye adıyla gidebilir.
+- **Ölçüm (sim, ground truth):** teleop'la kare alan sürülür → kaydedilen
+  poligon ile gerçek kare arasındaki Hausdorff mesafesi, sessiz GPS ve NEO-6M.
 
 ## Bilinen açıklar
 - ✅ ~~İstasyon iki yerde~~ — **3b'de kapandı** (aşağıda).

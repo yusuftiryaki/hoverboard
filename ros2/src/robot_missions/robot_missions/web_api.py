@@ -13,6 +13,9 @@
     GET  /api/camera/stream         the camera live, MJPEG (multipart/x-mixed-replace)
     POST /api/detected/<i>/confirm  {"name": ..., "radius_m": ...} -> a site obstacle
     POST /api/detected/<i>/drop     forget it
+    POST /api/teleop/acquire        {} -> {"token": ..., limits}; 409 if someone else drives
+    POST /api/teleop                {"token", "linear", "angular"} ratios in [-1, 1], ~10 Hz
+    POST /api/teleop/release        {"token"}
 
 Edits are files: the site file and the detections file, each written
 atomically, the site's previous version kept as site.geojson.bak. After each
@@ -21,7 +24,8 @@ mission_runner reads the site afresh at every start.
 
 ⚠️ No authentication. Anyone on the robot's network can start a mission. It
 listens on the LAN because a laptop in the garden is the point; keep the robot
-off networks you do not control (docs/missions.md, 4. aşama).
+off networks you do not control (docs/missions.md, 4. aşama). The teleop
+lease (teleop.py) stops two tabs fighting over the wheels; it is not security.
 """
 
 from __future__ import annotations
@@ -35,11 +39,12 @@ import threading
 import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from robot_missions.detected import images_dir, safe_image_name
 from robot_missions.mission import TASK_TYPES
 from robot_missions.site import SiteError, parse_site
+from robot_missions.teleop import TeleopConflict, TeleopError, TeleopGate
 
 STATIC_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
                 ".css": "text/css; charset=utf-8"}
@@ -63,11 +68,49 @@ def _atomic_write(path: str, text: str) -> None:
 
 
 class WebApi:
-    def __init__(self, site_file: str, detected_file: str, backend):
+    def __init__(self, site_file: str, detected_file: str, backend,
+                 teleop: Optional[TeleopGate] = None):
         self.site_file = site_file
         self.detected_file = detected_file
         self.backend = backend
+        self.teleop = teleop            # None: driving from the page is off
         self._lock = threading.Lock()   # one file edit at a time
+
+    def status(self) -> Dict[str, Any]:
+        out = dict(self.backend.status())
+        out["teleop"] = None if self.teleop is None else self.teleop.state()
+        return out
+
+    # --- teleop ---------------------------------------------------------------
+
+    def _gate(self) -> TeleopGate:
+        if self.teleop is None:
+            raise ApiError("driving from the page is turned off on the robot",
+                           HTTPStatus.CONFLICT)
+        return self.teleop
+
+    def teleop_acquire(self) -> Dict[str, Any]:
+        gate = self._gate()
+        try:
+            return {"token": gate.acquire(), **gate.limits()}
+        except TeleopConflict as exc:
+            raise ApiError(str(exc), HTTPStatus.CONFLICT) from exc
+
+    def teleop_command(self, body: Any) -> Dict[str, Any]:
+        gate = self._gate()
+        if not isinstance(body, dict):
+            raise ApiError("body must be a JSON object")
+        try:
+            gate.command(body.get("token"), body.get("linear"), body.get("angular"))
+        except TeleopError as exc:
+            raise ApiError(str(exc)) from exc
+        except TeleopConflict as exc:
+            raise ApiError(str(exc), HTTPStatus.CONFLICT) from exc
+        return {"ok": True}
+
+    def teleop_release(self, body: Any) -> Dict[str, Any]:
+        token = body.get("token") if isinstance(body, dict) else None
+        return {"released": self._gate().release(token)}
 
     # --- site -----------------------------------------------------------------
 
@@ -214,6 +257,9 @@ def make_handler(api: WebApi, static_dir: str):
             lambda m, body: api.confirm_detected(int(m.group(1)), body),
         re.compile(r"^/api/detected/(\d+)/drop$"):
             lambda m, body: api.drop_detected(int(m.group(1))),
+        re.compile(r"^/api/teleop$"): lambda m, body: api.teleop_command(body),
+        re.compile(r"^/api/teleop/acquire$"): lambda m, body: api.teleop_acquire(),
+        re.compile(r"^/api/teleop/release$"): lambda m, body: api.teleop_release(body),
     }
 
     class Handler(BaseHTTPRequestHandler):
@@ -312,7 +358,7 @@ def make_handler(api: WebApi, static_dir: str):
             if path == "/api/task_types":
                 return self._guard(api.task_types)
             if path == "/api/status":
-                return self._guard(api.backend.status)
+                return self._guard(api.status)
             if path == "/api/detected":
                 return self._guard(api.get_detected)
             self._static(path)

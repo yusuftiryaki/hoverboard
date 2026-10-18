@@ -651,7 +651,7 @@ kalır ve gerçek yığın her iki dünyada da devrededir.
 > `test_yaw_drifts_without_a_magnetometer` bunu kalıcı olarak belgeliyor.
 
 ## ŞU AN NEREDEYIZ / SIRADAKİ İŞ
-*(son güncelleme: 2026-10-16 — görev katmanı 1. aşama; twist_mux (PR #5) ve
+*(son güncelleme: 2026-10-18 — 5. aşama tasarımı + 5a web teleop; 2026-10-16 — görev katmanı 1. aşama; twist_mux (PR #5) ve
 SP3–SP5; altındaki "A5'ten önceki durum" sayıları 2026-09-08'den)*
 
 ### 🆕 Görev katmanı (2026-10-16) — tasarım + 1. aşama: `docs/missions.md`
@@ -696,9 +696,20 @@ Alanlar hem **masada haritadan çizilecek** hem **öğret-kaydet** ile kaydedile
   götürüyor). Ayrıntı missions.md 3c.
 - ✅ **4. aşama — web arayüzü** `http://<robot>:8080/` (çizim, görev formu,
   canlı durum, tespit onayı). ⚠️ Giriş yok — robotu güvenmediğin ağa bağlama.
-- **Sıradaki: 5. aşama — öğret-kaydet** (sayfadan teleop + sınır/rota/istasyon
-  kaydı). Sahada ilk kullanım için `robot.service`'e `site_file:=` eklenmeli
-  (deployment.md adım 8).
+- **5. aşama — öğret-kaydet + öğrenme modu (tasarım 2026-10-18).** Kullanıcı
+  istekleri: sayfadan sürerek sınır/rota/istasyon/**etiketli nokta** (`poi`,
+  serbest metin + öneri listesi) kaydı; ve **taklit ile öğrenme verisi** —
+  "öğrenme modu"nda robotun tüm durumu + sensörleri rosbag2/MCAP bölümleri
+  olarak kaydedilecek. Öğrenilecek şey "tüm görev" (kenar dibi, ağaç etrafı,
+  yabani ota yönelme) → kamera merkezde, varsayılan açık, gizlilik kısıtı yok;
+  depolama için donanım serbest (USB 3 SSD önerildi). Tasarım: missions.md
+  "5. aşama" (5a/5b) ve **`docs/learning.md`** (5c/5d).
+  - ✅ **5a — sayfadan teleop** (ölü adam 0.3 s, kira 2 s, tavan 0.6 m/s /
+    1.0 rad/s, ölçüldü: sayfa susunca robot 0.12 m'de duruyor).
+  - **Sıradaki: 5b** (iz/nokta kaydı, `poi` türü) ya da **5c** (bölüm
+    kaydedici) — ikisi paralel gidebilir.
+  - Sahada ilk kullanım için `robot.service`'e `site_file:=` eklenmeli
+    (deployment.md adım 8).
 
 ### A5 (CI) — çalışıyor, ve ilk koşuda gerçek bir hata yakaladı
 `scripts/ci.sh` her şeyi koşturur, `.github/workflows/ci.yml` sadece onu
