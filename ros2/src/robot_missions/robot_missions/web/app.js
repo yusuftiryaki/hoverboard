@@ -3,7 +3,8 @@
 "use strict";
 
 const KIND_LABEL = { area: "Alan", keepout: "Girilmez", obstacle: "Engel",
-                     station: "İstasyon", route: "Rota" };
+                     station: "İstasyon", route: "Rota", poi: "Nokta" };
+const MARKER_KINDS = ["station", "poi"];      // dragged whole, never vertex-edited
 const KIND_STYLE = {
   area: { color: "#2fb35a", weight: 2, fillOpacity: 0.15 },
   keepout: { color: "#d43a3a", weight: 2, fillOpacity: 0.3 },
@@ -67,7 +68,7 @@ function offsetLatLng(latlng, bearingDeg, meters) {
 
 function uniqueName(kind) {
   const base = { area: "alan", keepout: "girilmez", obstacle: "engel",
-                 station: "home", route: "rota" }[kind];
+                 station: "home", route: "rota", poi: "nokta" }[kind];
   if (kind === "station" && !features.some((f) => f.kind === "station" && f.name === "home")) {
     return "home";        // battery_supervisor's dock_id: the station it docks at
   }
@@ -79,7 +80,7 @@ function uniqueName(kind) {
 
 // --- site: layers <-> features ---------------------------------------------
 function styleFor(feature) {
-  if (feature.kind === "station") return;
+  if (MARKER_KINDS.includes(feature.kind)) return;    // markers have no path style
   feature.layer.setStyle(KIND_STYLE[feature.kind]);
 }
 
@@ -112,7 +113,9 @@ function layerFromGeoJSON(feature) {
   if (g.type === "Point") {
     const at = [g.coordinates[1], g.coordinates[0]];
     if (kind === "obstacle") return L.circle(at, { radius: feature.properties.radius_m || 0.5 });
-    return L.marker(at, { draggable: false });
+    const marker = L.marker(at, { draggable: false });
+    if (kind === "poi") marker.bindTooltip(feature.properties.label || "nokta");
+    return marker;
   }
   throw new Error("unsupported geometry " + g.type);
 }
@@ -125,7 +128,12 @@ function toGeoJSON(feature) {
     geometry = { type: "Point", coordinates: [c.lng, c.lat] };
     properties.radius_m = Math.round(feature.layer.getRadius() * 100) / 100;
   } else {
-    geometry = feature.layer.toGeoJSON().geometry;
+    geometry = feature.layer.toGeoJSON(8).geometry;   // 6 (default) rounds ~10 cm
+  }
+  if (feature.kind === "poi") {
+    // Optional: a radius makes the point an obstacle too (site.py).
+    if (properties.radius_m === undefined || properties.radius_m === null) delete properties.radius_m;
+    if (!properties.note) delete properties.note;
   }
   return { type: "Feature", geometry, properties };
 }
@@ -176,12 +184,18 @@ function select(feature) {
   editor.hidden = false;
   $("fe-title").textContent = KIND_LABEL[feature.kind];
   $("fe-name").value = feature.name;
-  $("fe-radius-row").hidden = feature.kind !== "obstacle";
+  $("fe-radius-row").hidden = !["obstacle", "poi"].includes(feature.kind);
   $("fe-heading-row").hidden = feature.kind !== "station";
+  $("fe-label-row").hidden = $("fe-note-row").hidden = feature.kind !== "poi";
   if (feature.kind === "obstacle") $("fe-radius").value = feature.layer.getRadius().toFixed(2);
+  if (feature.kind === "poi") {
+    $("fe-radius").value = feature.props.radius_m ?? "";
+    $("fe-label").value = feature.props.label || "";
+    $("fe-note").value = feature.props.note || "";
+  }
   if (feature.kind === "station") $("fe-heading").value = feature.props.heading_deg || 0;
   if (feature.layer.pm) {
-    if (feature.kind === "station") feature.layer.pm.enableLayerDrag();
+    if (MARKER_KINDS.includes(feature.kind)) feature.layer.pm.enableLayerDrag();
     else feature.layer.pm.enable({ allowSelfIntersection: false });
   }
 }
@@ -192,6 +206,15 @@ $("fe-apply").onclick = () => {
   if (!name) return say("site-message", "Ad boş olamaz.", "error");
   selected.name = name;
   if (selected.kind === "obstacle") selected.layer.setRadius(parseFloat($("fe-radius").value) || 0.5);
+  if (selected.kind === "poi") {
+    const label = $("fe-label").value.trim();
+    if (!label) return say("site-message", "Noktanın etiketi boş olamaz (ör. kuyu).", "error");
+    selected.props.label = label;
+    selected.props.note = $("fe-note").value.trim();
+    const radius = parseFloat($("fe-radius").value);
+    selected.props.radius_m = radius > 0 ? radius : null;
+    selected.layer.setTooltipContent(label);
+  }
   if (selected.kind === "station") {
     selected.props.heading_deg = ((parseFloat($("fe-heading").value) || 0) % 360 + 360) % 360;
     stationArrow(selected);
@@ -227,6 +250,7 @@ map.on("pm:create", (e) => {
   const props = {};
   if (kind === "obstacle") layer = L.circle(e.layer.getLatLng(), { radius: 0.5 });
   if (kind === "station") props.heading_deg = 0;
+  if (kind === "poi") { props.label = ""; layer.bindTooltip("nokta"); }
   const feature = addFeature(kind, layer, uniqueName(kind), props);
   select(feature);
 });
@@ -260,13 +284,15 @@ function renderTargets() {
   const select = $("m-target");
   const keep = select.value;
   select.innerHTML = "";
-  const pool = type.on === "area" ? "area" : type.on === "route" ? "route" : null;
-  $("m-target-row").hidden = !pool;
+  const pool = type.on === "area" ? ["area"] : type.on === "route" ? ["route"]
+             : ["poi", "station"];
+  $("m-target-row").hidden = false;
   $("m-goto-hint").hidden = type.on !== "target";
-  if (!pool) return;
-  for (const f of features.filter((x) => x.kind === pool)) {
+  if (type.on === "target") select.append(new Option("— haritada tıkla —", ""));
+  for (const f of features.filter((x) => pool.includes(x.kind))) {
     const option = document.createElement("option");
-    option.value = option.textContent = f.name;
+    option.value = type.on === "target" ? f.kind + ":" + f.name : f.name;
+    option.textContent = type.on === "target" ? `${KIND_LABEL[f.kind]}: ${f.name}` : f.name;
     select.appendChild(option);
   }
   if ([...select.options].some((o) => o.value === keep)) select.value = keep;
@@ -275,7 +301,7 @@ function renderTargets() {
 function renderParams() {
   const type = taskTypes[$("m-type").value];
   $("m-describe").textContent = { area: "Sahadaki bir alanda çalışır.",
-    route: "Sahadaki bir rotayı sürer.", target: "Haritada tıkladığın noktaya gider." }[type.on] || "";
+    route: "Sahadaki bir rotayı sürer.", target: "Haritada tıkladığın ya da listeden seçtiğin noktaya gider." }[type.on] || "";
   const box = $("m-params");
   box.innerHTML = "";
   for (const [key, p] of Object.entries(type.params)) {
@@ -342,8 +368,15 @@ $("m-start").onclick = async () => {
   try {
     const spec = { type: name, params: readParams() };
     if (type.on === "target") {
-      if (!gotoTarget) throw new Error("Önce haritada hedef noktaya tıkla.");
-      spec.target = gotoTarget;
+      const picked = features.find((f) => f.kind + ":" + f.name === $("m-target").value);
+      if (picked) {
+        const at = picked.layer.getLatLng();
+        spec.target = [at.lng, at.lat];
+      } else if (gotoTarget) {
+        spec.target = gotoTarget;
+      } else {
+        throw new Error("Önce haritada hedef noktaya tıkla ya da listeden bir nokta seç.");
+      }
     } else {
       if (!$("m-target").value) throw new Error("Bu görev için sahada uygun bir " +
         (type.on === "area" ? "alan" : "rota") + " yok — önce çiz ve kaydet.");
@@ -384,6 +417,7 @@ async function pollStatus() {
     $("battery").textContent = s.battery && s.battery.percentage !== null
       ? `🔋 %${Math.round(s.battery.percentage * 100)}` : "";
     $("mission-status").textContent = m ? JSON.stringify(m, null, 1) : "";
+    if (typeof onTeachStatus === "function") onTeachStatus(s.teach);
   } catch (e) {
     $("status-line").textContent = "Robota ulaşılamıyor: " + e.message;
   }

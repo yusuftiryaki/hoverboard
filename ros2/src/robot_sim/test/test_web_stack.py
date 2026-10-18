@@ -11,6 +11,7 @@ import json
 import math
 import threading
 import time
+import urllib.error
 import urllib.request
 
 import pytest
@@ -54,8 +55,12 @@ def http(method, path, body=None, timeout=10):
     data = None if body is None else json.dumps(body).encode()
     request = urllib.request.Request(BASE + path, data=data, method=method,
                                      headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read())
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read())
+    except urllib.error.HTTPError as exc:
+        # The robot says WHY in the body; without it a failure reads "400".
+        raise AssertionError(f"{method} {path} -> {exc.code}: {exc.read().decode()}") from None
 
 
 def wait_http(predicate, timeout, what):
@@ -114,6 +119,21 @@ def test_the_web_backend_sees_the_robot_and_edits_reach_the_map(web_stack):
     assert cell(after, 4.0, 2.4) != OCCUPIED
 
 
+def yaw_of(odometry):
+    q = odometry.pose.pose.orientation
+    return math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+
+
+def metres(lon, lat):
+    """Inverse of lonlat(): sim_world east/north of the datum."""
+    return (math.radians(lon - DATUM_LON) * EARTH_RADIUS_M * math.cos(math.radians(DATUM_LAT)),
+            math.radians(lat - DATUM_LAT) * EARTH_RADIUS_M)
+
+
+def compass_error(a, b):
+    return abs((a - b + 180.0) % 360.0 - 180.0)
+
+
 class Watcher:
     """Records /cmd_vel, /cmd_vel_teleop, teleop/state and /ground_truth with
     wall-clock arrival times, spinning in its own thread while the test talks
@@ -133,7 +153,7 @@ class Watcher:
         self.node.create_subscription(
             Odometry, "/ground_truth",
             lambda m: self.truth.append((stamp(), m.pose.pose.position.x,
-                                         m.pose.pose.position.y)), 50)
+                                         m.pose.pose.position.y, yaw_of(m))), 50)
         self.executor = SingleThreadedExecutor()
         self.executor.add_node(self.node)
         self.thread = threading.Thread(target=self.executor.spin, daemon=True)
@@ -196,5 +216,154 @@ def test_driving_from_the_page_moves_the_robot_and_silence_stops_it(web_stack):
         assert not late, f"/cmd_vel_teleop still published {len(late)} times after the lease"
         assert watch.states and watch.states[-1][1]["held"] is False
         assert any(s["active"] for _, s in watch.states), "teleop/state never saw driving"
+    finally:
+        watch.close()
+
+
+class Driver:
+    """Drives the robot from the page's API, closed-loop on /ground_truth —
+    the test plays a careful person with perfect eyes."""
+
+    def __init__(self, watch):
+        self.watch = watch
+        self.token = http("POST", "/api/teleop/acquire", {})["token"]
+
+    def send(self, linear, angular):
+        http("POST", "/api/teleop", {"token": self.token, "linear": linear, "angular": angular})
+        time.sleep(0.1)
+
+    def pose(self):
+        return self.watch.truth[-1][1:]
+
+    def to(self, x, y, timeout=60.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            px, py, yaw = self.pose()
+            if math.hypot(x - px, y - py) < 0.15:
+                return
+            error = (math.atan2(y - py, x - px) - yaw + math.pi) % (2 * math.pi) - math.pi
+            turn = max(-1.0, min(1.0, 2.0 * error))
+            self.send(1.0 if abs(error) < 0.15 else 0.0, turn)
+        raise AssertionError(f"did not reach ({x}, {y}); at {self.pose()}")
+
+    def stop(self, seconds):
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            self.send(0.0, 0.0)
+
+
+def test_the_page_heading_is_the_true_compass_all_the_way_round(web_stack):
+    """A6's lesson: a mirrored or offset heading looks perfect in ONE
+    direction. Turn on the spot through a full circle and compare /api/status
+    against /ground_truth throughout."""
+    web_stack([LAWN], *QUIET_GPS)
+    wait_http(lambda s: s["robot"] is not None and s["robot"]["heading_deg"] is not None,
+              60.0, "a heading")
+    watch = Watcher()
+    try:
+        deadline = time.monotonic() + 15.0
+        while not watch.truth and time.monotonic() < deadline:
+            time.sleep(0.1)
+        driver = Driver(watch)
+        errors, start, turned, last = [], time.monotonic(), 0.0, watch.truth[-1][3]
+        while turned < 2 * math.pi + 0.5 and time.monotonic() - start < 60.0:
+            driver.send(0.0, 0.5)                       # 0.5 rad/s, left
+            yaw = watch.truth[-1][3]
+            turned += (yaw - last + math.pi) % (2 * math.pi) - math.pi
+            last = yaw
+            if int(time.monotonic() * 2) % 2 == 0:      # sample ~ every 0.5 s
+                heading = http("GET", "/api/status")["robot"]["heading_deg"]
+                truth = (90.0 - math.degrees(watch.truth[-1][3])) % 360.0
+                errors.append((truth, compass_error(heading, truth)))
+        driver.stop(0.5)
+        assert turned >= 2 * math.pi, f"only turned {math.degrees(turned):.0f} deg"
+        covered = {int(t // 45) for t, _ in errors}
+        assert covered == set(range(8)), f"sweep missed octants: {sorted(covered)}"
+        # Sampled while turning at 0.5 rad/s: the status is up to ~0.1 s old
+        # (tf + HTTP), i.e. ~3 deg of lag on top of the EKF's own error.
+        worst = max(errors, key=lambda e: e[1])
+        assert worst[1] < 8.0, f"compass off by {worst[1]:.1f} deg at true {worst[0]:.0f}"
+    finally:
+        watch.close()
+
+
+@pytest.mark.parametrize("gps", ["quiet", "neo6m"])
+def test_driving_round_a_lawn_records_it_and_a_station_is_measured(web_stack, gps):
+    """5b's acceptance, against /ground_truth: the trace's polygon vs the path
+    the robot really drove, and an averaged station vs the true pose.
+
+    quiet: the recorder itself — the polygon sits on the driven path.
+    neo6m: the default wandering GPS. The SHAPE (odometry) must survive it —
+    compared after moving the centroids together — while the placement is off
+    by whatever the GPS was off during the drive (reported, not asserted:
+    decision 1). Before the shape came from odom, this drive crossed itself.
+    """
+    from shapely import affinity
+    from shapely.geometry import LineString, Point, Polygon
+
+    web_stack([LAWN], *(QUIET_GPS if gps == "quiet" else ()))
+    wait_http(lambda s: s["robot"] is not None and s["teach"] is not None, 60.0, "teach")
+    watch = Watcher()
+    try:
+        deadline = time.monotonic() + 15.0
+        while not watch.truth and time.monotonic() < deadline:
+            time.sleep(0.1)
+        driver = Driver(watch)
+        corners = [(6.0, 0.0), (6.0, 4.0), (0.0, 4.0), (0.0, 0.0)]
+        http("POST", "/api/teach/trace", {"kind": "area"})
+        began = time.monotonic()
+        for x, y in corners:
+            driver.to(x, y)
+        ended = time.monotonic()
+        result = http("POST", "/api/teach/finish", {})["result"]
+        assert result["properties"] == {"kind": "area"}, result
+        ring = [metres(*p) for p in result["geometry"]["coordinates"][0]]
+        path = LineString([(p[1], p[2]) for p in watch.truth if began <= p[0] <= ended])
+        recorded = Polygon(ring)
+        driven = Polygon(path.coords)
+        offset = math.hypot(recorded.centroid.x - driven.centroid.x,
+                            recorded.centroid.y - driven.centroid.y)
+        shape = affinity.translate(recorded, driven.centroid.x - recorded.centroid.x,
+                                   driven.centroid.y - recorded.centroid.y)
+
+        def gap(polygon):
+            # Both ways, by hand. ⚠️ shapely's hausdorff_distance is over
+            # vertices (a 4-corner ring vs a dense path read 7.2 m), and with
+            # densify= it still read 7.2 m for a ring 0.04 m away.
+            boundary = polygon.exterior
+            return max(max(boundary.distance(Point(c)) for c in path.coords),
+                       max(path.distance(boundary.interpolate(i / 1000, normalized=True))
+                           for i in range(1001)))
+
+        print(f"\nMEASURED trace ({gps}): {len(ring) - 1} corners, path gap "
+              f"{gap(recorded):.3f} m, shape gap {gap(shape):.3f} m, offset {offset:.2f} m, "
+              f"area {recorded.area:.2f} m2 vs driven {driven.area:.2f}, "
+              f"GPS wander {result['quality']['anchor_wander_m']} m")
+        assert 4 <= len(ring) - 1 <= 8, ring
+        assert recorded.area == pytest.approx(driven.area, rel=0.08)
+        assert gap(shape) < 0.4, f"the recorded SHAPE is {gap(shape):.2f} m off the driven one"
+        if gps == "quiet":
+            assert gap(recorded) < 0.4, f"recorded boundary {gap(recorded):.2f} m off the path"
+        assert http("POST", "/api/teach/take", {})["result"]["id"] == result["id"]
+
+        # Station: stand still, average 3 s of fixes and heading.
+        driver.stop(1.0)
+        http("POST", "/api/teach/point", {"kind": "station", "seconds": 3})
+        taken = None
+        deadline = time.monotonic() + 20.0
+        while taken is None and time.monotonic() < deadline:
+            driver.send(0.0, 0.0)
+            if http("GET", "/api/status")["teach"]["result_ready"]:
+                taken = http("POST", "/api/teach/take", {})["result"]
+        assert taken is not None and "error" not in taken, taken
+        _, x, y, yaw = watch.truth[-1]
+        sx, sy = metres(*taken["geometry"]["coordinates"])
+        truth_compass = (90.0 - math.degrees(yaw)) % 360.0
+        heading_error = compass_error(taken["properties"]["heading_deg"], truth_compass)
+        print(f"MEASURED station ({gps}): {math.hypot(sx - x, sy - y):.3f} m, heading "
+              f"{heading_error:.2f} deg, spread {taken['quality']['spread_m']} m")
+        if gps == "quiet":
+            assert math.hypot(sx - x, sy - y) < 0.2
+        assert heading_error < 3.0
     finally:
         watch.close()

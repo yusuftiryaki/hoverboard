@@ -130,3 +130,66 @@ $("drive-start").onclick = driveStart;
 $("drive-stop").onclick = () => driveStop();
 $("drive-speed").oninput = () => { $("drive-speed-value").textContent = $("drive-speed").value + "%"; };
 renderDrive();
+
+// --- teach by driving (docs/missions.md 5b) -------------------------------------
+// The robot records (teach.py); the page starts/stops it, draws the trace so
+// far, and turns a finished candidate into an unsaved site feature to name.
+const KIND_TR = { area: "alan", keepout: "girilmez", route: "rota", station: "istasyon",
+                  poi: "nokta", obstacle: "engel" };
+const teachTrace = L.polyline([], { color: "#d4a20b", weight: 3, dashArray: "6 4" }).addTo(map);
+let teachTaking = false;
+
+function teachCall(action, body) {
+  return api("POST", "/api/teach/" + action, body || {})
+    .then((r) => { if (r.teach) onTeachStatus(r.teach); return r; },
+          (e) => { say("teach-message", e.message, "error"); throw e; });
+}
+
+function addCandidate(result) {
+  if (result.error) return say("teach-message", "Ölçülemedi: " + result.error, "error");
+  const props = Object.assign({}, result.properties);
+  const kind = props.kind;
+  delete props.kind;
+  if (kind === "poi") props.label = "";
+  const feature = addFeature(kind, layerFromGeoJSON(result), uniqueName(kind), props);
+  select(feature);
+  const q = result.quality || {};
+  const detail = q.spread_m !== undefined ? `${q.fixes} ölçüm, yayılma ${q.spread_m} m`
+    : `${q.vertices} köşe; kayıt boyunca GPS ±${q.anchor_wander_m} m gezindi — ` +
+      "şekil doğru, yeri bu kadar kayık olabilir";
+  say("teach-message", `Aday ${KIND_TR[kind]} eklendi (${detail}). Saha sekmesinde adını ver ` +
+      "ve “Sahayı kaydet”.", "ok");
+}
+
+function onTeachStatus(teach) {
+  if (!teach) return;
+  const points = (teach.points || []).map(([lon, lat]) => [lat, lon]);
+  teachTrace.setLatLngs(points);
+  let text = "";
+  if (teach.mode === "trace") {
+    text = `Kayıt: ${KIND_TR[teach.kind]} · ${points.length} nokta`;
+    if (teach.no_tf) text += ` · ${teach.no_tf} ölçüm konumsuz (lokalizasyon çalışıyor mu?)`;
+  }
+  if (teach.mode === "point") text = `Ölçülüyor: ${KIND_TR[teach.kind]}`;
+  if (teach.averaging) {
+    text += ` · ortalama %${Math.round(teach.averaging.progress * 100)} ` +
+            `(${teach.averaging.fixes} ölçüm) — kıpırdatma`;
+  }
+  $("teach-progress").textContent = text;
+  if (teach.result_ready && !teachTaking) {
+    teachTaking = true;            // one take per result, even if polls overlap
+    teachCall("take").then((r) => { if (r.result) addCandidate(r.result); })
+      .catch(() => {}).finally(() => { teachTaking = false; });
+  }
+}
+
+$("teach-trace").onclick = () => teachCall("trace", { kind: $("teach-kind").value })
+  .then(() => say("teach-message", "İz kaydediliyor — sınır boyunca sür.", ""), () => {});
+$("teach-corner").onclick = () => teachCall("corner")
+  .then(() => say("teach-message", "Köşe sabitlendi.", ""), () => {});
+$("teach-finish").onclick = () => teachCall("finish").then(() => {}, () => {});
+$("teach-cancel").onclick = () => teachCall("cancel")
+  .then(() => say("teach-message", "Kayıt bırakıldı.", ""), () => {});
+$("teach-point").onclick = () => teachCall("point", { kind: $("teach-point-kind").value,
+                                                      seconds: Number($("teach-seconds").value) })
+  .then(() => say("teach-message", "Ölçülüyor — robotu kıpırdatma.", ""), () => {});

@@ -15,6 +15,9 @@ web_api.py is the HTTP side and knows no ROS; this node is its backend:
                                            only while a page holds the lease
     teleop/state (out, 10 Hz)              who is driving — for the episode
                                            recorder (docs/learning.md)
+    teach (teach.py)                       every /gps/filtered fix + heading +
+                                           odom->base_link + map->odom, while
+                                           recording; /toLL places a finished trace
 
 The executor spins in its own thread; HTTP handlers (one thread each) send a
 service request and wait on its future, bounded by call_timeout_s.
@@ -35,13 +38,16 @@ from rclpy.clock import Clock, ClockType
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
 from rclpy.time import Time
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Point, Twist
+from robot_localization.srv import ToLL
 from sensor_msgs.msg import BatteryState, Image, NavSatFix
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 from tf2_ros import Buffer, TransformException, TransformListener
 
 from robot_missions.camera import jpeg_from_image
+from robot_missions.site import LatLon
+from robot_missions.teach import Pose2, Teacher, compass_from_yaw
 from robot_missions.teleop import TeleopGate
 from robot_missions.web_api import WebApi, default_static_dir, make_server
 from robot_missions_interfaces.srv import StartMission
@@ -83,6 +89,7 @@ class WebUi(Node):
         self._start = self.create_client(StartMission, "mission_runner/start")
         self._commands = {name: self.create_client(Trigger, f"mission_runner/{name}")
                           for name in ("pause", "resume", "abort")}
+        self._to_ll = self.create_client(ToLL, "toLL")
         self._reloads = [self.create_client(Trigger, "site_map_server/reload"),
                          self.create_client(Trigger, "battery_supervisor/reload_site")]
 
@@ -108,7 +115,9 @@ class WebUi(Node):
             steady = Clock(clock_type=ClockType.STEADY_TIME)
             self._ticks = 0
             self.create_timer(0.05, self._tick_teleop, clock=steady)
-        self.api = WebApi(p("site_file").value, p("detected_file").value, self, self.teleop)
+        self.teacher = Teacher()
+        self.api = WebApi(p("site_file").value, p("detected_file").value, self, self.teleop,
+                          self.teacher)
         static = p("static_dir").value or default_static_dir()
         self.server = make_server(self.api, static, p("host").value, int(p("port").value))
         host, port = self.server.server_address[:2]
@@ -130,6 +139,11 @@ class WebUi(Node):
         if math.isfinite(msg.latitude) and math.isfinite(msg.longitude):
             with self._lock:
                 self._fix = (msg.latitude, msg.longitude, time.time())
+            if self.teacher.state()["mode"] is not None:
+                self.teacher.feed(LatLon(msg.latitude, msg.longitude),
+                                  self._heading(rounded=False), time.monotonic(),
+                                  self._pose2("odom", "base_link"),
+                                  self._pose2("map", "odom"))
 
     def _on_mission(self, msg: String) -> None:
         with self._lock:
@@ -158,7 +172,33 @@ class WebUi(Node):
         return {"robot": robot, "mission": mission, "supervisor": supervisor,
                 "battery": battery}
 
-    def _heading(self) -> Optional[float]:
+    def _pose2(self, parent: str, child: str) -> Optional[Pose2]:
+        try:
+            tf = self._tf.lookup_transform(parent, child, Time())
+        except TransformException:
+            return None
+        t, q = tf.transform.translation, tf.transform.rotation
+        return (t.x, t.y, math.atan2(2.0 * (q.w * q.z + q.x * q.y),
+                                     1.0 - 2.0 * (q.y * q.y + q.z * q.z)))
+
+    def to_ll(self, points) -> Optional[list]:
+        """map -> lat/lon through navsat_transform, the one conversion
+        (docs/missions.md decision 4). ⚠️ /toLL answers (0, 0) — not an error —
+        before it has a transform: that is None here, never a position."""
+        out = []
+        for x, y in points:
+            request = ToLL.Request()
+            request.map_point = Point(x=float(x), y=float(y))
+            response = self._call(self._to_ll, request)
+            if response is None:
+                return None
+            ll = response.ll_point
+            if (ll.latitude, ll.longitude) == (0.0, 0.0):
+                return None
+            out.append(LatLon(ll.latitude, ll.longitude))
+        return out
+
+    def _heading(self, rounded: bool = True) -> Optional[float]:
         """Compass bearing (0 = north, clockwise) from map's yaw. `map`'s x
         is the IMU's east (navsat_transform, docs/missions.md)."""
         try:
@@ -167,7 +207,8 @@ class WebUi(Node):
             return None
         q = tf.transform.rotation
         yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
-        return round((90.0 - math.degrees(yaw)) % 360.0, 1)
+        compass = compass_from_yaw(yaw)
+        return round(compass, 1) if rounded else compass
 
     def start_mission(self, spec: Dict[str, Any]) -> Tuple[bool, str]:
         request = StartMission.Request()

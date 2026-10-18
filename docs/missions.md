@@ -61,6 +61,7 @@ Her `Feature`'ın `properties.kind`'ı ne olduğunu söyler:
 | `obstacle` | Point + `radius_m`, ya da Polygon | **dolu** | Survey edilmiş engel: ağaç, kaya |
 | `station` | Point + `heading_deg` | istasyon gövdesi **dolu** | Şarj istasyonu |
 | `route` | LineString | — | Kaydedilmiş/çizilmiş waypoint dizisi |
+| `poi` | Point + `label` (+ `note`, `radius_m`) | yalnız `radius_m` varsa **dolu** | Etiketli nokta: kuyu, sınır taşı, direk… `goto` hedefi |
 
 - `name` her feature'da zorunlu ve kendi `kind`'ı içinde eşsiz; görevler alanlara
   ve rotalara adla bağlanır.
@@ -114,7 +115,7 @@ Laptop tarayıcı (uydu haritası)        Pi
 4. ✅ **Web arayüzü** (4a): çizim, görev formu, canlı durum; tespit edilen
    engelleri onaylama/etiketleme.
 5. **Öğret-kaydet** (tasarım 2026-10-18, aşağıda "5. aşama"): 5a web teleop ✅,
-   5b sınır/rota/istasyon/etiketli nokta kaydı, 5c öğrenme modu kaydedici
+   5b sınır/rota/istasyon/etiketli nokta kaydı ✅, 5c öğrenme modu kaydedici
    (taklit ile öğrenme verisi, `docs/learning.md`), 5d dışa aktarma.
 
 ## 1. aşama: ne yapıldı, nasıl kullanılır
@@ -503,25 +504,54 @@ WASD, hız sürgüsü (%10–100, tavanın oranı). Kod: `teleop.py` (kapı, ROS
   Headless Chromium'da da sürüldü (tuş, top, ikinci sekme reddi, JS hatası yok).
 - Testler: `test_teleop.py` (kapı, adım adım saat), `test_web_api.py` (HTTP).
 
-### 5b: sınır, rota, istasyon, etiketli nokta
-Hepsi aday geometri üretir; **kaydetme mevcut yoldan** (sayfada önizle →
-düzelt → "Sahayı kaydet" → robotun kendi okuyucusu doğrular). Karar 3 korunur.
-- **İz kaydı (alan, yasak bölge, rota):** "İzi başlat" → robot sürülürken her
-  0.5 m'de ya da 15°'lik yön değişiminde `/gps/filtered` örneği; "Bitir" →
-  Douglas–Peucker sadeleştirme (tolerans ~0.3 m), alan/yasak bölgede halka
-  kapatılır.
-- **Nokta bırak:** robot durur, N sn (varsayılan 10) ortalama alınır. İzin
-  köşelerinde ve istasyonda kullanılır. NEO-6M gezinmesi dakikalar ölçeğinde
-  olduğu için ortalama gürültüyü azaltır, **kaymayı azaltmaz** (karar 1).
-- **İstasyon:** robot yanaşmışken nokta bırak + yön `map→base_link`'ten pusula
-  derecesine. ⚠️ ENU↔pusula dönüşümü A6'nın olduğu yer: test tam tur süpürür.
-- **Etiketli nokta — yeni tür `poi`:** Point + `label` (serbest metin; sayfa
-  öneri listesi sunar: sınır taşı, kuyu, direk, musluk, vana, kapı, ağaç) +
-  isteğe bağlı `note`. İsteğe bağlı `radius_m` verilirse **engel olarak da**
-  haritaya çizilir (kuyu, direk fiziksel); verilmezse sadece işaret. `goto`
-  görevi bir `poi`'ye adıyla gidebilir.
-- **Ölçüm (sim, ground truth):** teleop'la kare alan sürülür → kaydedilen
-  poligon ile gerçek kare arasındaki Hausdorff mesafesi, sessiz GPS ve NEO-6M.
+### ✅ 5b: sınır, rota, istasyon, etiketli nokta (2026-10-18)
+"Sür" sekmesinin altında **Öğret**: iz (alan / girilmez / rota) başlat → sür →
+"Köşe bırak" (isteğe bağlı) → Bitir; nokta (istasyon / etiketli nokta / engel)
+→ dur → Ölç (N sn). Çıkan şekil sahaya **aday** olarak eklenir, adı verilir,
+düzeltilir, mevcut "Sahayı kaydet" yolundan geçer (robotun okuyucusu doğrular;
+karar 3). Kod: `teach.py` (ROS'suz), `web_api.py` `/api/teach/*`, `web_ui.py`
+(besleme + `/toLL`), `web/drive.js`.
+
+- ⚠️⚠️ **İz, GPS örnekleri DEĞİL — tasarım ölçümle değişti.** İlk sürüm
+  `/gps/filtered` örneklerini kaydediyordu. Sessiz GPS'te kusursuzdu (0.055 m),
+  ama sim'in NEO-6M gezinmesiyle 6 × 4 m'lik kare **kendini kesti**, noktalar
+  1–2 m zikzak çizdi, başı ile sonu 3 m ayrıydı — kullanılamaz.
+  `/gps/filtered` = map→odom (GPS, zıplıyor) ∘ odom→base_link (pürüzsüz).
+  Artık **şekil `odom`'da** kaydediliyor (tekerlek + IMU), **yer** kayıt boyunca
+  **ortalanan map→odom** ile veriliyor, lat/lon'a `/toLL` çeviriyor (karar 4).
+  Ortalama gürültüyü alır, kaymayı almaz (karar 1): alan **tek parça** olarak
+  birkaç metre kayık olabilir, buruşmaz. Sayfa kayıt boyunca GPS'in ne kadar
+  gezindiğini (`anchor_wander_m`) gösterir.
+- Köşe artık ortalama almıyor, anında sabitleniyor (odom'da titreşim yok);
+  sadeleştirme (Douglas–Peucker, 0.3 m) sabit köşeyi silemez. İz robotun
+  durduğu yerde biter, son aralıklı örnekte değil.
+- Reddedilen iz (kendini kesen, < 1 m² alan, < 3 köşe) kayda devam eder.
+- **Noktalar** `/gps/filtered` ortalaması (durağan robotta map→odom zaten tek).
+  İstasyon yönü `map→base_link`'ten pusulaya (`compass_from_yaw`, tam tur
+  test edildi); 359.96° yuvarlanınca 360 olup saha okuyucusunca
+  reddediliyordu — `% 360`.
+- **`poi`:** etiket serbest metin + öneri listesi (sınır taşı, kuyu, direk,
+  musluk, vana, kapı, ağaç), not; `radius_m` verilirse `site.py` onu
+  `circle_obstacles`'a da koyar → harita ve kaplama planlayıcısı değişmeden
+  dolanır. `goto` formunda hedef listesi: noktalar + istasyonlar (ya da haritaya
+  tıkla).
+- ⚠️ **Kilitlenme bulundu:** `finish()` `/toLL`'u Teacher kilidini tutarken
+  çağırıyordu; servis cevabını teslim edecek yürütücü iş parçacığı aynı kilide
+  takılıyordu → her bitiş zaman aşımıyla "navsat cannot convert". Çeviri
+  kilidin dışında; regresyon testi var.
+- Sayfa koordinatları 8 ondalıkla yazıyor (Leaflet varsayılanı 6 ≈ 10 cm
+  yuvarlıyordu — çizilenler dahil).
+
+**Ölçülen** (`test_web_stack.py`, gerçek yığın, ground truth'a karşı robot
+6 × 4 m kare sürüldü, 2'şer koşu):
+| GPS | yola uzaklık | **şekil** (merkezler hizalı) | kayma | istasyon konum / yön |
+|---|---|---|---|---|
+| sessiz | 0.12 m | 0.10 m | 0.03 m | 0.01 m / 0.8° |
+| NEO-6M | 1.4–2.7 m | **0.11 m** | 1.4–2.7 m | 0.9–1.3 m / 0.7–0.8° |
+Alan sürülenden ~%3 küçük (23.1 vs 23.8 m²; köşe kesme + sadeleştirme).
+Pusula, yerinde tam turda ground truth'a karşı süpürüldü (< 8°, dönerken
+ölçüm gecikmesi dahil). Tarayıcıda da uçtan uca: iz → aday rota, nokta → etiket
+"kuyu" + yarıçap → kaydet → robot kabul etti, `goto` listesinde çıktı.
 
 ## Bilinen açıklar
 - ✅ ~~İstasyon iki yerde~~ — **3b'de kapandı** (aşağıda).

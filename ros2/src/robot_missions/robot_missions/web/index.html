@@ -35,11 +35,18 @@
         <button data-draw="obstacle" data-shape="Marker">Engel</button>
         <button data-draw="station" data-shape="Marker">İstasyon</button>
         <button data-draw="route" data-shape="Line">Rota</button>
+        <button data-draw="poi" data-shape="Marker">Nokta</button>
       </div>
       <div id="feature-editor" hidden>
         <h3 id="fe-title"></h3>
         <label>Ad <input id="fe-name"></label>
-        <label id="fe-radius-row">Yarıçap (m) <input id="fe-radius" type="number" step="0.05" min="0.05"></label>
+        <label id="fe-radius-row">Yarıçap (m; noktada boşsa engel değil) <input id="fe-radius" type="number" step="0.05" min="0.05"></label>
+        <label id="fe-label-row">Etiket <input id="fe-label" list="poi-labels" placeholder="ör. kuyu"></label>
+        <datalist id="poi-labels">
+          <option value="sınır taşı"><option value="kuyu"><option value="direk">
+          <option value="musluk"><option value="vana"><option value="kapı"><option value="ağaç">
+        </datalist>
+        <label id="fe-note-row">Not <input id="fe-note"></label>
         <label id="fe-heading-row">Yanaşmış robotun baktığı yön (pusula °) <input id="fe-heading" type="number" step="1" min="0" max="359"></label>
         <div class="row">
           <button id="fe-apply">Uygula</button>
@@ -91,6 +98,34 @@
         <input id="drive-speed" type="range" min="10" max="100" step="10" value="50"></label>
       <p id="drive-limits" class="hint"></p>
       <div id="drive-message" class="message"></div>
+
+      <h3>Öğret</h3>
+      <p class="hint">Sürerken kaydet. Çıkan şekil sahaya <b>aday</b> olarak eklenir: Saha
+        sekmesinde adını ver, düzelt, “Sahayı kaydet”. İzin <b>şekli</b> tekerlek
+        odometrisinden, <b>yeri</b> kayıt boyunca ortalanan GPS'ten gelir: şekil düzgün çıkar,
+        bütünü birkaç metre kayık olabilir. Noktada (istasyon, etiketli nokta) dur ve ölç.</p>
+      <div class="row">
+        <select id="teach-kind">
+          <option value="area">Alan</option><option value="keepout">Girilmez</option>
+          <option value="route">Rota</option>
+        </select>
+        <button id="teach-trace">İzi başlat</button>
+      </div>
+      <div class="row">
+        <button id="teach-corner">Köşe bırak</button>
+        <button id="teach-finish" class="primary">Bitir</button>
+        <button id="teach-cancel" class="danger">Vazgeç</button>
+      </div>
+      <div class="row">
+        <select id="teach-point-kind">
+          <option value="station">İstasyon (yanaşmışken)</option>
+          <option value="poi">Etiketli nokta</option><option value="obstacle">Engel</option>
+        </select>
+        <input id="teach-seconds" type="number" min="1" max="300" value="10" title="ortalama süresi (sn)">
+        <button id="teach-point">Ölç</button>
+      </div>
+      <div id="teach-progress" class="hint"></div>
+      <div id="teach-message" class="message"></div>
     </section>
   </aside>
 
