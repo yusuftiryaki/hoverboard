@@ -54,3 +54,9 @@ pre { background: #f5f7fa; padding: 8px; border-radius: 6px; font-size: 12px; wh
 #camera-box { margin-bottom: 10px; }
 #camera-box img, .thumb { width: 100%; border-radius: 6px; border: 1px solid var(--line); background: #111; display: block; }
 .thumb { margin: 6px 0; cursor: zoom-in; }
+
+#drive-pad { position: relative; width: 220px; height: 220px; margin: 12px auto; border-radius: 50%;
+  border: 2px solid var(--line); background: #f5f7fa; touch-action: none; user-select: none; opacity: 0.5; }
+#drive-pad.live { opacity: 1; border-color: var(--accent); }
+#drive-knob { position: absolute; left: 50%; top: 50%; width: 64px; height: 64px; margin: -32px 0 0 -32px;
+  border-radius: 50%; background: var(--accent); pointer-events: none; }

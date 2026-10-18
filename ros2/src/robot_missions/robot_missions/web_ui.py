@@ -11,6 +11,10 @@ web_api.py is the HTTP side and knows no ROS; this node is its backend:
     site_map_server/reload, battery_supervisor/reload_site   after a site edit
     camera/image_raw                       the live view — subscribed only while
                                            a page is watching, encoded <= 5 Hz
+    /cmd_vel_teleop (out, 20 Hz)           driving from the page (teleop.py):
+                                           only while a page holds the lease
+    teleop/state (out, 10 Hz)              who is driving — for the episode
+                                           recorder (docs/learning.md)
 
 The executor spins in its own thread; HTTP handlers (one thread each) send a
 service request and wait on its future, bounded by call_timeout_s.
@@ -27,15 +31,18 @@ from typing import Any, Dict, Optional, Tuple
 
 import rclpy
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
+from rclpy.clock import Clock, ClockType
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
 from rclpy.time import Time
+from geometry_msgs.msg import Twist
 from sensor_msgs.msg import BatteryState, Image, NavSatFix
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 from tf2_ros import Buffer, TransformException, TransformListener
 
 from robot_missions.camera import jpeg_from_image
+from robot_missions.teleop import TeleopGate
 from robot_missions.web_api import WebApi, default_static_dir, make_server
 from robot_missions_interfaces.srv import StartMission
 
@@ -52,6 +59,13 @@ class WebUi(Node):
         self.declare_parameter("static_dir", "")
         self.declare_parameter("camera_topic", "camera/image_raw")
         self.declare_parameter("camera_fps", 5.0)
+        # Driving from the page (docs/missions.md 5a). Below the bridge's own
+        # max_linear_vel / max_angular_vel (1.0 / 1.5), which still apply.
+        self.declare_parameter("use_teleop", True)
+        self.declare_parameter("teleop_max_linear", 0.6)
+        self.declare_parameter("teleop_max_angular", 1.0)
+        self.declare_parameter("teleop_deadman_s", 0.3)
+        self.declare_parameter("teleop_lease_s", 2.0)
 
         self._lock = threading.Lock()
         self._fix: Optional[Tuple[float, float, float]] = None   # lat, lon, stamp
@@ -82,11 +96,33 @@ class WebUi(Node):
         self.create_timer(0.5, self._manage_camera)
 
         p = self.get_parameter
-        self.api = WebApi(p("site_file").value, p("detected_file").value, self)
+        self.teleop = None
+        if p("use_teleop").value:
+            self.teleop = TeleopGate(p("teleop_max_linear").value, p("teleop_max_angular").value,
+                                     p("teleop_deadman_s").value, p("teleop_lease_s").value)
+            self._teleop_pub = self.create_publisher(Twist, "cmd_vel_teleop", 10)
+            self._teleop_state_pub = self.create_publisher(String, "teleop/state", 10)
+            # Wall time on purpose: the deadman is about the browser, and a
+            # sim-time timer would stop ticking with /clock — leaving the last
+            # command to the bridge's deadman instead of this one's zero.
+            steady = Clock(clock_type=ClockType.STEADY_TIME)
+            self._ticks = 0
+            self.create_timer(0.05, self._tick_teleop, clock=steady)
+        self.api = WebApi(p("site_file").value, p("detected_file").value, self, self.teleop)
         static = p("static_dir").value or default_static_dir()
         self.server = make_server(self.api, static, p("host").value, int(p("port").value))
         host, port = self.server.server_address[:2]
         self.get_logger().info(f"web page on http://{host}:{port}/ (static: {static})")
+
+    def _tick_teleop(self) -> None:
+        out = self.teleop.output()
+        if out is not None:
+            msg = Twist()
+            msg.linear.x, msg.angular.z = out
+            self._teleop_pub.publish(msg)
+        self._ticks += 1
+        if self._ticks % 2 == 0:
+            self._teleop_state_pub.publish(String(data=json.dumps(self.teleop.state())))
 
     # --- subscriptions --------------------------------------------------------
 
