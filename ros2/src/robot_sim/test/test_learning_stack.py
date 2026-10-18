@@ -171,7 +171,8 @@ def test_an_episode_from_the_page_holds_what_learning_needs(learning_stack):
     assert 0 < episode["ready_after_s"] < 30
     snapshot = episode["snapshot"]
     assert snapshot["site"] == "site.geojson"
-    assert "hoverboard_bridge" in snapshot["params"] and "twist_mux" in snapshot["params"]
+    for node in ("hoverboard_bridge", "twist_mux"):
+        assert node in snapshot["params"], f"{node}: {snapshot}"
     with open(os.path.join(stack.episodes_dir, name, "params", "hoverboard_bridge.yaml")) as f:
         assert "max_linear_vel" in f.read()
 

@@ -23,6 +23,7 @@ import os
 import shutil
 import socket
 import subprocess
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List
 
@@ -163,30 +164,53 @@ class EpisodeRecorderNode(Node):
 
     def _snapshot(self, directory: str) -> Dict[str, Any]:
         """The context the bag cannot carry. Runs in its own thread."""
-        out: Dict[str, Any] = {"site": None, "params": [], "params_failed": []}
+        out: Dict[str, Any] = {"site": None, "params": [], "params_failed": {}}
         site = self.get_parameter("site_file").value
         if site and os.path.exists(site):
             shutil.copy(site, os.path.join(directory, "site.geojson"))
             out["site"] = "site.geojson"
         params_dir = os.path.join(directory, "params")
         os.makedirs(params_dir, exist_ok=True)
-        running = {name for name, _ in self.get_node_names_and_namespaces()}
-        wanted = [n for n in self.get_parameter("param_nodes").value if n in running]
+        wanted = list(self.get_parameter("param_nodes").value)
+        # A node can be briefly missing from the graph (discovery, or the
+        # bridge respawning): look a few times before calling it absent.
+        # ⚠️ Found in CI: the bridge's dump — the calibration constants this
+        # snapshot exists for — went missing once while every other one worked.
+        running: set = set()
+        for _ in range(5):
+            running = {name for name, _ in self.get_node_names_and_namespaces()}
+            if all(n in running for n in wanted):
+                break
+            time.sleep(1.0)
 
-        def dump(name: str) -> bool:
-            try:
-                result = subprocess.run(["ros2", "param", "dump", "/" + name], check=True,
-                                        capture_output=True, text=True, timeout=30)
-                with open(os.path.join(params_dir, name + ".yaml"), "w") as handle:
-                    handle.write(result.stdout)
-                return True
-            except (OSError, subprocess.SubprocessError):
-                return False
+        def dump(name: str) -> str:
+            """'' on success, else why."""
+            if name not in running:
+                return "not running"
+            why = ""
+            for _ in range(3):
+                try:
+                    result = subprocess.run(["ros2", "param", "dump", "/" + name],
+                                            capture_output=True, text=True, timeout=30)
+                except (OSError, subprocess.SubprocessError) as exc:
+                    why = repr(exc)
+                    continue
+                if result.returncode == 0 and result.stdout.strip():
+                    with open(os.path.join(params_dir, name + ".yaml"), "w") as handle:
+                        handle.write(result.stdout)
+                    return ""
+                why = (result.stderr or result.stdout).strip()[-200:] or \
+                    f"exit {result.returncode}"
+                time.sleep(1.0)
+            return why
 
         # Each `ros2 param dump` is a CLI start-up (~1-2 s here, more on a Pi).
         with ThreadPoolExecutor(max_workers=4) as pool:
-            for name, ok in zip(wanted, pool.map(dump, wanted)):
-                out["params" if ok else "params_failed"].append(name)
+            for name, why in zip(wanted, pool.map(dump, wanted)):
+                if not why:
+                    out["params"].append(name)
+                elif why != "not running":
+                    out["params_failed"][name] = why
         return out
 
 
