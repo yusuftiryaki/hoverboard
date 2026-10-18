@@ -14,6 +14,7 @@
     <header>
       <div id="status-line">Bağlanıyor…</div>
       <div id="battery"></div>
+      <div id="rec" hidden title="Öğrenme modu kaydediyor">● REC</div>
       <button id="camera-toggle" title="Canlı kamera">📷</button>
     </header>
     <div id="camera-box" hidden>
@@ -25,6 +26,7 @@
       <button data-tab="mission">Görev</button>
       <button data-tab="detected">Tespitler <span id="detected-count"></span></button>
       <button data-tab="drive">Sür</button>
+      <button data-tab="learn">Öğrenme</button>
     </nav>
 
     <section id="tab-site" class="tab active">
@@ -127,11 +129,52 @@
       <div id="teach-progress" class="hint"></div>
       <div id="teach-message" class="message"></div>
     </section>
+
+    <section id="tab-learn" class="tab">
+      <p class="hint">Öğrenme modu: robotun tüm durumu, sensörleri ve kamera bir <b>bölüm</b>
+        olarak kaydedilir (taklit ile öğrenme verisi). Sür sekmesinden sür ya da bir görevi
+        izle; gerektiğinde araya gir. Ayrıntı: docs/learning.md.</p>
+      <div id="learn-idle">
+        <label>Görev <input id="learn-task" list="learn-tasks" placeholder="ör. kenar dibi biçme"></label>
+        <datalist id="learn-tasks">
+          <option value="kenar dibi biçme"><option value="ağaç çevresi"><option value="yabani ota yönelme">
+          <option value="alan biçme"><option value="istasyona yanaşma">
+        </datalist>
+        <label>Mod <select id="learn-mode">
+          <option value="demo">Gösterim — ben sürüyorum</option>
+          <option value="intervention">Müdahale — görev koşuyor, gerekirse araya giriyorum</option>
+          <option value="autonomous">Otonom — sadece izliyorum</option>
+        </select></label>
+        <label>Not <input id="learn-note"></label>
+        <button id="learn-start" class="primary">Kaydı başlat</button>
+      </div>
+      <div id="learn-recording" hidden>
+        <div id="learn-live" class="rec-line"></div>
+        <div class="row">
+          <input id="learn-mark-label" list="learn-marks" placeholder="işaret (ör. ağaç başladı)">
+          <datalist id="learn-marks">
+            <option value="kenar başladı"><option value="ağaç başladı"><option value="yabani ot">
+            <option value="dönüş"><option value="hata — dikkate alma">
+          </datalist>
+          <button id="learn-mark">İşaret</button>
+        </div>
+        <label>Sonuç <select id="learn-outcome">
+          <option value="success">Başarılı</option><option value="failure">Başarısız</option>
+          <option value="aborted">İptal (veri kullanılmasın)</option>
+        </select></label>
+        <label>Not <input id="learn-stop-note"></label>
+        <button id="learn-stop" class="danger">Kaydı bitir</button>
+      </div>
+      <div id="learn-message" class="message"></div>
+      <h3>Bölümler <span id="learn-free" class="hint"></span></h3>
+      <ul id="learn-list"></ul>
+    </section>
   </aside>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.min.js"></script>
   <script src="app.js"></script>
   <script src="drive.js"></script>
+  <script src="learn.js"></script>
 </body>
 </html>

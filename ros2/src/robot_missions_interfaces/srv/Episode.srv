@@ -1,0 +1,15 @@
+# Control the episode recorder (docs/learning.md, öğrenme modu).
+#   command: "start" | "stop" | "mark"
+#   data: JSON —
+#     start {"task": "kenar biçme", "mode": "demo"|"intervention"|"autonomous", "note": ""}
+#     stop  {"outcome": "success"|"failure"|"aborted", "note": ""}
+#     mark  {"label": "ağaç başladı"}
+string command
+string data
+---
+# false = refused (already recording, not recording, disk nearly full, bad
+# JSON, ...); message says why.
+bool success
+string message
+# The episode's directory name under episodes_dir.
+string episode

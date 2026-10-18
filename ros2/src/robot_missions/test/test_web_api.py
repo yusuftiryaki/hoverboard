@@ -27,7 +27,8 @@ class FakeRobot:
 
     def status(self):
         return {"robot": {"lat": LAT0, "lon": LON0, "heading_deg": 90.0},
-                "mission": {"state": "IDLE"}, "supervisor": "NORMAL", "battery": None}
+                "mission": {"state": "IDLE"}, "supervisor": "NORMAL", "battery": None,
+                "episode": self.episode_state}
 
     def start_mission(self, spec):
         self.started.append(spec)
@@ -40,6 +41,15 @@ class FakeRobot:
     def reload_site(self):
         self.reloads += 1
         return True, "reloaded"
+
+    episode_state = None                  # what episode_recorder/status says
+    episode_calls = None
+
+    def episode_command(self, command, data):
+        self.episode_calls = (self.episode_calls or []) + [(command, data)]
+        if command == "start" and not data.get("task"):
+            return False, "an episode needs a task", ""
+        return True, f"{command} ok", "20261018-101530_kenar"
 
     def to_ll(self, points):
         """map metres -> lat/lon, flat, around (LAT0, LON0) — a stand-in for
@@ -79,7 +89,8 @@ def web(tmp_path):
     clock = FakeClock()
     gate = TeleopGate(max_linear=0.6, max_angular=1.0, deadman_s=0.3, lease_s=2.0, clock=clock)
     teacher = Teacher(min_fixes=2)
-    api = WebApi(str(site), str(detected), robot, gate, teacher)
+    episodes_dir = tmp_path / "episodes"
+    api = WebApi(str(site), str(detected), robot, gate, teacher, str(episodes_dir))
     server = make_server(api, default_static_dir(), "127.0.0.1", 0)
     thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05},
                               daemon=True)
@@ -100,6 +111,7 @@ def web(tmp_path):
 
     call.base = base
     call.gate, call.clock, call.api, call.teacher = gate, clock, api, teacher
+    call.episodes_dir = episodes_dir
     yield call, robot, site, detected
     server.shutdown()
     server.server_close()
@@ -108,7 +120,7 @@ def web(tmp_path):
 def test_the_page_and_its_assets_are_served(web):
     call, *_ = web
     for path, marker in (("/", b"<title>Robot Saha</title>"), ("/app.js", b"/api/site"),
-                         ("/style.css", b"#panel"), ("/drive.js", b"/api/teleop")):
+                         ("/style.css", b"#panel"), ("/drive.js", b"/api/teleop"), ("/learn.js", b"/api/episode")):
         status, body = call("GET", path)
         assert status == 200 and marker in body, path
 
@@ -402,3 +414,80 @@ def test_a_second_recording_waits_for_the_first(web):
     assert status == 400 and "already recording" in body["error"]
     assert call("POST", "/api/teach/cancel", {})[0] == 200
     assert call("POST", "/api/teach/point", {"kind": "station"})[0] == 200
+
+
+# --- learning mode (docs/learning.md) ------------------------------------------------
+
+def make_episode(root, name, **fields):
+    import yaml
+    path = root / name
+    (path / "bag").mkdir(parents=True)
+    (path / "bag" / "bag_0.mcap").write_bytes(b"MCAP" * 1000)
+    data = {"name": name, "task": "kenar", "mode": "demo", "status": "done",
+            "outcome": "success", "markers": [{"t": 1.0, "label": "agac"}], **fields}
+    (path / "episode.yaml").write_text(yaml.safe_dump(data, allow_unicode=True))
+    return path
+
+
+def test_episode_commands_go_to_the_recorder_and_its_refusals_come_back(web):
+    call, robot, *_ = web
+    status, body = call("POST", "/api/episode/start", {"task": "kenar", "mode": "demo"})
+    assert status == 200 and body["episode"] == "20261018-101530_kenar"
+    assert robot.episode_calls[-1] == ("start", {"task": "kenar", "mode": "demo"})
+    status, body = call("POST", "/api/episode/start", {})
+    assert status == 409 and "task" in body["error"]
+    assert call("POST", "/api/episode/mark", {"label": "agac"})[0] == 200
+    assert call("POST", "/api/episode/stop", {"outcome": "success"})[0] == 200
+    assert call("POST", "/api/episode/launch", {})[0] == 404
+
+
+def test_episodes_are_listed_newest_first_and_junk_is_ignored(web):
+    call, *_ = web
+    make_episode(call.episodes_dir, "20261018-090000_eski")
+    make_episode(call.episodes_dir, "20261018-100000_yeni", task="ağaç çevresi")
+    (call.episodes_dir / "not-an-episode").mkdir()
+    (call.episodes_dir / "20261018-110000_bozuk").mkdir()          # no episode.yaml
+    status, body = call("GET", "/api/episodes")
+    names = [e["name"] for e in body["episodes"]]
+    assert status == 200 and names == ["20261018-100000_yeni", "20261018-090000_eski"]
+    assert body["episodes"][0]["task"] == "ağaç çevresi" and body["episodes"][0]["markers"] == 1
+
+
+def test_an_episode_downloads_as_a_zip_of_its_directory(web):
+    import io
+    import zipfile
+    call, *_ = web
+    make_episode(call.episodes_dir, "20261018-100000_yeni")
+    status, data = call("GET", "/api/episodes/20261018-100000_yeni.zip")
+    assert status == 200
+    archive = zipfile.ZipFile(io.BytesIO(data))
+    assert sorted(archive.namelist()) == ["20261018-100000_yeni/bag/bag_0.mcap",
+                                          "20261018-100000_yeni/episode.yaml"]
+    assert archive.read("20261018-100000_yeni/bag/bag_0.mcap") == b"MCAP" * 1000
+
+
+@pytest.mark.parametrize("name, code", [("20261018-100000_yok", 404), ("..", 400),
+                                        ("%2e%2e", 400), ("20261018-100000_YENI", 400)])
+def test_a_bad_episode_name_is_not_a_path(web, name, code):
+    call, *_ = web
+    make_episode(call.episodes_dir, "20261018-100000_yeni")
+    assert call("GET", f"/api/episodes/{name}.zip")[0] == code
+    assert call("POST", f"/api/episodes/{name}/delete", {})[0] == code
+
+
+def test_deleting_an_episode_but_never_the_one_being_recorded(web):
+    call, robot, *_ = web
+    make_episode(call.episodes_dir, "20261018-100000_yeni")
+    make_episode(call.episodes_dir, "20261018-110000_simdi")
+    robot.episode_state = {"recording": True, "episode": "20261018-110000_simdi"}
+    status, body = call("POST", "/api/episodes/20261018-110000_simdi/delete", {})
+    assert status == 409 and "being recorded" in body["error"]
+    assert call("POST", "/api/episodes/20261018-100000_yeni/delete", {})[0] == 200
+    assert not (call.episodes_dir / "20261018-100000_yeni").exists()
+    assert (call.episodes_dir / "20261018-110000_simdi").exists()
+
+
+def test_status_carries_the_recorders_word(web):
+    call, robot, *_ = web
+    robot.episode_state = {"recording": True, "episode": "x", "elapsed_s": 3.0}
+    assert call("GET", "/api/status")[1]["episode"]["elapsed_s"] == 3.0

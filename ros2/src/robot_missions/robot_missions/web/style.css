@@ -60,3 +60,9 @@ pre { background: #f5f7fa; padding: 8px; border-radius: 6px; font-size: 12px; wh
 #drive-pad.live { opacity: 1; border-color: var(--accent); }
 #drive-knob { position: absolute; left: 50%; top: 50%; width: 64px; height: 64px; margin: -32px 0 0 -32px;
   border-radius: 50%; background: var(--accent); pointer-events: none; }
+
+#rec { color: #fff; background: var(--danger); border-radius: 6px; padding: 0 6px; font-weight: 700; }
+.rec-line { font-weight: 600; color: var(--danger); margin: 6px 0; }
+#learn-list li { cursor: default; }
+#learn-list .meta { color: var(--muted); font-size: 12px; }
+#rec.warming { background: #d4a20b; }

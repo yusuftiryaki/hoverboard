@@ -161,7 +161,11 @@ User=enes
 ExecStartPre=/bin/sleep 5
 ExecStart=/bin/bash -lc 'source /opt/ros/jazzy/setup.bash && \
   source /home/enes/howerboard/ros2/install/setup.bash && \
-  ros2 launch robot_bringup robot.launch.py site_file:=/home/enes/site.geojson'
+  ros2 launch robot_bringup robot.launch.py site_file:=/home/enes/site.geojson \
+    episodes_dir:=/mnt/ssd/episodes'
+# episodes_dir: learning mode's recordings (docs/learning.md) — on the USB 3
+# SSD, never the SD card (~2.7 GB/hour with the camera). Mount it in fstab
+# with `nofail`, or a missing SSD stops the robot from booting.
 # site_file: the site (docs/missions.md) — the web page (http://<robot>:8080/)
 # edits it; the file does not have to exist yet, the first save creates it.
 # Missions, the survey map and home all come from it.

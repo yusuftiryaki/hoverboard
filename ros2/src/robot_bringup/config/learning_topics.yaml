@@ -1,0 +1,53 @@
+# What an episode records (docs/learning.md, "Kaydedilen topic'ler").
+# robot_learning's episode_recorder reads this; a new sensor is a new line.
+#
+# ⚠️ The action labels are THREE topics on purpose (learning.md decision 3):
+# what the person wanted (/cmd_vel_teleop), what Nav2 proposed (/cmd_vel_nav),
+# what reached the bridge (/cmd_vel) — plus who held the wheels
+# (/teleop/state) and what could have blocked them (nav_lock, bumper,
+# diagnostics). Between "wanted" and "happened" sit the mux, the speed limits,
+# the bumper veto and the battery lock; a policy trained on the wrong one
+# learns the wrong thing.
+#
+# Never /camera/image_raw: 640x480 rgb8 at 30 Hz is ~27 MB/s. The camera is
+# recorded as /camera/jpeg (robot_learning's image_compressor).
+learning_topics:
+  always:
+    # camera
+    - /camera/jpeg
+    - /camera/camera_info
+    # state: inertial, satellite, wheels, estimates
+    - /imu/data_raw
+    - /imu/data
+    - /imu/mag
+    - /gps/fix
+    - /gps/filtered
+    - /odom
+    - /joint_states
+    - /odometry/filtered/local
+    - /odometry/filtered/global
+    - /odometry/gps
+    - /tf
+    - /tf_static
+    - /robot_description
+    - /battery
+    - /bumper
+    - /diagnostics
+    # actions and who gave them
+    - /cmd_vel_teleop
+    - /cmd_vel_nav
+    - /cmd_vel_nav_gated
+    - /cmd_vel
+    - /teleop/state
+    - /nav_lock
+    # context
+    - /mission_runner/status
+    - /battery_supervisor/state
+    - /obstacle_map
+    - /detected_dock_pose
+    - /learning/marker
+  sim:
+    # the answer key: only the simulator has it
+    - /ground_truth
+    - /collision_truth
+    - /dock_contact_truth

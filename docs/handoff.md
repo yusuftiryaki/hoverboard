@@ -709,7 +709,11 @@ Alanlar hem **masada haritadan çizilecek** hem **öğret-kaydet** ile kaydedile
   - ✅ **5b — öğret-kaydet** (iz şekli `odom`'dan, yeri ortalanan map→odom'dan;
     NEO-6M'de şekil 0.11 m, kayma 1.4–2.7 m; `poi` türü). ⚠️ İlk sürüm GPS
     örneklerini kaydediyordu ve NEO-6M'le kendini kesen izler çıkardı.
-  - **Sıradaki: 5c** (bölüm kaydedici, learning.md), sonra 5d.
+  - ✅ **5c — öğrenme modu kaydedici** (`robot_learning`; rosbag2/MCAP;
+    sayfada Öğrenme sekmesi). ⚠️ Kaydedici başladıktan 3–4 sn sonra abone
+    oluyor → sayfa "HAZIRLANIYOR" diyor, hazır olunca REC. Çökmede kapanmış
+    bölmeler `reindex` ile geri geliyor (ölçüldü).
+  - **Sıradaki: 5d** (MCAP → eğitim formatı, laptopta).
   - Sahada ilk kullanım için `robot.service`'e `site_file:=` eklenmeli
     (deployment.md adım 8).
 

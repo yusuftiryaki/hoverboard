@@ -418,6 +418,7 @@ async function pollStatus() {
       ? `🔋 %${Math.round(s.battery.percentage * 100)}` : "";
     $("mission-status").textContent = m ? JSON.stringify(m, null, 1) : "";
     if (typeof onTeachStatus === "function") onTeachStatus(s.teach);
+    if (typeof onEpisodeStatus === "function") onEpisodeStatus(s.episode);
   } catch (e) {
     $("status-line").textContent = "Robota ulaşılamıyor: " + e.message;
   }

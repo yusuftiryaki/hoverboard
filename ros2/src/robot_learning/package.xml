@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>robot_learning</name>
+  <version>0.1.0</version>
+  <description>Learning mode (docs/learning.md): episodes of the robot's whole
+    state and sensors, recorded with rosbag2/MCAP for imitation learning.</description>
+  <maintainer email="enesis@entes.com.tr">Enes</maintainer>
+  <license>MIT</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>robot_missions_interfaces</exec_depend>
+  <!-- camera.jpeg_from_image: the same encoder as the web page's live view -->
+  <exec_depend>robot_missions</exec_depend>
+  <exec_depend>ros2bag</exec_depend>
+  <exec_depend>rosbag2_storage_mcap</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

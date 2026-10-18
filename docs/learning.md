@@ -1,7 +1,8 @@
 # Öğrenme modu: taklit ile öğrenme için veri kaydı
 
-> Durum: **tasarım** (2026-10-18). 5c (kaydedici) ve 5d (dışa aktarma) bu
-> dosyada; 5a/5b `docs/missions.md` "5. aşama"da.
+> Durum: **5c yapıldı** (2026-10-18) — kaydedici, sayfa, ölçüldü (aşağıda
+> "5c: ne yapıldı"). 5d (dışa aktarma) tasarım. 5a/5b `docs/missions.md`
+> "5. aşama"da.
 
 ## Ne istiyoruz
 Operatör sayfada "şu görevi yapacağız, öğrenme modundasın" der, robotu sürer
@@ -97,6 +98,64 @@ Profil bir yaml'da (`config/learning_topics.yaml`); yeni sensör = yeni satır.
 "Öğrenme" sekmesi: görev etiketi (serbest + son kullanılanlar), mod, not →
 **Kaydı başlat**; kayıt sürerken kırmızı REC, süre, boyut, kalan disk,
 **İşaret** düğmesi; **Bitir** → sonuç + not. Bölüm listesi: indir (zip), sil.
+
+## ✅ 5c: ne yapıldı (2026-10-18)
+- **`robot_learning` paketi:** `episode.py` (ROS'suz: bölüm dizini,
+  `episode.yaml`, `ros2 bag record` sürecini başlatma/durdurma, disk koruması,
+  çökme tespiti), `episode_recorder` düğümü (`~/command` =
+  `robot_missions_interfaces/Episode` start/stop/mark, `~/status` latched,
+  `learning/marker`), `image_compressor` (`camera/image_raw` → `camera/jpeg`,
+  ham karenin damgasıyla, **yalnız biri abone olunca**, ≤ 15 Hz).
+- Profil: `robot_bringup/config/learning_topics.yaml` (32 topic; `sim`
+  grubunda ground truth). `robot.launch.py`: `use_learning` (varsayılan açık,
+  boştayken iş yapmaz), `episodes_dir`, `episode_split_s` (60),
+  `learning_sim`. Pi'da `episodes_dir` SSD'de (deployment.md adım 8).
+- Sayfada **Öğrenme** sekmesi (görev, mod, not → başlat; işaret; sonuç + not →
+  bitir; liste: indir zip / sil) ve her sekmede görünen **REC** rozeti.
+- Bölüm dizini: `episode.yaml` (görev, mod, sonuç, işaretler, `ready_after_s`,
+  yazılım sürümü: git sha + kirli mi), `bag/` (MCAP, 60 sn'de bölünmüş),
+  `recorder.log`, `site.geojson` kopyası, `params/<düğüm>.yaml`
+  (`ros2 param dump`: köprü, EKF'ler, navsat, twist_mux, batarya… — B4'ten
+  sonra hangi sabitlerle kaydedildiği buradan okunur).
+
+Yolda bulunanlar (hepsi testli):
+- ⚠️⚠️ **Kaydedici saniyelerce kör.** `ros2 bag record` başladıktan sonra
+  konulara abone olması bu makinede **3–4 sn** sürüyor; ilk denemede
+  ground truth'un ilk kaydı robot 0.55 m gitmişken geldi — gösterimin başı
+  yoktu. Artık düğüm ROS grafiğinden "o an yayıncısı olan her profil konusuna
+  kayıt süreci abone mi" diye bakıyor; olana kadar sayfa **○ HAZIRLANIYOR —
+  henüz sürme** (+ beklenen konular) diyor, sonra **● REC**. `ready_after_s`
+  `episode.yaml`'da. Pi'da bu süre daha uzun olacak — ölçülmeli.
+- ⚠️ **Kayıt sürecinin çıktısı boşaltılmayan bir PIPE'a gitseydi** (ilk
+  taslak) rosbag2 her bölmede log yazdığı için 64 KB dolunca saatler sonra
+  sessizce donardı. Çıktı `recorder.log`'a.
+- Kayıt süreci düğümden bağımsız (kendi oturumu) ama sahipsiz kalmaz: düğüm
+  kapanırken SIGINT (sonuç `shutdown`), düğüm öldürülürse `setpriv
+  --pdeathsig INT` ile çekirdek SIGINT yolluyor. (`preexec_fn` çok iş
+  parçacıklı süreçte güvenli değil.)
+- `ros2 param dump` düğüm başına ~1–2 sn CLI açılışı → paralel (4), bölümden
+  bağımsız iş parçacığında; bölüm o sırada biterse sonuç dosyaya sonradan
+  yamanıyor.
+
+**Ölçülen** (`test_learning_stack.py`, gerçek yığın + kinematik dünya):
+- Sayfadan başlat → **hazır 3–4 sn**; hazır beklenince sürüşün tamamı bag'de
+  (ilk ground truth x = 0.000).
+- 10 sn'lik bölümde 23 topic: `/cmd_vel_teleop` 100 (tam 0.30 m/s ve 0.5
+  rad/s), `/cmd_vel` 100, `/teleop/state` ~80, `/odom` ~300–440, kamera JPEG
+  ~30 (5 Hz sim kamerası; damgalar artan, çözülebilir, varıştan < 0.5 sn eski),
+  işaret 1 (hem bag'de hem `episode.yaml`'da), `/tf_static` ve
+  `/robot_description` (latched) 1'er.
+- **Çökme:** kayıt süreci 10 sn'de SIGKILL → bölüm `crashed`, `metadata.yaml`
+  yok (beklenen); `Reindexer` 3 bölmeden **5.7 sn**'yi geri getirdi (kapanmış
+  bölmeler), sonraki bölüm normal başladı. Elle: `ros2 bag reindex <bag> -s mcap`.
+- Tarayıcıda uçtan uca: başlat → HAZIRLANIYOR → REC → Sür sekmesinden sür →
+  işaret → bitir → listede → zip 556 KB → sil. JS hatası yok.
+
+Bilinmeyenler / sahada ölçülecek:
+- Pi 4'te hazır olma süresi, CPU yükü (kayıt + JPEG kodlama 15 Hz) ve SSD yazma
+  hızı. Gerçek kamera 30 Hz ham + 15 Hz JPEG.
+- `systemctl stop` SIGTERM'ü tüm cgroup'a yollar; rosbag2'nin SIGTERM'de de
+  dosyalarını kapattığı doğrulanmadı (kapatmazsa `reindex`).
 
 ## 5d: dışa aktarma (sonra, laptopta)
 MCAP → sabit frekansta senkron gözlem/aksiyon tablosu (LeRobot v2 benzeri:

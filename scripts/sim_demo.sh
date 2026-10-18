@@ -93,7 +93,8 @@ echo ">> robot yığını (robot.launch.py, Nav2 dahil)"
 setsid ros2 launch robot_bringup robot.launch.py esp32_port:=/tmp/fake_esp32 \
   use_localization:=true use_gps:=true use_imu:=false use_mag:=false \
   use_imu_filter:=true use_nav2:=true \
-  site_file:="${SITE}" detected_file:="${DETECTED}" web_port:="${PORT}" &
+  site_file:="${SITE}" detected_file:="${DETECTED}" web_port:="${PORT}" \
+  learning_sim:=true episodes_dir:="${HOME}/.robot/sim_episodes" &
 STACK_PID=$!
 
 echo
