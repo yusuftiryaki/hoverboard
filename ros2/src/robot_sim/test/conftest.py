@@ -184,6 +184,13 @@ STACK_PATTERNS = (
     "lib/robot_missions/web_ui",
     # publishes /detected_dock_pose from the camera
     "image_proc/track_marker_node",
+    # learning mode: an orphan recorder would keep writing a bag forever
+    "lib/robot_learning/episode_recorder",
+    "lib/robot_learning/image_compressor",
+    # ⚠️ by its node name, NOT "ros2 bag record": ci.sh's flight recorder
+    # (CI_BAG=1) is one too, runs for the whole stage, and matched — every
+    # stack in CI then refused to start.
+    "episode_bag_recorder",
 )
 
 
@@ -241,7 +248,10 @@ class SimStack:
     reading meaningless.
     """
 
-    LAUNCH_ARGS = ("use_localization:=true", "use_imu:=false", "use_gps:=false")
+    # use_learning off: the recorder is idle anyway, but stacks stay exactly
+    # what they measured before it existed. LearningStack turns it on.
+    LAUNCH_ARGS = ("use_localization:=true", "use_imu:=false", "use_gps:=false",
+                   "use_learning:=false")
     LINK = "/tmp/fake_esp32"
 
     def __init__(self, *sim_args):
@@ -361,7 +371,7 @@ class GlobalStack(SimStack):
     """
 
     LAUNCH_ARGS = ("use_localization:=true", "use_imu:=false", "use_mag:=false",
-                   "use_gps:=true", "use_imu_filter:=true")
+                   "use_gps:=true", "use_imu_filter:=true", "use_learning:=false")
 
 
 @pytest.fixture
@@ -418,6 +428,35 @@ class WebStack(SiteStack):
 
     WEB_PORT = 18080
     WEB_ARGS = ("use_web:=true", f"web_port:={WEB_PORT}")
+
+
+class LearningStack(WebStack):
+    """WebStack with learning mode on, episodes in the test's own directory,
+    bags split every SPLIT_S so a crash test has closed splits to recover."""
+
+    SPLIT_S = 3
+
+    def __init__(self, workdir, features, *sim_args):
+        self.episodes_dir = os.path.join(workdir, "episodes")
+        super().__init__(workdir, features, *sim_args)
+
+    def launch_args(self):
+        return (*super().launch_args(), "use_learning:=true", "learning_sim:=true",
+                f"episodes_dir:={self.episodes_dir}", f"episode_split_s:={self.SPLIT_S}")
+
+
+@pytest.fixture
+def learning_stack(ros, tmp_path):
+    made = []
+
+    def _make(features, *sim_args):
+        stack = LearningStack(str(tmp_path), features, *sim_args)
+        made.append(stack)
+        return stack
+
+    yield _make
+    for stack in made:
+        stack.close()
 
 
 @pytest.fixture
@@ -741,7 +780,7 @@ class GazeboStack(SimStack):
     """
 
     LAUNCH_ARGS = ("use_localization:=true", "use_imu:=false", "use_gps:=false",
-                   "use_sim_time:=true")
+                   "use_sim_time:=true", "use_learning:=false")
     LINK = "/tmp/fake_esp32_gazebo"
     GAZEBO_ARGS = ()
 

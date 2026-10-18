@@ -23,6 +23,10 @@
     POST /api/teach/point           {"kind": station|poi|obstacle, "seconds"} average one
     POST /api/teach/cancel
     POST /api/teach/take            {"result": the finished candidate or null}, once
+    POST /api/episode/start|stop|mark  learning mode -> episode_recorder ~/command
+    GET  /api/episodes              the recorded episodes, newest first
+    GET  /api/episodes/<name>.zip   one episode, zipped (streamed)
+    POST /api/episodes/<name>/delete
 
 Edits are files: the site file and the detections file, each written
 atomically, the site's previous version kept as site.geojson.bak. After each
@@ -48,6 +52,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Optional, Tuple
 
+from robot_missions import episodes
 from robot_missions.detected import images_dir, safe_image_name
 from robot_missions.mission import TASK_TYPES
 from robot_missions.site import SiteError, parse_site
@@ -77,12 +82,14 @@ def _atomic_write(path: str, text: str) -> None:
 
 class WebApi:
     def __init__(self, site_file: str, detected_file: str, backend,
-                 teleop: Optional[TeleopGate] = None, teacher: Optional[Teacher] = None):
+                 teleop: Optional[TeleopGate] = None, teacher: Optional[Teacher] = None,
+                 episodes_dir: str = ""):
         self.site_file = site_file
         self.detected_file = detected_file
         self.backend = backend
         self.teleop = teleop            # None: driving from the page is off
         self.teacher = teacher          # None: no teach-by-driving
+        self.episodes_dir = episodes_dir
         self._lock = threading.Lock()   # one file edit at a time
 
     def status(self) -> Dict[str, Any]:
@@ -90,6 +97,34 @@ class WebApi:
         out["teleop"] = None if self.teleop is None else self.teleop.state()
         out["teach"] = None if self.teacher is None else self.teacher.state()
         return out
+
+    # --- learning mode (docs/learning.md) --------------------------------------
+
+    def episode(self, command: str, body: Any) -> Dict[str, Any]:
+        if not isinstance(body, dict):
+            raise ApiError("body must be a JSON object")
+        ok, message, name = self.backend.episode_command(command, body)
+        if not ok:
+            raise ApiError(message, HTTPStatus.CONFLICT)
+        return {"ok": True, "message": message, "episode": name}
+
+    def list_episodes(self) -> Dict[str, Any]:
+        return {"episodes": episodes.list_episodes(self.episodes_dir)}
+
+    def _recording(self) -> Optional[str]:
+        state = self.backend.status().get("episode") or {}
+        return state.get("episode") if state.get("recording") else None
+
+    def delete_episode(self, name: str) -> Dict[str, Any]:
+        try:
+            episodes.delete_episode(self.episodes_dir, name, self._recording())
+        except ValueError as exc:
+            raise ApiError(str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise ApiError(f"no episode {name}", HTTPStatus.NOT_FOUND) from exc
+        except PermissionError as exc:
+            raise ApiError(str(exc), HTTPStatus.CONFLICT) from exc
+        return {"deleted": name}
 
     # --- teach by driving (teach.py) ------------------------------------------
 
@@ -297,6 +332,10 @@ def make_handler(api: WebApi, static_dir: str):
         re.compile(r"^/api/teleop/release$"): lambda m, body: api.teleop_release(body),
         re.compile(r"^/api/teach/(trace|corner|finish|point|cancel|take)$"):
             lambda m, body: api.teach(m.group(1), body),
+        re.compile(r"^/api/episode/(start|stop|mark)$"):
+            lambda m, body: api.episode(m.group(1), body),
+        re.compile(r"^/api/episodes/([^/]+)/delete$"):
+            lambda m, body: api.delete_episode(m.group(1)),
     }
 
     class Handler(BaseHTTPRequestHandler):
@@ -381,8 +420,31 @@ def make_handler(api: WebApi, static_dir: str):
             except (BrokenPipeError, ConnectionResetError):
                 pass                           # the tab was closed
 
+        def _episode_zip(self, name: str) -> None:
+            try:
+                episodes.episode_dir(api.episodes_dir, name)
+            except ValueError as exc:
+                return self._send(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+            except FileNotFoundError:
+                return self._send(HTTPStatus.NOT_FOUND, {"error": f"no episode {name}"})
+            # No Content-Length (it is streamed): the connection's end is the
+            # file's end, as HTTP/1.0 allows.
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Disposition", f'attachment; filename="{name}.zip"')
+            self.end_headers()
+            try:
+                episodes.write_zip(api.episodes_dir, name, self.wfile)
+            except (BrokenPipeError, ConnectionResetError):
+                pass                           # the download was cancelled
+
         def do_GET(self) -> None:             # noqa: N802
             path = self.path.split("?", 1)[0]
+            match = re.match(r"^/api/episodes/([^/]+)\.zip$", path)
+            if match:
+                return self._episode_zip(match.group(1))
+            if path == "/api/episodes":
+                return self._guard(api.list_episodes)
             match = re.match(r"^/api/detected/(\d+)/image$", path)
             if match:
                 return self._image(int(match.group(1)))

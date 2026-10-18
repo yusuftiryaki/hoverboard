@@ -254,8 +254,12 @@ class Driver:
 
 def test_the_page_heading_is_the_true_compass_all_the_way_round(web_stack):
     """A6's lesson: a mirrored or offset heading looks perfect in ONE
-    direction. Turn on the spot through a full circle and compare /api/status
-    against /ground_truth throughout."""
+    direction. Turn on the spot in eight 45-degree steps and, standing still
+    at each, compare /api/status against /ground_truth.
+
+    Standing still on purpose: sampled WHILE turning (0.5 rad/s) the status
+    lags the truth by tf + HTTP, and under a loaded machine that read 11 deg
+    of "error" that was only lag."""
     web_stack([LAWN], *QUIET_GPS)
     wait_http(lambda s: s["robot"] is not None and s["robot"]["heading_deg"] is not None,
               60.0, "a heading")
@@ -265,24 +269,24 @@ def test_the_page_heading_is_the_true_compass_all_the_way_round(web_stack):
         while not watch.truth and time.monotonic() < deadline:
             time.sleep(0.1)
         driver = Driver(watch)
-        errors, start, turned, last = [], time.monotonic(), 0.0, watch.truth[-1][3]
-        while turned < 2 * math.pi + 0.5 and time.monotonic() - start < 60.0:
-            driver.send(0.0, 0.5)                       # 0.5 rad/s, left
-            yaw = watch.truth[-1][3]
-            turned += (yaw - last + math.pi) % (2 * math.pi) - math.pi
-            last = yaw
-            if int(time.monotonic() * 2) % 2 == 0:      # sample ~ every 0.5 s
-                heading = http("GET", "/api/status")["robot"]["heading_deg"]
-                truth = (90.0 - math.degrees(watch.truth[-1][3])) % 360.0
-                errors.append((truth, compass_error(heading, truth)))
-        driver.stop(0.5)
-        assert turned >= 2 * math.pi, f"only turned {math.degrees(turned):.0f} deg"
-        covered = {int(t // 45) for t, _ in errors}
-        assert covered == set(range(8)), f"sweep missed octants: {sorted(covered)}"
-        # Sampled while turning at 0.5 rad/s: the status is up to ~0.1 s old
-        # (tf + HTTP), i.e. ~3 deg of lag on top of the EKF's own error.
+        errors = []
+        for step in range(8):
+            target = watch.truth[-1][3] + math.pi / 4
+            deadline = time.monotonic() + 20.0
+            while time.monotonic() < deadline:
+                error = (target - watch.truth[-1][3] + math.pi) % (2 * math.pi) - math.pi
+                if abs(error) < 0.03:
+                    break
+                driver.send(0.0, max(-1.0, min(1.0, 2.0 * error)))
+            driver.stop(1.0)                            # settle: tf and EKF catch up
+            heading = http("GET", "/api/status")["robot"]["heading_deg"]
+            truth = (90.0 - math.degrees(watch.truth[-1][3])) % 360.0
+            errors.append((truth, compass_error(heading, truth)))
+        covered = {int(((t + 22.5) % 360) // 45) for t, _ in errors}
+        assert covered == set(range(8)), f"sweep missed octants: {sorted(covered)} {errors}"
         worst = max(errors, key=lambda e: e[1])
-        assert worst[1] < 8.0, f"compass off by {worst[1]:.1f} deg at true {worst[0]:.0f}"
+        print(f"\nMEASURED compass sweep: worst {worst[1]:.2f} deg at true {worst[0]:.0f}")
+        assert worst[1] < 3.0, f"compass off by {worst[1]:.1f} deg at true {worst[0]:.0f}"
     finally:
         watch.close()
 

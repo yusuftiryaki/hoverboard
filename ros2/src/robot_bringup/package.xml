@@ -39,6 +39,8 @@
   <!-- SP3: Pi Camera V2 + marker detection (use_camera:=true). -->
   <exec_depend>camera_ros</exec_depend>
   <exec_depend>image_proc</exec_depend>
+  <!-- learning mode: episode_recorder, image_compressor (docs/learning.md) -->
+  <exec_depend>robot_learning</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

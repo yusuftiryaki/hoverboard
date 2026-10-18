@@ -59,6 +59,7 @@ from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
@@ -86,6 +87,10 @@ def generate_launch_description():
     dock_database = LaunchConfiguration("dock_database")
     use_missions = LaunchConfiguration("use_missions")
     detected_file = LaunchConfiguration("detected_file")
+    use_learning = LaunchConfiguration("use_learning")
+    episodes_dir = LaunchConfiguration("episodes_dir")
+    learning_sim = LaunchConfiguration("learning_sim")
+    episode_split_s = LaunchConfiguration("episode_split_s")
     use_web = LaunchConfiguration("use_web")
     web_port = LaunchConfiguration("web_port")
 
@@ -163,6 +168,26 @@ def generate_launch_description():
                         "anyone on the robot's network can start a mission.",
         ),
         DeclareLaunchArgument("web_port", default_value="8080"),
+        DeclareLaunchArgument(
+            "use_learning", default_value="true",
+            description="Learning mode (docs/learning.md): episode_recorder + "
+                        "image_compressor. Idle until an episode starts.",
+        ),
+        DeclareLaunchArgument(
+            "episodes_dir", default_value=os.path.expanduser("~/.robot/episodes"),
+            description="Where episodes go. On the Pi: the USB SSD, not the SD card "
+                        "(learning.md, 'Depolama').",
+        ),
+        DeclareLaunchArgument(
+            "episode_split_s", default_value="60",
+            description="An episode's bag is split this often: a crash or power cut "
+                        "loses at most the last split.",
+        ),
+        DeclareLaunchArgument(
+            "learning_sim", default_value="false",
+            description="Episodes are from the simulator: record its ground truth "
+                        "too, and say so in episode.yaml.",
+        ),
         DeclareLaunchArgument(
             "use_missions", default_value="true",
             description="Run mission_runner (with use_nav2). docs/missions.md.",
@@ -283,7 +308,30 @@ def generate_launch_description():
             output="screen",
             condition=IfCondition(use_web),
             parameters=[{"site_file": site_file, "detected_file": detected_file,
-                         "port": web_port, "use_sim_time": use_sim_time}],
+                         "port": web_port, "episodes_dir": episodes_dir,
+                         "use_sim_time": use_sim_time}],
+        ),
+
+        # Learning mode: episodes for imitation learning (docs/learning.md).
+        # Pure subscribers — nothing here is on the command path.
+        Node(
+            package="robot_learning",
+            executable="episode_recorder",
+            name="episode_recorder",
+            output="screen",
+            condition=IfCondition(use_learning),
+            parameters=[{"episodes_dir": episodes_dir, "site_file": site_file,
+                         "sim": ParameterValue(learning_sim, value_type=bool),
+                         "split_s": ParameterValue(episode_split_s, value_type=int),
+                         "use_sim_time": use_sim_time}],
+        ),
+        Node(
+            package="robot_learning",
+            executable="image_compressor",
+            name="image_compressor",
+            output="screen",
+            condition=IfCondition(use_learning),
+            parameters=[{"use_sim_time": use_sim_time}],
         ),
 
         # Missions on the site: ~/start, ~/pause, ~/resume, ~/abort, ~/status.

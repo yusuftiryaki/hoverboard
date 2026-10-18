@@ -115,7 +115,7 @@ Laptop tarayıcı (uydu haritası)        Pi
 4. ✅ **Web arayüzü** (4a): çizim, görev formu, canlı durum; tespit edilen
    engelleri onaylama/etiketleme.
 5. **Öğret-kaydet** (tasarım 2026-10-18, aşağıda "5. aşama"): 5a web teleop ✅,
-   5b sınır/rota/istasyon/etiketli nokta kaydı ✅, 5c öğrenme modu kaydedici
+   5b sınır/rota/istasyon/etiketli nokta kaydı ✅, 5c öğrenme modu kaydedici ✅
    (taklit ile öğrenme verisi, `docs/learning.md`), 5d dışa aktarma.
 
 ## 1. aşama: ne yapıldı, nasıl kullanılır
@@ -549,8 +549,9 @@ karar 3). Kod: `teach.py` (ROS'suz), `web_api.py` `/api/teach/*`, `web_ui.py`
 | sessiz | 0.12 m | 0.10 m | 0.03 m | 0.01 m / 0.8° |
 | NEO-6M | 1.4–2.7 m | **0.11 m** | 1.4–2.7 m | 0.9–1.3 m / 0.7–0.8° |
 Alan sürülenden ~%3 küçük (23.1 vs 23.8 m²; köşe kesme + sadeleştirme).
-Pusula, yerinde tam turda ground truth'a karşı süpürüldü (< 8°, dönerken
-ölçüm gecikmesi dahil). Tarayıcıda da uçtan uca: iz → aday rota, nokta → etiket
+Pusula, yerinde tam turda 45°'lik adımlarla, her adımda durup ground truth'a
+karşı süpürüldü: en kötü **1.65°**. (İlk sürüm dönerken ölçüyordu; yüklü
+makinede 11° okudu — hata değil, tf + HTTP gecikmesiydi.) Tarayıcıda da uçtan uca: iz → aday rota, nokta → etiket
 "kuyu" + yarıçap → kaydet → robot kabul etti, `goto` listesinde çıktı.
 
 ## Bilinen açıklar

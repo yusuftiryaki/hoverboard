@@ -15,6 +15,7 @@ web_api.py is the HTTP side and knows no ROS; this node is its backend:
                                            only while a page holds the lease
     teleop/state (out, 10 Hz)              who is driving — for the episode
                                            recorder (docs/learning.md)
+    episode_recorder/command, ~/status     learning mode (docs/learning.md)
     teach (teach.py)                       every /gps/filtered fix + heading +
                                            odom->base_link + map->odom, while
                                            recording; /toLL places a finished trace
@@ -50,7 +51,7 @@ from robot_missions.site import LatLon
 from robot_missions.teach import Pose2, Teacher, compass_from_yaw
 from robot_missions.teleop import TeleopGate
 from robot_missions.web_api import WebApi, default_static_dir, make_server
-from robot_missions_interfaces.srv import StartMission
+from robot_missions_interfaces.srv import Episode, StartMission
 
 
 class WebUi(Node):
@@ -65,6 +66,9 @@ class WebUi(Node):
         self.declare_parameter("static_dir", "")
         self.declare_parameter("camera_topic", "camera/image_raw")
         self.declare_parameter("camera_fps", 5.0)
+        self.declare_parameter("episodes_dir", os.path.expanduser("~/.robot/episodes"))
+        # Stopping an episode waits for rosbag2 to close its files.
+        self.declare_parameter("episode_timeout_s", 20.0)
         # Driving from the page (docs/missions.md 5a). Below the bridge's own
         # max_linear_vel / max_angular_vel (1.0 / 1.5), which still apply.
         self.declare_parameter("use_teleop", True)
@@ -78,12 +82,15 @@ class WebUi(Node):
         self._mission: Optional[Dict[str, Any]] = None
         self._supervisor: Optional[str] = None
         self._battery: Optional[Dict[str, Any]] = None
+        self._episode: Optional[Dict[str, Any]] = None
 
         latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.create_subscription(NavSatFix, "gps/filtered", self._on_fix, 10)
         self.create_subscription(String, "mission_runner/status", self._on_mission, latched)
         self.create_subscription(String, "battery_supervisor/state", self._on_supervisor, latched)
         self.create_subscription(BatteryState, "battery", self._on_battery, 10)
+        self.create_subscription(String, "episode_recorder/status", self._on_episode, latched)
+        self._episode_client = self.create_client(Episode, "episode_recorder/command")
         self._tf = Buffer()
         self._tf_listener = TransformListener(self._tf, self)
         self._start = self.create_client(StartMission, "mission_runner/start")
@@ -117,7 +124,7 @@ class WebUi(Node):
             self.create_timer(0.05, self._tick_teleop, clock=steady)
         self.teacher = Teacher()
         self.api = WebApi(p("site_file").value, p("detected_file").value, self, self.teleop,
-                          self.teacher)
+                          self.teacher, p("episodes_dir").value)
         static = p("static_dir").value or default_static_dir()
         self.server = make_server(self.api, static, p("host").value, int(p("port").value))
         host, port = self.server.server_address[:2]
@@ -153,6 +160,10 @@ class WebUi(Node):
         with self._lock:
             self._supervisor = msg.data
 
+    def _on_episode(self, msg: String) -> None:
+        with self._lock:
+            self._episode = json.loads(msg.data)
+
     def _on_battery(self, msg: BatteryState) -> None:
         with self._lock:
             self._battery = {
@@ -164,13 +175,13 @@ class WebUi(Node):
     def status(self) -> Dict[str, Any]:
         with self._lock:
             fix, mission = self._fix, self._mission
-            supervisor, battery = self._supervisor, self._battery
+            supervisor, battery, episode = self._supervisor, self._battery, self._episode
         robot = None
         if fix is not None:
             robot = {"lat": fix[0], "lon": fix[1], "age_s": round(time.time() - fix[2], 1),
                      "heading_deg": self._heading()}
         return {"robot": robot, "mission": mission, "supervisor": supervisor,
-                "battery": battery}
+                "battery": battery, "episode": episode}
 
     def _pose2(self, parent: str, child: str) -> Optional[Pose2]:
         try:
@@ -223,6 +234,15 @@ class WebUi(Node):
         if response is None:
             return False, "mission_runner did not answer (is it running?)"
         return response.success, response.message
+
+    def episode_command(self, command: str, data: Dict[str, Any]) -> Tuple[bool, str, str]:
+        request = Episode.Request()
+        request.command, request.data = command, json.dumps(data)
+        response = self._call(self._episode_client, request,
+                              timeout=self.get_parameter("episode_timeout_s").value)
+        if response is None:
+            return False, "episode_recorder did not answer (is use_learning on?)", ""
+        return response.success, response.message, response.episode
 
     def reload_site(self) -> Tuple[bool, str]:
         """Ask everyone holding the site to read it again. A node that is not
@@ -285,8 +305,9 @@ class WebUi(Node):
             self._jpeg = (self._seq, data, time.time())
             self._camera.notify_all()
 
-    def _call(self, client, request):
-        timeout = self.get_parameter("call_timeout_s").value
+    def _call(self, client, request, timeout: Optional[float] = None):
+        if timeout is None:
+            timeout = self.get_parameter("call_timeout_s").value
         if not client.wait_for_service(timeout_sec=min(timeout, 2.0)):
             return None
         future = client.call_async(request)
