@@ -8,7 +8,7 @@ white round it (the quiet zone).
 from __future__ import annotations
 
 
-def write_tag_texture(path: str, board_px: int = 512, marker_fraction: float = 1 / 1.6,
+def write_tag_texture(path: str, board_px: int = 480, marker_fraction: float = 1 / 1.5,
                       tag_id: int = 0) -> str:
     import cv2
     import numpy as np

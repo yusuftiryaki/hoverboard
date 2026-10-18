@@ -38,7 +38,7 @@ from robot_sim.world import Pose                      # noqa: E402
 WIDTH, HEIGHT = 640, 480
 FX = FY = 500.0
 CX, CY = (WIDTH - 1) / 2.0, (HEIGHT - 1) / 2.0
-MARKER_SIZE = 0.10            # sensors.launch.py
+MARKER_SIZE = 0.20            # sensors.launch.py
 DICTIONARY = 20               # cv::aruco::DICT_APRILTAG_36h11
 RANGE = 0.5                   # camera to tag centre, m
 
@@ -78,7 +78,8 @@ def expected_from_dock_model(turn):
     cases by 60.7 deg."""
     tag_x = CAMERA.translation[0] + RANGE
     station = DockStation(x=tag_x - 0.55 * math.cos(turn), y=-0.55 * math.sin(turn),
-                          yaw=turn, tag_distance=0.55, tag_height=CAMERA.translation[2])
+                          yaw=turn, tag_distance=0.55, tag_height=CAMERA.translation[2],
+                          tag_size=MARKER_SIZE)
     return station.tag_in_camera(Pose(), CAMERA)
 
 

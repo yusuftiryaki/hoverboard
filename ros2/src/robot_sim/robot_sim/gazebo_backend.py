@@ -104,9 +104,15 @@ class GazeboBackend:
         texture is written next to nothing else, in a temp dir, per run."""
         import tempfile
 
+        from robot_sim.gazebo_obstacles import TAG_BOARD_PER_MARKER
         from robot_sim.tag_texture import write_tag_texture
+        # ⚠️ The texture's black square must be exactly 1/TAG_BOARD_PER_MARKER
+        # of the board station_model_sdf sizes, or every range is scaled: a
+        # 1/1.6 texture on a 1.5x board read every range 7% long.
         texture = write_tag_texture(os.path.join(tempfile.mkdtemp(prefix="hoverbot_tag_"),
-                                                 "tag36h11_0.png"))
+                                                 "tag36h11_0.png"),
+                                    board_px=int(round(320 * TAG_BOARD_PER_MARKER)),
+                                    marker_fraction=1 / TAG_BOARD_PER_MARKER)
         self._spawn(station_model_sdf(station, body, texture, marker_size=marker_size),
                     "station", world,
                     "istasyon + AprilTag Gazebo'ya spawn edildi")

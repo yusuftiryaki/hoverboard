@@ -314,6 +314,22 @@ class SimStack:
         deadline = time.monotonic() + 30.0
         while stray_stack_pids() and time.monotonic() < deadline:
             time.sleep(0.25)
+        release_dead_dds_memory()
+
+
+def release_dead_dds_memory():
+    """SIGKILLed nodes leave their Fast DDS shared-memory segments behind
+    (~0.5 MB each, /dev/shm is 64 MB in the container). Measured: one
+    afternoon of Gazebo runs filled it to 100%, after which every new node
+    logged "Failed to create segment" and fell back to UDP — and earlier, at
+    ~1800 files, sim_demo's nodes hung in rcl_node_init with no log at all
+    (scripts/dds_shm_clean.sh). `fastdds shm clean` frees only segments whose
+    owner is dead, so it is safe with this test process's own still live."""
+    try:
+        subprocess.run(["fastdds", "shm", "clean"], stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=30, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
 
 
 @pytest.fixture
@@ -788,7 +804,7 @@ class GazeboCameraStack(GazeboStack):
     GAZEBO_ARGS = ("camera:=true",)
     LAUNCH_ARGS = (*GazeboStack.LAUNCH_ARGS, "use_camera:=true", "camera_driver:=false")
 
-    def __init__(self, *sim_args, marker_size=0.10):
+    def __init__(self, *sim_args, marker_size=0.20):
         # The rendered square and the detector's idea of it: one number.
         self._marker_size = float(marker_size)
         super().__init__("-p", "simulate_marker:=false",

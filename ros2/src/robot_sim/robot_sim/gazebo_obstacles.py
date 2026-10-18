@@ -20,6 +20,7 @@ shorter than 0.09 m would be drawn on the map and driven straight over.
 
 from __future__ import annotations
 
+import math
 from typing import Sequence
 from xml.sax.saxutils import quoteattr
 
@@ -77,16 +78,16 @@ def obstacle_model_sdf(
 
 # A low body under the marker: tall enough for the chassis box (0.09-0.27 m
 # up) to hit, low enough not to hide the marker board standing on it (the
-# board's lower edge is at tag_height - board/2: 0.12 m for the 0.10 m tag).
+# board's lower edge is at tag_height - board/2: 0.125 m for the 0.20 m tag).
 STATION_BODY_HEIGHT_M = 0.12
 # The printed board round the marker: the black square plus a white quiet
-# zone, which the detector needs to find the square at all — 30% of the
-# square's edge on each side (0.10 m square -> 0.16 m board).
-TAG_BOARD_PER_MARKER = 1.6
+# zone, which the detector needs to find the square at all — two of the
+# tag's eight cells on each side (0.10 m square -> 0.15 m board).
+TAG_BOARD_PER_MARKER = 1.5
 
 
 def station_model_sdf(station, body, texture_path: str, name: str = "station",
-                      marker_size: float = 0.10) -> str:
+                      marker_size: float = 0.20) -> str:
     """The station as Gazebo sees it: its body (the same CircularObstacle the
     kinematic world stops the robot at, but STATION_BODY_HEIGHT_M tall) and a
     board carrying an AprilTag 36h11 #0 at DockStation.tag_position, facing
@@ -104,11 +105,15 @@ def station_model_sdf(station, body, texture_path: str, name: str = "station",
     """
     board = marker_size * TAG_BOARD_PER_MARKER
     tx, ty, tz = station.tag_position
-    # Never above the board's lower edge, or it hides the bottom of the marker
-    # (a bigger tag on the same 0.20 m-high mount reaches further down).
-    body_height = min(STATION_BODY_HEIGHT_M, tz - board / 2 - 0.005)
-    if body_height <= 0.0:
-        raise ValueError(f"a {marker_size} m marker at {tz} m height reaches the ground")
+    if tz - board / 2 < -1e-9:
+        raise ValueError(f"a {marker_size} m marker at {tz} m height reaches below the ground")
+    body_height = STATION_BODY_HEIGHT_M
+    if math.hypot(tx - body.x, ty - body.y) <= body.radius + 0.01:
+        # The board stands ON the body: never above its lower edge, or the
+        # body hides the bottom of the marker.
+        body_height = min(body_height, tz - board / 2 - 0.005)
+        if body_height <= 0.0:
+            raise ValueError(f"a {marker_size} m marker at {tz} m leaves no room for the body under it")
     face = station.yaw + 3.141592653589793
     return f"""<?xml version="1.0"?>
 <sdf version="1.9">

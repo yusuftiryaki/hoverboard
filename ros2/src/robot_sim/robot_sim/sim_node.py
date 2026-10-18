@@ -140,7 +140,12 @@ class SimNode(Node):
         self.declare_parameter("simulate_marker", True)
         # The rendered marker's black square (gazebo backend). Must equal the
         # detector's marker_size (robot.launch.py) or every range is scaled.
-        self.declare_parameter("dock_marker_size", 0.10)
+        self.declare_parameter("dock_marker_size", DockStation.tag_size)
+        # Where the marker stands, relative to the DOCKED base_link
+        # (dock_model.DockStation): the docking chain's
+        # external_detection_translation_x must be minus the distance.
+        self.declare_parameter("dock_tag_distance", DockStation.tag_distance)
+        self.declare_parameter("dock_tag_height", DockStation.tag_height)
         self.declare_parameter("camera_rate_hz", 0.0)
         self.declare_parameter("camera_width", 320)
         self.declare_parameter("camera_height", 240)
@@ -246,7 +251,9 @@ class SimNode(Node):
         if dock:
             if len(dock) != 3:
                 raise ValueError(f"dock_pose must be [x, y, yaw], got {dock}")
-            self._station = DockStation(*dock)
+            self._station = DockStation(*dock, tag_distance=p("dock_tag_distance").value,
+                                        tag_height=p("dock_tag_height").value,
+                                        tag_size=p("dock_marker_size").value)
             robot_radius = p("robot_radius").value
             # The body physically stops a robot that drives in too far.
             self._station_body = self._station.stop_obstacle(robot_radius)

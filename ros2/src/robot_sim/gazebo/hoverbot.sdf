@@ -78,7 +78,7 @@
            KinematicWorld provides from its own collision flag. -->
       <!-- Pi Camera V2, mounted exactly where robot.urdf.xacro puts
            camera_link: 0.30 m ahead of base_link, 0.2325 m up (this link sits
-           at z = 0.18, hence 0.0525), pitched 0.35 rad down. Gazebo cameras
+           at z = 0.18, hence 0.0525), pitched 0.09 rad down (robot.urdf.xacro camera_pitch). Gazebo cameras
            look along +X of the sensor frame, as camera_link does; the image
            is labelled camera_optical_link, the frame image_pipeline expects.
            ⚠️ The mount sits INSIDE this model's chassis box (0.7 m long, the
@@ -88,7 +88,7 @@
            (gazebo.launch.py camera:=true) and someone subscribes (bridge.yaml
            lazy). -->
       <sensor name="camera" type="camera">
-        <pose>0.30 0 0.0525 0 0.35 0</pose>
+        <pose>0.30 0 0.0525 0 0.09 0</pose>
         <always_on>true</always_on>
         <update_rate>10</update_rate>
         <topic>/model/hoverbot/camera</topic>
