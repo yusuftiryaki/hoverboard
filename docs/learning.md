@@ -1,8 +1,8 @@
 # Öğrenme modu: taklit ile öğrenme için veri kaydı
 
-> Durum: **5c yapıldı** (2026-10-18) — kaydedici, sayfa, ölçüldü (aşağıda
-> "5c: ne yapıldı"). 5d (dışa aktarma) tasarım. 5a/5b `docs/missions.md`
-> "5. aşama"da.
+> Durum: **5c ve 5d yapıldı** (2026-10-18) — kaydedici, sayfa, dışa aktarma;
+> ölçüldü (aşağıda). Sıradaki: algoritma seçimi ve politikanın twist_mux'a
+> takılması. 5a/5b `docs/missions.md` "5. aşama"da.
 
 ## Ne istiyoruz
 Operatör sayfada "şu görevi yapacağız, öğrenme modundasın" der, robotu sürer
@@ -157,8 +157,47 @@ Bilinmeyenler / sahada ölçülecek:
 - `systemctl stop` SIGTERM'ü tüm cgroup'a yollar; rosbag2'nin SIGTERM'de de
   dosyalarını kapattığı doğrulanmadı (kapatmazsa `reindex`).
 
-## 5d: dışa aktarma (sonra, laptopta)
-MCAP → sabit frekansta senkron gözlem/aksiyon tablosu (LeRobot v2 benzeri:
-parquet + mp4) ya da HDF5 (robomimic). Algoritma seçilince öğrenilen politika
-twist_mux'a teleop ile Nav2 arasında **ayrı bir girdi** olarak takılır — kendi
-hız tavanı ve kendi kapısıyla. Bugünün işi değil.
+## ✅ 5d: dışa aktarma (2026-10-18)
+```bash
+# bölümleri laptopa al (sayfadan zip ya da rsync), sonra dev container'da:
+ros2 run robot_learning episode_export ~/episodes -o ~/dataset --fps 10 --image-size 320x240
+#   --include-aborted   "iptal" sonuçlu bölümleri de al (varsayılan: alma)
+#   --reindex           çökmüş bölümün bag'ini önce onar (metadata.yaml yoksa)
+```
+Çıktı (`format: hoverbot-episodes-v1`):
+| dosya | içerik |
+|---|---|
+| `meta.json` | fps, sütun adları (`state_names`, `action_names`, `action_sources`), aksiyon kuralı; bölüm başına görev, mod, sonuç, işaretler (**kare numarası**), teleop oranı, yazılım sürümü |
+| `episodes/episode_NNNNNN.npz` | `timestamp`, `state` (N×15, eksik = NaN), `action` (N×2 etiket), `action_source` (yok/teleop/nav), `action_executed` (`/cmd_vel`), `teleop` (insan tutuyordu), `image_age` |
+| `videos/episode_NNNNNN.mp4` | satır başına bir kare (o andaki en son kamera karesi), mp4v |
+
+Kurallar (`dataset.py`, elle hesaplanmış testlerle):
+- Kareler **READY'den** başlar (öncesi kısmi). ⚠️ Gazebo'da bag'in saati sim
+  saati, `started_unix` duvar saati — saatler uyuşmuyorsa bag'in ilk mesajı.
+- Durum: her serinin kareden önceki **son** değeri; hiç gelmemişse NaN (0 değil).
+- **Aksiyon = (t, t+1/fps] aralığında verilen komut** — gözlem k'ya verilen
+  cevap; o aralıkta komut yoksa hâlâ taze (0.5 s, twist_mux'ın süresi) olan
+  son komut. Teleop Nav2'yi ezer (mux gibi).
+- Kamera karesi: damgası kareden önceki en son kare (damga = ışığın sensöre
+  geldiği an, ham karenin damgası).
+
+Neden parquet/LeRobot/HDF5 değil: algoritma seçilmedi (karar 1) ve
+hiçbiri burada yeni bağımlılık olmadan yazılamıyor (Noble apt'inde pyarrow
+yok). npz + mp4 her yerde açılır; seçilen eğiticinin formatına dönüştürücü
+eğitim makinesinde küçük bir adım, ve bag kaynak olarak kalır — başka
+seçimlerle istendiği an yeniden dışa aktarılır.
+
+**Ölçülen** (`test_learning_stack.py`, kaydedilen gerçek bölüm): 68 kare (~70
+beklenen), `action` tam 0.30 m/s ve 0.5 rad/s, kaynak yalnız teleop/yok,
+**etiket tekerlekten önce**: komutun geldiği kare ile odometrinin hızlandığı
+kare arası 0–5 kare (asla negatif değil — hizalama ters olsaydı politika
+geleceği "görerek" öğrenirdi), işaret doğru karede, video kare sayısı = satır
+sayısı.
+
+## Sonra: politika robota nasıl takılır
+Algoritma seçilince (adaylar: ACT, Diffusion Policy — ikisi de kamera +
+durum → aksiyon dizisi) öğrenilen politika twist_mux'a teleop ile Nav2
+arasında **ayrı bir girdi** olarak takılır — kendi hız tavanı, kendi ölü
+adamı ve kendi kapısıyla; teleop onu her zaman ezer. Pi 4'te çıkarım hızı
+ayrı bir ölçüm konusu (gerekirse laptopta çıkarım, Wi-Fi üzerinden — o
+zaman gecikme ve kopma güvenlik zincirinin parçası olur). Bugünün işi değil.
