@@ -167,3 +167,22 @@ def test_the_survey_grid_carries_keepout_obstacle_and_station():
     assert spec.origin_x == pytest.approx(-5.5, abs=1e-6)
     assert spec.origin_y == pytest.approx(-5.2, abs=1e-6)
     assert spec.width in (225, 226) and spec.height == 207
+
+
+def test_a_poi_with_a_radius_is_drawn_and_a_marker_is_not():
+    """docs/missions.md 5b: a well (radius) is an obstacle, a boundary stone
+    (no radius) only a label — it must not cut a hole in the lawn."""
+    def poi(name, east_m, **properties):
+        return feature("poi", name, {"type": "Point", "coordinates": [
+            LON0 + DLON_10M * east_m / 10, LAT0]}, **properties)
+
+    marker_only = site_of(poi("tas", 0.0, label="sınır taşı"))
+    assert not needs_conversion(marker_only)
+    geometry = convert_site(site_of(poi("kuyu", 10.0, label="kuyu", radius_m=0.6),
+                                    poi("tas", 0.0, label="sınır taşı")),
+                            enu, BODY_OFFSET, BODY_RADIUS)
+    (well,) = geometry.circles
+    assert (well.x, well.y, well.radius) == (pytest.approx(10, abs=1e-3),
+                                             pytest.approx(0, abs=1e-3), 0.6)
+    spec, grid = build_grid(geometry, 0.1, 2.0, 10**7)
+    assert grid[spec.index(*spec.cell_of(10.0, 0.0))] == OCCUPIED

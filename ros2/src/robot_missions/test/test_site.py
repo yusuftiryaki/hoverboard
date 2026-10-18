@@ -13,7 +13,7 @@ import math
 import pytest
 
 from robot_missions.site import (
-    LatLon, SiteError, distance_m, load_site, offset, parse_site)
+    LatLon, SiteError, describe, distance_m, load_site, offset, parse_site)
 
 LAT0, LON0 = 41.0, 29.0
 DLAT_10M = 8.993216e-05
@@ -186,3 +186,49 @@ def test_a_site_file_not_saved_yet_can_be_an_empty_site(tmp_path):
     assert load_site(path, missing_ok=True).is_empty()
     with pytest.raises(OSError):
         load_site(path)                  # by default a missing file is still an error
+
+
+# --- poi: labelled points (docs/missions.md 5b) -------------------------------
+
+def test_a_poi_is_a_marker_unless_it_has_a_radius():
+    site = parse_site(collection(
+        feature("poi", "kuyu-1", point(LON0, LAT0), label="kuyu", radius_m=0.6,
+                note="kapağı çürük"),
+        feature("poi", "taş-1", point(LON0 + DLON_10M, LAT0), label="sınır taşı")))
+    well, stone = site.pois
+    assert (well.label, well.note, well.radius_m) == ("kuyu", "kapağı çürük", 0.6)
+    assert (stone.label, stone.note, stone.radius_m) == ("sınır taşı", "", None)
+    # Only the one with a radius is an obstacle — for the map and the planner.
+    assert [(o.name, o.center, o.radius_m) for o in site.circle_obstacles] == [
+        ("kuyu-1", LatLon(LAT0, LON0), 0.6)]
+    assert describe(site) == "2 poi"           # not counted twice
+
+
+def test_a_poi_alone_is_not_an_empty_site():
+    site = parse_site(collection(feature("poi", "p", point(LON0, LAT0), label="direk")))
+    assert not site.is_empty()
+
+
+@pytest.mark.parametrize("properties, message", [
+    ({}, "needs a label"),
+    ({"label": "  "}, "needs a label"),
+    ({"label": 3}, "needs a label"),
+    ({"label": "kuyu", "note": 5}, "note must be text"),
+    ({"label": "kuyu", "radius_m": 0}, "radius_m"),
+    ({"label": "kuyu", "radius_m": "1"}, "radius_m"),
+])
+def test_a_bad_poi_rejects_the_file(properties, message):
+    with pytest.raises(SiteError, match=message):
+        parse_site(collection(feature("poi", "p", point(LON0, LAT0), **properties)))
+
+
+def test_a_poi_must_be_a_point():
+    with pytest.raises(SiteError, match="must be a Point"):
+        parse_site(collection(feature("poi", "p", square(LON0, LAT0, DLON_10M, DLAT_10M),
+                                      label="kuyu")))
+
+
+def test_a_poi_far_away_trips_the_spread_check():
+    with pytest.raises(SiteError, match="spans more than"):
+        parse_site(collection(feature("area", "a", square(LON0, LAT0, DLON_10M, DLAT_10M)),
+                              feature("poi", "p", point(LAT0, LON0), label="kuyu")))

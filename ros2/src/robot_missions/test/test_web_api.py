@@ -9,6 +9,8 @@ import urllib.request
 
 import pytest
 
+from robot_missions.site import LatLon
+from robot_missions.teach import Teacher
 from robot_missions.teleop import TeleopGate
 from robot_missions.web_api import WebApi, default_static_dir, make_server
 
@@ -38,6 +40,11 @@ class FakeRobot:
     def reload_site(self):
         self.reloads += 1
         return True, "reloaded"
+
+    def to_ll(self, points):
+        """map metres -> lat/lon, flat, around (LAT0, LON0) — a stand-in for
+        navsat_transform's /toLL."""
+        return [LatLon(LAT0 + y * 8.993216e-06, LON0 + x * 1.191613e-05) for x, y in points]
 
     camera = True                       # False: no camera running
     frames = 0
@@ -71,7 +78,8 @@ def web(tmp_path):
     detected = tmp_path / "detected.json"
     clock = FakeClock()
     gate = TeleopGate(max_linear=0.6, max_angular=1.0, deadman_s=0.3, lease_s=2.0, clock=clock)
-    api = WebApi(str(site), str(detected), robot, gate)
+    teacher = Teacher(min_fixes=2)
+    api = WebApi(str(site), str(detected), robot, gate, teacher)
     server = make_server(api, default_static_dir(), "127.0.0.1", 0)
     thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05},
                               daemon=True)
@@ -91,7 +99,7 @@ def web(tmp_path):
             return exc.code, json.loads(exc.read())
 
     call.base = base
-    call.gate, call.clock, call.api = gate, clock, api
+    call.gate, call.clock, call.api, call.teacher = gate, clock, api, teacher
     yield call, robot, site, detected
     server.shutdown()
     server.server_close()
@@ -342,3 +350,55 @@ def test_teleop_turned_off_on_the_robot_says_so(web):
     status, body = call("POST", "/api/teleop/acquire", {})
     assert status == 409 and "turned off" in body["error"]
     assert call("GET", "/api/status")[1]["teleop"] is None
+
+
+# --- teach by driving (docs/missions.md 5b) ----------------------------------------
+
+def test_a_trace_is_recorded_finished_and_comes_back_as_an_unnamed_candidate(web):
+    call, robot, site, _ = web
+    assert call("POST", "/api/teach/trace", {"kind": "route"})[0] == 200
+    for i in range(31):                                 # 3 m east, a pose every 0.1 m
+        call.teacher.feed(LatLon(LAT0, LON0 + i * 1.191613e-06), 90.0, i * 0.1,
+                          (i * 0.1, 0.0, 0.0), (0.0, 0.0, 0.0))
+    teach = call("GET", "/api/status")[1]["teach"]
+    assert teach["mode"] == "trace" and len(teach["points"]) >= 5
+    status, body = call("POST", "/api/teach/finish", {})
+    assert status == 200 and body["result"]["geometry"] == {
+        "type": "LineString", "coordinates": [[LON0, LAT0], [LON0 + 3 * 1.191613e-05, LAT0]]}
+    assert "name" not in body["result"]["properties"]
+    # Nothing was written: the person names it and saves through PUT /api/site.
+    assert not site.exists() and robot.reloads == 0
+    assert call("POST", "/api/teach/take", {})[1]["result"]["id"] == body["result"]["id"]
+    assert call("POST", "/api/teach/take", {})[1] == {"result": None}
+
+
+def test_a_point_is_averaged_then_taken(web):
+    call, *_ = web
+    assert call("POST", "/api/teach/point", {"kind": "poi", "seconds": 1})[0] == 200
+    for i in range(12):
+        call.teacher.feed(LatLon(LAT0, LON0), None, i * 0.1)
+    assert call("GET", "/api/status")[1]["teach"]["result_ready"]
+    result = call("POST", "/api/teach/take", {})[1]["result"]
+    assert result["properties"] == {"kind": "poi"}
+    assert result["geometry"]["coordinates"] == [LON0, LAT0]
+
+
+@pytest.mark.parametrize("path, body, message", [
+    ("/api/teach/trace", {"kind": "station"}, "a trace is one of"),
+    ("/api/teach/point", {"kind": "poi", "seconds": 0}, "seconds"),
+    ("/api/teach/finish", {}, "no trace"),
+    ("/api/teach/corner", {}, "start one first"),
+])
+def test_teach_mistakes_are_400_with_the_reason(web, path, body, message):
+    call, *_ = web
+    status, answer = call("POST", path, body)
+    assert status == 400 and message in answer["error"]
+
+
+def test_a_second_recording_waits_for_the_first(web):
+    call, *_ = web
+    call("POST", "/api/teach/trace", {"kind": "area"})
+    status, body = call("POST", "/api/teach/point", {"kind": "station"})
+    assert status == 400 and "already recording" in body["error"]
+    assert call("POST", "/api/teach/cancel", {})[0] == 200
+    assert call("POST", "/api/teach/point", {"kind": "station"})[0] == 200

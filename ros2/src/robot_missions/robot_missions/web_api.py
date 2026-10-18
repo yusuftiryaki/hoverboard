@@ -16,6 +16,13 @@
     POST /api/teleop/acquire        {} -> {"token": ..., limits}; 409 if someone else drives
     POST /api/teleop                {"token", "linear", "angular"} ratios in [-1, 1], ~10 Hz
     POST /api/teleop/release        {"token"}
+    POST /api/teach/trace           {"kind": area|keepout|route} start recording a drive
+    POST /api/teach/corner          the next pose is a vertex simplification keeps
+    POST /api/teach/finish          end the trace -> a candidate feature (unnamed);
+                                    placed via backend.to_ll (navsat's /toLL)
+    POST /api/teach/point           {"kind": station|poi|obstacle, "seconds"} average one
+    POST /api/teach/cancel
+    POST /api/teach/take            {"result": the finished candidate or null}, once
 
 Edits are files: the site file and the detections file, each written
 atomically, the site's previous version kept as site.geojson.bak. After each
@@ -44,6 +51,7 @@ from typing import Any, Dict, Optional, Tuple
 from robot_missions.detected import images_dir, safe_image_name
 from robot_missions.mission import TASK_TYPES
 from robot_missions.site import SiteError, parse_site
+from robot_missions.teach import Teacher, TeachError
 from robot_missions.teleop import TeleopConflict, TeleopError, TeleopGate
 
 STATIC_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
@@ -69,17 +77,44 @@ def _atomic_write(path: str, text: str) -> None:
 
 class WebApi:
     def __init__(self, site_file: str, detected_file: str, backend,
-                 teleop: Optional[TeleopGate] = None):
+                 teleop: Optional[TeleopGate] = None, teacher: Optional[Teacher] = None):
         self.site_file = site_file
         self.detected_file = detected_file
         self.backend = backend
         self.teleop = teleop            # None: driving from the page is off
+        self.teacher = teacher          # None: no teach-by-driving
         self._lock = threading.Lock()   # one file edit at a time
 
     def status(self) -> Dict[str, Any]:
         out = dict(self.backend.status())
         out["teleop"] = None if self.teleop is None else self.teleop.state()
+        out["teach"] = None if self.teacher is None else self.teacher.state()
         return out
+
+    # --- teach by driving (teach.py) ------------------------------------------
+
+    def teach(self, action: str, body: Any) -> Dict[str, Any]:
+        """Candidates only: nothing here writes the site (teach.py)."""
+        if self.teacher is None:
+            raise ApiError("teach-by-driving is turned off on the robot", HTTPStatus.CONFLICT)
+        body = body if isinstance(body, dict) else {}
+        t = self.teacher
+        try:
+            if action == "trace":
+                t.start_trace(body.get("kind"))
+            elif action == "corner":
+                t.pin_corner()
+            elif action == "finish":
+                return {"result": t.finish(self.backend.to_ll)}
+            elif action == "point":
+                t.start_point(body.get("kind"), body.get("seconds", 10))
+            elif action == "cancel":
+                t.cancel()
+            else:                                   # take
+                return {"result": t.take()}
+        except TeachError as exc:
+            raise ApiError(str(exc)) from exc
+        return {"ok": True, "teach": t.state()}
 
     # --- teleop ---------------------------------------------------------------
 
@@ -260,6 +295,8 @@ def make_handler(api: WebApi, static_dir: str):
         re.compile(r"^/api/teleop$"): lambda m, body: api.teleop_command(body),
         re.compile(r"^/api/teleop/acquire$"): lambda m, body: api.teleop_acquire(),
         re.compile(r"^/api/teleop/release$"): lambda m, body: api.teleop_release(body),
+        re.compile(r"^/api/teach/(trace|corner|finish|point|cancel|take)$"):
+            lambda m, body: api.teach(m.group(1), body),
     }
 
     class Handler(BaseHTTPRequestHandler):

@@ -706,8 +706,10 @@ Alanlar hem **masada haritadan çizilecek** hem **öğret-kaydet** ile kaydedile
   "5. aşama" (5a/5b) ve **`docs/learning.md`** (5c/5d).
   - ✅ **5a — sayfadan teleop** (ölü adam 0.3 s, kira 2 s, tavan 0.6 m/s /
     1.0 rad/s, ölçüldü: sayfa susunca robot 0.12 m'de duruyor).
-  - **Sıradaki: 5b** (iz/nokta kaydı, `poi` türü) ya da **5c** (bölüm
-    kaydedici) — ikisi paralel gidebilir.
+  - ✅ **5b — öğret-kaydet** (iz şekli `odom`'dan, yeri ortalanan map→odom'dan;
+    NEO-6M'de şekil 0.11 m, kayma 1.4–2.7 m; `poi` türü). ⚠️ İlk sürüm GPS
+    örneklerini kaydediyordu ve NEO-6M'le kendini kesen izler çıkardı.
+  - **Sıradaki: 5c** (bölüm kaydedici, learning.md), sonra 5d.
   - Sahada ilk kullanım için `robot.service`'e `site_file:=` eklenmeli
     (deployment.md adım 8).
 

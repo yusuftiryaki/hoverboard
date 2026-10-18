@@ -2,7 +2,7 @@
 
 ROS-free. One GeoJSON FeatureCollection holds the areas missions run in, the
 keep-out zones and surveyed obstacles the obstacle map draws, the charging
-station and the recorded routes — whether they were drawn on a map at a desk,
+station, the recorded routes and labelled points (poi) — whether they were drawn on a map at a desk,
 recorded by driving the robot, or typed by hand. docs/missions.md has the
 format; this module is its only reader.
 
@@ -23,14 +23,16 @@ import json
 import math
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 EARTH_RADIUS_M = 6371000.0
 # Further apart than this and the file is almost certainly broken (lat/lon
 # swapped, a point typed with a missing digit), not a real field.
 MAX_SPREAD_M = 5000.0
 
-KINDS = ("area", "keepout", "obstacle", "station", "route")
+KINDS = ("area", "keepout", "obstacle", "station", "route", "poi")
+# The page offers these as poi labels; any other text is just as valid.
+POI_LABELS = ("sınır taşı", "kuyu", "direk", "musluk", "vana", "kapı", "ağaç")
 
 
 class SiteError(ValueError):
@@ -101,6 +103,20 @@ class Route:
 
 
 @dataclass(frozen=True)
+class PointOfInterest:
+    """A labelled spot ("kuyu", "sınır taşı", free text). With radius_m it is
+    also a physical obstacle: parse_site puts it among circle_obstacles too, so
+    the map and the coverage planner keep away from it without knowing pois
+    exist. Without radius_m it is only a marker (and a goto target)."""
+
+    name: str
+    position: LatLon
+    label: str
+    note: str = ""
+    radius_m: Optional[float] = None
+
+
+@dataclass(frozen=True)
 class Site:
     areas: Tuple[Area, ...] = ()
     keepouts: Tuple[Keepout, ...] = ()
@@ -108,10 +124,11 @@ class Site:
     polygon_obstacles: Tuple[PolygonObstacle, ...] = ()
     stations: Tuple[Station, ...] = ()
     routes: Tuple[Route, ...] = ()
+    pois: Tuple[PointOfInterest, ...] = ()
 
     def is_empty(self) -> bool:
         return not any((self.areas, self.keepouts, self.circle_obstacles,
-                        self.polygon_obstacles, self.stations, self.routes))
+                        self.polygon_obstacles, self.stations, self.routes, self.pois))
 
 
 def load_site(path: str, missing_ok: bool = False) -> Site:
@@ -148,13 +165,17 @@ def parse_site(document: Any) -> Site:
         found[kind].append(item)
 
     obstacles = found["obstacle"]
+    pois = found["poi"]
     site = Site(
         areas=tuple(found["area"]),
         keepouts=tuple(found["keepout"]),
-        circle_obstacles=tuple(o for o in obstacles if isinstance(o, CircleObstacle)),
+        circle_obstacles=(*(o for o in obstacles if isinstance(o, CircleObstacle)),
+                          *(CircleObstacle(p.name, p.position, p.radius_m)
+                            for p in pois if p.radius_m is not None)),
         polygon_obstacles=tuple(o for o in obstacles if isinstance(o, PolygonObstacle)),
         stations=tuple(found["station"]),
         routes=tuple(found["route"]),
+        pois=tuple(pois),
     )
     _check_spread(site)
     return site
@@ -169,6 +190,7 @@ def all_positions(site: Site) -> List[LatLon]:
     points.extend(s.position for s in site.stations)
     for route in site.routes:
         points.extend(route.points)
+    points.extend(p.position for p in site.pois)
     return points
 
 
@@ -242,6 +264,18 @@ def _parse_feature(index: int, feature: Any):
             raise SiteError(f"{where}: heading_deg must be a compass bearing in "
                             f"[0, 360), got {heading!r}")
         return kind, Station(name, _position(where, coords), float(heading))
+    if kind == "poi":
+        need("Point")
+        label = properties.get("label")
+        if not isinstance(label, str) or not label.strip():
+            raise SiteError(f"{where}: a poi needs a label (e.g. {', '.join(POI_LABELS[:3])})")
+        note = properties.get("note", "")
+        if not isinstance(note, str):
+            raise SiteError(f"{where}: note must be text, got {note!r}")
+        radius = (None if properties.get("radius_m") is None
+                  else _positive(where, properties, "radius_m"))
+        return kind, PointOfInterest(name, _position(where, coords), label.strip(), note,
+                                     radius)
     need("LineString")
     if not isinstance(coords, list) or len(coords) < 2:
         raise SiteError(f"{where}: a route needs at least two points")
@@ -307,6 +341,8 @@ def _check_spread(site: Site) -> None:
 def describe(site: Site) -> str:
     parts: Sequence[Tuple[str, int]] = (
         ("area", len(site.areas)), ("keepout", len(site.keepouts)),
-        ("obstacle", len(site.circle_obstacles) + len(site.polygon_obstacles)),
-        ("station", len(site.stations)), ("route", len(site.routes)))
+        ("obstacle", len(site.circle_obstacles) + len(site.polygon_obstacles)
+         - sum(1 for p in site.pois if p.radius_m is not None)),
+        ("station", len(site.stations)), ("route", len(site.routes)),
+        ("poi", len(site.pois)))
     return ", ".join(f"{count} {name}" for name, count in parts if count) or "empty"
