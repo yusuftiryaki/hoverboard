@@ -69,7 +69,7 @@ from robot_sim.obstacle_map import DEFAULT_GRID, build_obstacle_grid, parse_obst
 from robot_sim.world import bumper_pressed
 from robot_sim.world import KinematicWorld
 
-EARTH_RADIUS_M = 6378137.0
+from robot_sim.site_world import EARTH_RADIUS_M  # noqa: E402  (one definition)
 STANDARD_GRAVITY = 9.80665
 
 
@@ -149,6 +149,11 @@ class SimNode(Node):
         self.declare_parameter("camera_rate_hz", 0.0)
         self.declare_parameter("camera_width", 320)
         self.declare_parameter("camera_height", 240)
+        # Learning mode (docs/learning.md 6b): the lawns' edge on the camera —
+        # a site file's areas are grass, the rest soil — and the palette seed
+        # (domain randomization; 0 = default colours).
+        self.declare_parameter("lawn_file", "")
+        self.declare_parameter("ground_seed", 0)
 
         # ---- Battery (SP5) -----------------------------------------------------
         # The pack the robot really has. battery_monitor's capacity_ah is what
@@ -557,7 +562,7 @@ class SimNode(Node):
                   for o in self._obstacles + self._unsurveyed]
         pose = self._world.pose
         pixels = render(width, height, mount.hfov, mount.translation, mount.rotation,
-                        (pose.x, pose.y, pose.yaw), solids)
+                        (pose.x, pose.y, pose.yaw), solids, self._lawns(), self._colours())
         msg = Image()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = "camera_optical_link"
@@ -566,6 +571,20 @@ class SimNode(Node):
         msg.step = width * 3
         msg.data = pixels.tobytes()
         self._image_pub.publish(msg)
+
+    def _lawns(self):
+        if not hasattr(self, "_lawn_polygons"):
+            from robot_sim.site_world import areas_in_world
+            path = self.get_parameter("lawn_file").value
+            self._lawn_polygons = areas_in_world(path, self._datum_lat, self._datum_lon) \
+                if path else []
+        return self._lawn_polygons
+
+    def _colours(self):
+        if not hasattr(self, "_palette"):
+            from robot_sim.sim_camera import palette
+            self._palette = palette(int(self.get_parameter("ground_seed").value))
+        return self._palette
 
     def _camera_mount(self) -> CameraMount | None:
         if self._camera is None:

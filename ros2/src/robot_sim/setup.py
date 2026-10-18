@@ -24,6 +24,7 @@ setup(
         "console_scripts": [
             "sim_node = robot_sim.sim_node:main",
             "edge_expert = robot_sim.edge_expert_node:main",
+            "edge_batch = robot_sim.edge_batch:main",
         ],
     },
 )

@@ -30,21 +30,14 @@ from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
 from robot_sim.edge_expert import EdgeExpert, ExpertConfig
-from robot_sim.sim_node import EARTH_RADIUS_M
+from robot_sim.site_world import areas_in_world
 
 
 def lawn_in_sim_world(site_file: str, area: str, datum_lat: float, datum_lon: float) -> Polygon:
-    with open(site_file, encoding="utf-8") as handle:
-        site = json.load(handle)
-    areas = [f for f in site.get("features", [])
-             if f.get("properties", {}).get("kind") == "area"
-             and (not area or f["properties"].get("name") == area)]
+    areas = areas_in_world(site_file, datum_lat, datum_lon, area)
     if not areas:
         raise ValueError(f"no area {area!r} in {site_file}")
-    ring = areas[0]["geometry"]["coordinates"][0]
-    k = EARTH_RADIUS_M * math.cos(math.radians(datum_lat))
-    return Polygon([(math.radians(lon - datum_lon) * k,
-                     math.radians(lat - datum_lat) * EARTH_RADIUS_M) for lon, lat in ring])
+    return areas[0]
 
 
 class EdgeExpertNode(Node):

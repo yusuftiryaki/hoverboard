@@ -78,3 +78,46 @@ def test_a_rock_behind_is_not_seen_and_turning_round_sees_it():
 def test_the_frame_is_rgb_uint8_of_the_asked_size():
     img = render(64, 48, HFOV, MOUNT_T, MOUNT_R, (0, 0, 0), [])
     assert img.shape == (48, 64, 3) and img.dtype == np.uint8
+
+
+# --- the lawn's edge (docs/learning.md 6b) ---------------------------------------
+
+def is_grass(px):
+    return px[1] > px[0] + 15          # green over red
+
+
+def is_soil(px):
+    return px[0] > px[1]                # red over green: brown
+
+
+def test_the_lawn_edge_is_where_the_geometry_puts_it():
+    from shapely.geometry import box
+    # The centre row looks 0.35 rad down from 0.35 m: it meets the ground
+    # 0.35 / tan(0.35) = 0.957 m ahead of the camera, which is 0.3 m ahead of
+    # base_link — world x = 1.257. An edge there splits the frame at row 120:
+    # nearer rows (below) grass, farther rows (above, under the horizon) soil.
+    edge = 0.3 + 0.35 / math.tan(0.35)
+    lawn = box(-10.0, -10.0, edge, 10.0)
+    image = render(W, H, HFOV, MOUNT_T, MOUNT_R, (0.0, 0.0, 0.0), (), [lawn]).astype(int)
+    col = W // 2
+    assert all(is_grass(image[row, col]) for row in range(125, H, 10))
+    assert all(is_soil(image[row, col]) for row in range(40, 116, 10))
+    # Turned round, the camera looks over the lawn only.
+    image = render(W, H, HFOV, MOUNT_T, MOUNT_R, (0.0, 0.0, math.pi), (), [lawn]).astype(int)
+    assert all(is_grass(image[row, col]) for row in range(40, H, 10))
+
+
+def test_without_lawns_all_ground_is_grass_as_before():
+    image = frame()
+    assert all(is_grass(image[row, W // 2]) for row in range(40, H, 10))
+
+
+def test_the_palette_varies_per_world_but_is_repeatable():
+    from robot_sim.sim_camera import DEFAULT_PALETTE, palette
+    assert palette(0)["grass_a"].tolist() == DEFAULT_PALETTE["grass_a"].tolist()
+    a, b = palette(7), palette(8)
+    assert a["grass_a"].tolist() == palette(7)["grass_a"].tolist()
+    assert a["grass_a"].tolist() != b["grass_a"].tolist()
+    for seed in range(1, 50):                 # grass stays green, soil stays brown
+        p = palette(seed)
+        assert p["grass_a"][1] > p["grass_a"][0] and p["soil_a"][0] > p["soil_a"][2]
