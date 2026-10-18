@@ -713,7 +713,13 @@ Alanlar hem **masada haritadan çizilecek** hem **öğret-kaydet** ile kaydedile
     sayfada Öğrenme sekmesi). ⚠️ Kaydedici başladıktan 3–4 sn sonra abone
     oluyor → sayfa "HAZIRLANIYOR" diyor, hazır olunca REC. Çökmede kapanmış
     bölmeler `reindex` ile geri geliyor (ölçüldü).
-  - **Sıradaki: 5d** (MCAP → eğitim formatı, laptopta).
+  - ✅ **5d — dışa aktarma** (`ros2 run robot_learning episode_export`:
+    bölüm → npz + mp4 + meta.json; etiket = (t, t+1/fps] içindeki komut,
+    tekerlekten önce geldiği ölçüldü). Parquet/LeRobot değil: pyarrow yok,
+    algoritma seçilmedi.
+  - **Sıradaki (yazılım):** sim'de uzman (Nav2) bölümleri toplamak, algoritma
+    seçimi, politikanın twist_mux'a ayrı girdi olarak takılması
+    (learning.md sonu). Donanım tarafında B1 (flash) hâlâ darboğaz.
   - Sahada ilk kullanım için `robot.service`'e `site_file:=` eklenmeli
     (deployment.md adım 8).
 

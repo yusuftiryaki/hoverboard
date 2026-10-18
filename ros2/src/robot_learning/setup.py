@@ -21,6 +21,7 @@ setup(
         "console_scripts": [
             "episode_recorder = robot_learning.recorder_node:main",
             "image_compressor = robot_learning.image_compressor:main",
+            "episode_export = robot_learning.export:main",
         ],
     },
 )

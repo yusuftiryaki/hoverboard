@@ -183,6 +183,33 @@ def test_an_episode_from_the_page_holds_what_learning_needs(learning_stack):
     assert f"{name}/bag/metadata.yaml" in archive.namelist()
     assert f"{name}/episode.yaml" in archive.namelist()
 
+    # 5d: the episode as training frames (export.py), checked against the drive.
+    import cv2
+    import numpy as np
+    from robot_learning.dataset import SOURCES, STATE_NAMES
+    from robot_learning.export import export
+    out = os.path.join(stack.episodes_dir, "..", "dataset")
+    meta = export([stack.episodes_dir], out, fps=10.0)
+    (item,) = meta["episodes"]
+    expected = (episode["duration_s"] - episode["ready_after_s"]) * 10
+    print(f"MEASURED export: {item['frames']} frames (~{expected:.0f} expected), "
+          f"teleop {item['teleop_fraction']:.0%}, markers {item['markers']}")
+    assert abs(item["frames"] - expected) < 0.15 * expected
+    data = np.load(os.path.join(out, item["data"]))
+    action, source = data["action"], data["action_source"]
+    assert action[:, 0].max() == pytest.approx(0.3) and action[:, 1].max() == pytest.approx(0.5)
+    assert set(SOURCES[i] for i in source) <= {"teleop", "none"}
+    assert 0.3 < item["teleop_fraction"] < 0.9
+    # The label leads the wheels: odometry reaches the commanded speed AFTER
+    # the frames that asked for it — never before.
+    v = data["state"][:, STATE_NAMES.index("odom.v")]
+    first_ask = int(np.argmax(action[:, 0] > 0.29))
+    first_move = int(np.argmax(np.nan_to_num(v) > 0.15))
+    assert 0 <= first_move - first_ask <= 5, (first_ask, first_move)
+    assert 0 < item["markers"][0]["frame"] < item["frames"]
+    video = cv2.VideoCapture(os.path.join(out, item["video"]))
+    assert int(video.get(cv2.CAP_PROP_FRAME_COUNT)) == item["frames"]
+
 
 def test_a_killed_recorder_ends_the_episode_and_reindex_recovers_the_closed_splits(
         learning_stack):
