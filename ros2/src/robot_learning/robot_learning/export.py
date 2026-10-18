@@ -4,7 +4,8 @@
 
 Each episode becomes
     episodes/episode_000000.npz   timestamp, state, action, action_source,
-                                  action_executed, teleop, image_age (dataset.py)
+                                  action_executed, action_expert, teleop,
+                                  image_age (dataset.py)
     videos/episode_000000.mp4     one camera frame per row (the latest stamped
                                   at or before it), image_size, mp4v
 and meta.json lists them with their task, mode, outcome, markers (as frame
@@ -55,6 +56,7 @@ EXTRACT = {
     "/cmd_vel_teleop": ("teleop", lambda m: (m.linear.x, m.angular.z)),
     "/cmd_vel_nav": ("nav", lambda m: (m.linear.x, m.angular.z)),
     "/cmd_vel": ("executed", lambda m: (m.linear.x, m.angular.z)),
+    "/expert/cmd_vel": ("expert", lambda m: (m.linear.x, m.angular.z)),
     "/odom": ("odom", lambda m: (m.twist.twist.linear.x, m.twist.twist.angular.z)),
     "/odometry/filtered/local": ("local", _pose),
     "/odometry/filtered/global": ("map", _pose),
@@ -137,7 +139,8 @@ def export_episode(directory: str, out_dir: str, number: int, fps: float,
     np.savez_compressed(os.path.join(out_dir, "episodes", stem + ".npz"),
                         timestamp=frames.timestamp, state=frames.state, action=frames.action,
                         action_source=frames.action_source,
-                        action_executed=frames.action_executed, teleop=frames.teleop,
+                        action_executed=frames.action_executed,
+                        action_expert=frames.action_expert, teleop=frames.teleop,
                         image_age=frames.image_age)
     video = None
     if len(images.times):

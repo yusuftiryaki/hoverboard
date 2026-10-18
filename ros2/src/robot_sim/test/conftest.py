@@ -191,6 +191,8 @@ STACK_PATTERNS = (
     # (CI_BAG=1) is one too, runs for the whole stage, and matched — every
     # stack in CI then refused to start.
     "episode_bag_recorder",
+    # the privileged expert drives /cmd_vel_teleop: an orphan would drive the next robot
+    "lib/robot_sim/edge_expert",
 )
 
 

@@ -717,9 +717,12 @@ Alanlar hem **masada haritadan çizilecek** hem **öğret-kaydet** ile kaydedile
     bölüm → npz + mp4 + meta.json; etiket = (t, t+1/fps] içindeki komut,
     tekerlekten önce geldiği ölçüldü). Parquet/LeRobot değil: pyarrow yok,
     algoritma seçilmedi.
-  - **Sıradaki (yazılım):** sim'de uzman (Nav2) bölümleri toplamak, algoritma
-    seçimi, politikanın twist_mux'a ayrı girdi olarak takılması
-    (learning.md sonu). Donanım tarafında B1 (flash) hâlâ darboğaz.
+  - **6. aşama — beceri öğrenme (plan 2026-10-18, learning.md):** ilk beceri
+    kenar dibi takibi; uzman ayrıcalıklı betik (Nav2 değil); algoritma BC →
+    ACT → (gerekirse) Diffusion; eğitim bulutta (Colab/Kaggle). Dilimler 6a–6e.
+    - ✅ 6a — ayrıcalıklı kenar uzmanı + ölçüt (yığında 1.9 cm, %94 kenar).
+    - **Sıradaki: 6b** — sim kamerasında kenar görünür + rastgele sahalarla
+      toplu bölüm. Donanım tarafında B1 (flash) hâlâ darboğaz.
   - Sahada ilk kullanım için `robot.service`'e `site_file:=` eklenmeli
     (deployment.md adım 8).
 
