@@ -94,5 +94,13 @@ def test_the_expert_drives_the_edge_and_the_episode_carries_its_label(learning_s
     print(f"MEASURED export: {item['frames']} frames, expert labels on {labelled.mean():.0%}, "
           f"teleop {item['teleop_fraction']:.0%}")
     assert labelled.mean() > 0.8
+    # The expert publishes the same command on two topics back to back; their
+    # arrival times differ by ms, so where the command CHANGES at a frame
+    # boundary one may land a frame later than the other (seen in CI under
+    # load). Everywhere else they are the same command.
     both = labelled & data["teleop"]
-    assert np.allclose(data["action"][both], data["action_expert"][both])
+    same = np.all(np.isclose(data["action"], data["action_expert"]), axis=1)
+    assert same[both].mean() > 0.95, f"label and expert agree on {same[both].mean():.0%}"
+    changed = np.r_[True, np.any(np.diff(data["action_expert"], axis=0) != 0, axis=1)]
+    near_change = changed | np.r_[changed[1:], True] | np.r_[True, changed[:-1]]
+    assert near_change[both & ~same].all(), "a disagreement away from a command change"
