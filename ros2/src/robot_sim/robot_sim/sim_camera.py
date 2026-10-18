@@ -10,6 +10,14 @@ simulated geometrically, dock_model.py), and nothing may be calibrated or
 tuned against them (handoff decision 10's spirit: a fake sensor proves the
 wiring, never the physics).
 
+Learning mode (docs/learning.md, 6b) adds ONE thing a policy may learn from:
+the lawn's edge. Ground inside a lawn polygon is grass, outside it soil, so
+the edge is where the real one is (site_world.py, the simulator's truth). It
+is structurally right and visually crude: a policy that learns it proves the
+pipeline and the method, not the field. `palette()` varies the colours and
+the checker per world (domain randomization) so a policy cannot key on one
+exact green.
+
 Geometry is the real one, though: the camera's pose comes from the same tf the
 stack uses (robot.urdf.xacro, read by sim_node), with the Pi Camera V2's field
 of view, so what is in frame is what the real camera would have in frame.
@@ -18,7 +26,7 @@ of view, so what is in frame is what the real camera would have in frame.
 from __future__ import annotations
 
 import math
-from typing import Sequence, Tuple
+from typing import Dict, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -26,17 +34,41 @@ GRASS_A = np.array([46, 125, 50], dtype=np.float32)     # RGB
 GRASS_B = np.array([67, 150, 64], dtype=np.float32)
 SKY = np.array([170, 205, 235], dtype=np.float32)
 ROCK = np.array([135, 132, 128], dtype=np.float32)
+SOIL_A = np.array([118, 92, 62], dtype=np.float32)
+SOIL_B = np.array([134, 108, 76], dtype=np.float32)
+DEFAULT_PALETTE = {"grass_a": GRASS_A, "grass_b": GRASS_B, "soil_a": SOIL_A,
+                   "soil_b": SOIL_B, "grass_cells": 4.0, "soil_cells": 10.0}
+
+
+def palette(seed: int) -> Dict[str, np.ndarray]:
+    """Colours and checker sizes for one world. 0 = the default palette."""
+    if seed == 0:
+        return dict(DEFAULT_PALETTE)
+    rng = np.random.default_rng(seed)
+
+    def jitter(colour, spread):
+        return np.clip(colour * rng.uniform(0.75, 1.25) + rng.normal(0, spread, 3), 0, 255) \
+            .astype(np.float32)
+
+    return {"grass_a": jitter(GRASS_A, 10), "grass_b": jitter(GRASS_B, 10),
+            "soil_a": jitter(SOIL_A, 14), "soil_b": jitter(SOIL_B, 14),
+            "grass_cells": float(rng.uniform(2.0, 8.0)),
+            "soil_cells": float(rng.uniform(5.0, 16.0))}
 
 
 def render(width: int, height: int, hfov: float, mount_translation: Sequence[float],
            mount_rotation: Sequence[Sequence[float]], robot: Tuple[float, float, float],
-           obstacles: Sequence[Tuple[float, float, float, float]]) -> np.ndarray:
+           obstacles: Sequence[Tuple[float, float, float, float]], lawns: Sequence = (),
+           colours: Optional[Dict[str, np.ndarray]] = None) -> np.ndarray:
     """An RGB uint8 image (height x width x 3).
 
     mount_*: camera_optical_link in base_link (x right, y down, z forward in
     the optical frame). robot: (x, y, yaw) of base_link in the world.
     obstacles: (x, y, radius, height) upright cylinders standing on the ground.
+    lawns: shapely Polygons in the world; with any, ground outside them is
+    soil. Without, all ground is grass (as before 6b). colours: palette().
     """
+    colours = colours or DEFAULT_PALETTE
     f = (width / 2.0) / math.tan(hfov / 2.0)
     us = (np.arange(width, dtype=np.float32) + 0.5 - width / 2.0) / f
     vs = (np.arange(height, dtype=np.float32) + 0.5 - height / 2.0) / f
@@ -62,8 +94,19 @@ def render(width: int, height: int, hfov: float, mount_translation: Sequence[flo
     gx = origin[0] + t_ground * dx
     gy = origin[1] + t_ground * dy
     gx, gy = np.where(ground, gx, 0.0), np.where(ground, gy, 0.0)
-    checker = ((np.floor(gx * 4.0) + np.floor(gy * 4.0)) % 2 == 0)
-    grass = np.where(checker[..., None], GRASS_A, GRASS_B)
+    cells = colours["grass_cells"]
+    checker = ((np.floor(gx * cells) + np.floor(gy * cells)) % 2 == 0)
+    grass = np.where(checker[..., None], colours["grass_a"], colours["grass_b"])
+    if lawns:
+        import shapely
+        near = ground & (t_ground < 30.0)
+        inside = np.zeros(u.shape, dtype=bool)
+        for lawn in lawns:
+            inside |= shapely.contains_xy(lawn, gx, gy)
+        cells = colours["soil_cells"]
+        fine = ((np.floor(gx * cells) + np.floor(gy * cells)) % 2 == 0)
+        soil = np.where(fine[..., None], colours["soil_a"], colours["soil_b"])
+        grass = np.where((near & ~inside)[..., None], soil, grass)
     # Fade to sky colour with distance, so the horizon reads as a horizon.
     fog = np.clip(t_ground / 40.0, 0.0, 1.0)[..., None]
     grass = grass * (1.0 - fog) + SKY * fog

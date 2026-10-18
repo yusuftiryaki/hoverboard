@@ -721,8 +721,11 @@ Alanlar hem **masada haritadan çizilecek** hem **öğret-kaydet** ile kaydedile
     kenar dibi takibi; uzman ayrıcalıklı betik (Nav2 değil); algoritma BC →
     ACT → (gerekirse) Diffusion; eğitim bulutta (Colab/Kaggle). Dilimler 6a–6e.
     - ✅ 6a — ayrıcalıklı kenar uzmanı + ölçüt (yığında 1.9 cm, %94 kenar).
-    - **Sıradaki: 6b** — sim kamerasında kenar görünür + rastgele sahalarla
-      toplu bölüm. Donanım tarafında B1 (flash) hâlâ darboğaz.
+    - ✅ 6b — kenar sim kamerasında (çim/toprak, palet rastgele) + `edge_batch`
+      ile rastgele sahalarda toplu uzman bölümü. ⚠️ 5° aşağı bakan kamera
+      kenar takibi için zayıf; ikinci kamera sim'de ölçülebilir.
+    - **Sıradaki: 6c** — npz → LeRobot + Colab/Kaggle defteri (BC, ACT).
+      Donanım tarafında B1 (flash) hâlâ darboğaz.
   - Sahada ilk kullanım için `robot.service`'e `site_file:=` eklenmeli
     (deployment.md adım 8).
 

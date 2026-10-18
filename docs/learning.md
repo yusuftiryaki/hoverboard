@@ -242,6 +242,31 @@ her duruma etiket verir (gerçekte bunu insan yapar: "müdahale" modu).
   misinanın erişemeyeceği yer: 0.4·√2 = 0.57 m > 0.5). Kayıt dışa
   aktarıldı: 652 kare, %99'unda uzman etiketi.
 
+### ✅ 6b: kenar kamerada + rastgele sahalarla toplu bölüm (2026-10-18)
+- `sim_camera`: `lawns` verilirse çim poligonunun içi çim, dışı **toprak**;
+  `palette(seed)` renkleri ve dama boyunu sahaya göre değiştiriyor (domain
+  randomization; çim yeşil, toprak kahve kalıyor — testli). `sim_node`:
+  `lawn_file` (sahanın alanları), `ground_seed`.
+- `site_world.py`: lat/lon ↔ sim_world, sim'in GPS formülünün tam tersi —
+  uzman, kamera ve üreteç aynı "sim gerçeğini" kullanıyor (`EARTH_RADIUS_M`
+  artık tek yerde).
+- `lawn_gen.py`: orijin etrafında 4–7 köşeli, dışbükey ya da değil, rastgele
+  dönük sahalar; **uzman ideal modelde temiz tur atamıyorsa saha reddediliyor**
+  (sivri köşe < 55°, dar boğaz, robot kenara < 1 m, alan 15–70 m²) — kötü
+  gösterim veriye sessizce girmesin.
+- `ros2 run robot_sim edge_batch --lawns 20 --out ~/.robot/sim_episodes`:
+  her saha için taze sim + Pi'daki `robot.launch.py` (öğrenme modu açık),
+  uzman her yöne bir tur, bölüm kaydı; notunda seed, yön, GPS, sahanın WKT'si.
+  Tur ~1–2 dk gerçek zaman: 20 saha × 2 yön ≈ 1.5 saat (gece işi).
+- **Ölçülen** (`test_edge_batch_stack.py`, seed 8): bölüm başarılı, 317 kare,
+  **kenar karelerin 312'sinde kamerada**, uzman etiketi %100; araç arkasında
+  süreç bırakmıyor.
+- ⚠️ **Kamera kenar takibi için iyi yerde değil.** Yanaşma için 5° aşağı
+  bakıyor: karenin üst ~%40'ı gök, misinanın çalıştığı yakın zemin alt
+  şeritte. Kenar ilerideki haliyle görünüyor, yanındaki haliyle zor. İkinci,
+  aşağı bakan geniş açılı kamera (donanım notu, yukarıda) burada ölçülebilir:
+  aynı sim'de ikinci kamera + aynı uzman, iki politikanın ölçütü yan yana.
+
 ⚠️ Kinematik kameranın kenarı (6b) yapısal olarak doğru ama gerçekçi değil;
 o veriden öğrenen politika boru hattını ve yöntemi kanıtlar, sahayı değil.
 Gerçek beceri gerçek gösterimler + müdahale verisiyle gelir.
